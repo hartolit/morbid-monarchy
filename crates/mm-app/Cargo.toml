@@ -8,6 +8,7 @@ bevy = { workspace = true }
 bitcode = { workspace = true }
 mm-core = { workspace = true }
 ron = { workspace = true }
+serde = { workspace = true }
 
 [lib]
 name = "mm_app"

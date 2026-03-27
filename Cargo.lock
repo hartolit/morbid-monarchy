@@ -3281,6 +3281,7 @@ dependencies = [
  "bitcode",
  "mm-core",
  "ron",
+ "serde",
 ]
 
 [[package]]

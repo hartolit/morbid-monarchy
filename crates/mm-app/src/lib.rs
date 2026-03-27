@@ -8,16 +8,20 @@ use mm_core::{
 };
 use world_persistence::ChunkPersistence;
 use world_runtime::{
-    PreviousTranslation, RuntimeWorldState, capture_previous_player_positions,
-    draw_world_debug, handle_world_interaction, resolve_player_world_collision,
-    stream_world_around_player, sync_player_surface_state, update_entity_spatial_index,
-    EntitySpatialIndex,
+    ChunkRenderState, Enemy, EntitySpatialIndex, PendingWorldSplatters, PreviousTranslation,
+    PrimaryWorldCamera, RuntimeWorldState, apply_pending_world_splatters,
+    camera_follow_player, capture_previous_player_positions, draw_world_debug,
+    handle_enemy_interaction, handle_world_interaction, resolve_player_world_collision,
+    stream_world_around_player, sync_chunk_renders, sync_player_surface_state,
+    update_entity_spatial_index,
 };
 
 const PLAYER_SPRITE_PATH: &str = "player-48x48-sprite.png";
 const PLAYER_FRAME_SIZE: UVec2 = UVec2::new(192, 192);
 const PLAYER_RENDER_SCALE: f32 = 0.25;
 const PLAYER_Z_INDEX: f32 = 10.0;
+const ENEMY_Z_INDEX: f32 = 8.0;
+const ENEMY_SIZE: Vec2 = Vec2::new(18.0, 18.0);
 const PLAYER_ANIMATION_FRAMES: usize = 4;
 const PLAYER_ROW_UP: usize = 0;
 const PLAYER_ROW_RIGHT: usize = 1;
@@ -65,7 +69,9 @@ pub fn run() {
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(MorbidMonarchyCorePlugin)
         .init_resource::<RuntimeWorldState>()
+        .init_resource::<ChunkRenderState>()
         .init_resource::<EntitySpatialIndex>()
+        .init_resource::<PendingWorldSplatters>()
         .init_resource::<ChunkPersistence>()
         .add_systems(Startup, setup_scene)
         .add_systems(
@@ -85,7 +91,11 @@ pub fn run() {
                 resolve_player_world_collision,
                 update_entity_spatial_index,
                 handle_world_interaction,
+                handle_enemy_interaction,
+                apply_pending_world_splatters,
+                sync_chunk_renders,
                 sync_player_surface_state,
+                camera_follow_player,
                 animate_player_sprite,
                 draw_world_debug,
             )
@@ -100,7 +110,7 @@ fn setup_scene(
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    commands.spawn(Camera2d);
+    commands.spawn((Camera2d, PrimaryWorldCamera));
 
     let player_image = asset_server.load(PLAYER_SPRITE_PATH);
     let player_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(
@@ -129,6 +139,12 @@ fn setup_scene(
         ),
         PreviousTranslation::default(),
         WalkAnimation::default(),
+    ));
+
+    commands.spawn((
+        Enemy,
+        Sprite::from_color(Color::srgb(0.75, 0.15, 0.18), ENEMY_SIZE),
+        Transform::from_xyz(72.0, 24.0, ENEMY_Z_INDEX),
     ));
 }
 

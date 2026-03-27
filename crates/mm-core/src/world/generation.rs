@@ -5,8 +5,8 @@ use rand_core::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 use crate::world::{
-    ChunkKey, ChunkLocalPoint, ChunkSnapshot, ChunkTheme, ProcAsset, ProcAssetKind,
-    WorldObjectId, DEFAULT_CHUNK_WORLD_SIZE,
+    ChunkData, ChunkKey, ChunkLocalPixel, ChunkLocalPoint, ChunkTheme, ProcAsset, ProcAssetKind,
+    WorldObjectId, WorldPixel, CHUNK_PIXEL_COUNT, CHUNK_PIXEL_SIZE, DEFAULT_CHUNK_WORLD_SIZE,
 };
 
 pub const DEFAULT_WORLD_SEED: u64 = 7;
@@ -21,6 +21,52 @@ pub struct WorldConfig {
     pub max_proc_assets_per_chunk: u8,
 }
 
+fn grass_plane_pixel(cell_seed: u64, coarse_seed: u64, edge_bias: u16) -> WorldPixel {
+    if edge_bias <= 1 && coarse_seed % 9 == 0 {
+        return WorldPixel::Dirt;
+    }
+
+    if cell_seed % 37 == 0 {
+        WorldPixel::Dirt
+    } else {
+        WorldPixel::Grass
+    }
+}
+
+fn dark_pixel(cell_seed: u64, coarse_seed: u64) -> WorldPixel {
+    if coarse_seed % 7 == 0 {
+        WorldPixel::Rock
+    } else if cell_seed % 5 == 0 {
+        WorldPixel::Grass
+    } else {
+        WorldPixel::Dirt
+    }
+}
+
+fn cave_pixel(cell_seed: u64, coarse_seed: u64) -> WorldPixel {
+    if coarse_seed % 5 <= 1 {
+        WorldPixel::Rock
+    } else if cell_seed % 11 == 0 {
+        WorldPixel::Grass
+    } else {
+        WorldPixel::Dirt
+    }
+}
+
+fn ocean_pixel(cell_seed: u64, coarse_seed: u64, edge_bias: u16) -> WorldPixel {
+    if edge_bias <= 1 && coarse_seed % 5 == 0 {
+        return WorldPixel::Dirt;
+    }
+
+    if coarse_seed % 11 == 0 {
+        WorldPixel::Rock
+    } else if cell_seed % 19 == 0 {
+        WorldPixel::Dirt
+    } else {
+        WorldPixel::Water
+    }
+}
+
 impl Default for WorldConfig {
     fn default() -> Self {
         Self {
@@ -32,19 +78,39 @@ impl Default for WorldConfig {
     }
 }
 
-pub fn generate_chunk(config: &WorldConfig, key: ChunkKey) -> ChunkSnapshot {
+pub fn generate_chunk(config: &WorldConfig, key: ChunkKey) -> ChunkData {
     let theme = select_theme(config, key);
-    let base_layer = theme.base_layer();
     let mut rng = seeded_rng(config, key);
+    let materials = bake_materials(config, key, theme);
     let mut assets = build_assets(config, key, theme, &mut rng);
     assets.sort_by_key(|asset| asset.id);
 
-    ChunkSnapshot {
-        key,
-        theme,
-        base_layer,
-        assets,
+    ChunkData::new(key, theme, materials, assets)
+}
+
+fn bake_materials(config: &WorldConfig, key: ChunkKey, theme: ChunkTheme) -> Vec<WorldPixel> {
+    let mut materials = vec![theme.base_pixel(); CHUNK_PIXEL_COUNT];
+    let chunk_seed = mix_seed(config.world_seed ^ 0xD1B5_4A32_9C77_EF10, key);
+
+    for y in 0..CHUNK_PIXEL_SIZE {
+        for x in 0..CHUNK_PIXEL_SIZE {
+            let local = ChunkLocalPixel { x, y };
+            let world_pixel_x = key.x * i32::from(CHUNK_PIXEL_SIZE) + i32::from(x);
+            let world_pixel_y = key.y * i32::from(CHUNK_PIXEL_SIZE) + i32::from(y);
+            let cell_seed = mix_world_pixel_seed(chunk_seed, world_pixel_x, world_pixel_y);
+            let coarse_seed = mix_world_pixel_seed(chunk_seed ^ 0x9E37_79B9_7F4A_7C15, world_pixel_x / 8, world_pixel_y / 8);
+            let edge_bias = y.min(CHUNK_PIXEL_SIZE - 1 - y).min(x.min(CHUNK_PIXEL_SIZE - 1 - x));
+            let pixel = match theme {
+                ChunkTheme::GrassPlane => grass_plane_pixel(cell_seed, coarse_seed, edge_bias),
+                ChunkTheme::Dark => dark_pixel(cell_seed, coarse_seed),
+                ChunkTheme::Cave => cave_pixel(cell_seed, coarse_seed),
+                ChunkTheme::Ocean => ocean_pixel(cell_seed, coarse_seed, edge_bias),
+            };
+            materials[usize::from(local.as_index())] = pixel;
+        }
     }
+
+    materials
 }
 
 fn select_theme(config: &WorldConfig, key: ChunkKey) -> ChunkTheme {
@@ -139,10 +205,15 @@ fn mix_seed(seed: u64, key: ChunkKey) -> u64 {
         ^ ((key.z as i64 as u64).wrapping_mul(0xC2B2_AE3D))
 }
 
+fn mix_world_pixel_seed(seed: u64, x: i32, y: i32) -> u64 {
+    seed ^ ((x as i64 as u64).wrapping_mul(0x9E37_79B9))
+        ^ ((y as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{generate_chunk, WorldConfig};
-    use crate::world::{ChunkKey, ChunkState};
+    use crate::world::{ChunkKey, ChunkLocalPixel, ChunkState, WorldPixel};
 
     #[test]
     fn same_seed_and_chunk_key_produce_same_chunk() {
@@ -172,14 +243,35 @@ mod tests {
     fn chunk_mutation_filters_removed_assets() {
         let config = WorldConfig::default();
         let key = ChunkKey::ORIGIN;
-        let snapshot = generate_chunk(&config, key);
-        let removed = snapshot.assets[0].id;
-        let original_len = snapshot.assets.len();
+        let data = generate_chunk(&config, key);
+        let removed = data.assets[0].id;
+        let original_len = data.assets.len();
 
-        let mut state = ChunkState::new(snapshot);
+        let mut state = ChunkState::new(data);
         state.remove_object(removed);
 
         assert_eq!(state.visible_assets().count(), original_len - 1);
         assert!(state.visible_assets().all(|asset| asset.id != removed));
+    }
+
+    #[test]
+    fn chunk_pixel_generation_is_stable_and_mutation_is_delta_backed() {
+        let config = WorldConfig::default();
+        let key = ChunkKey::ORIGIN;
+        let data = generate_chunk(&config, key);
+        let local = ChunkLocalPixel::new(3, 7).unwrap();
+
+        let mut state = ChunkState::new(data.clone());
+        let original = state.pixel(local);
+        state.set_pixel(local, WorldPixel::Blood);
+
+        assert_eq!(state.pixel(local), WorldPixel::Blood);
+        assert_eq!(state.delta.pixel_overrides.len(), 1);
+
+        state.set_pixel(local, original);
+
+        assert_eq!(state.pixel(local), original);
+        assert!(state.delta.pixel_overrides.is_empty());
+        assert_eq!(generate_chunk(&config, key), data);
     }
 }

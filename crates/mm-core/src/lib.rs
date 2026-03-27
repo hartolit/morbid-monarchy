@@ -11,10 +11,11 @@ pub use player::{
 };
 pub use systems::apply_movement_intent;
 pub use world::{
-    active_chunk_keys, generate_chunk, BaseLayer, BaseMaterial, ChunkBounds, ChunkKey,
-    ChunkLocalPoint, ChunkMutation, ChunkSnapshot, ChunkState, ChunkTheme, ChunkView,
-    CollisionKind, InteractionKind, ProcAsset, ProcAssetKind, SurfaceTraversal, WorldConfig,
-    WorldObjectId, WorldStore,
+    active_chunk_keys, chunk_pixel_from_world_position, chunk_world_units_per_pixel,
+    generate_chunk, ChunkBounds, ChunkData, ChunkDelta, ChunkKey, ChunkLocalPixel,
+    ChunkLocalPoint, ChunkPixelPosition, ChunkState, ChunkTheme, ChunkView, CollisionKind,
+    InteractionKind, PixelDelta, ProcAsset, ProcAssetKind, SurfaceTraversal, WorldConfig,
+    WorldObjectId, WorldPixel, WorldStore, CHUNK_PIXEL_COUNT, CHUNK_PIXEL_SIZE,
 };
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
