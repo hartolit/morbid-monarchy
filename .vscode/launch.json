@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Morbid Monarchy",
+      "cargo": {
+        "args": ["build", "--bin=morbid_monarchy", "--package=morbid_monarchy"],
+        "filter": {
+          "name": "morbid_monarchy",
+          "kind": "bin",
+        },
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+    },
+  ],
+}

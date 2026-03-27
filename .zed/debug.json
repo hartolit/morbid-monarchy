@@ -1,0 +1,13 @@
+[
+  {
+    "label": "Debug Morbid Monarchy",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "build": {
+      "command": "cargo",
+      "args": ["build", "--bin", "morbid_monarchy"],
+    },
+    "program": "target/debug/morbid_monarchy",
+    "sourceLanguages": ["rust"],
+  },
+]
