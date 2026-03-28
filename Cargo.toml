@@ -1,22 +1,13 @@
 [workspace]
 members = [
-    "crates/mm-app",
-    "crates/mm-core"
+    "crates/morbid-app",
+    "crates/monarch-engine"
 ]
 resolver = "2"
 
 [workspace.dependencies]
 bevy = "0.18.1"
 bevy_app = "0.18.1"
-bevy_ecs = "0.18.1"
-bevy_math = "0.18.1"
-bevy_transform = "0.18.1"
-bitcode = "0.6.9"
-rand = "0.10.0"
-rand_chacha = "0.10.0"
-rand_core = "0.10.0"
-rustc-hash = "2.1"
-ron = "0.12.0"
-serde = { version = "1.0", features = ["derive"] }
-mm-core = { path = "crates/mm-core" }
-mm-app = { path = "crates/mm-app" }
+
+monarch-engine = { path = "crates/monarch-engine" }
+morbid-app = { path = "crates/morbid-app" }
