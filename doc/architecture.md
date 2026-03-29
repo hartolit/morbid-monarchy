@@ -1,14 +1,15 @@
 # Project Architecture & Constraints (Morbid Monarchy)
 
 ## Workspace Shape
-1. **`monarch-engine`**: Pure Rust core crate. It is the source of truth for reusable engine/domain logic and must remain free of application bootstrap and environment-specific orchestration.
-2. **`morbid-app`**: Pure Rust application crate. It is a thin consumer of `monarch-engine` and owns startup, runtime orchestration, boundary I/O, and user-facing execution flow.
-3. **Future crates**: Add `mm-server`, `mm-cli`, `mm-shared`, or `mm-protocol` only when a concrete boundary requires them. Shared vocabulary crates must remain free of business logic.
+1. **`monarch-engine`**: Pure Rust core crate. It is the source of truth for reusable engine/domain logic, ECS state, deterministic simulation, chunk generation, and persistence-facing data structures. It must remain free of rendering and application bootstrap.
+2. **`morbid-app`**: Pure Rust application crate. It is a thin consumer of `monarch-engine` and owns startup, runtime orchestration, Bevy rendering, asset loading, input, and translating engine-owned pixel arrays into on-screen textures or sprites.
+3. **Future crates**: Add `monarch-server`, `monarch-cli`, `monarch-shared`, or `monarch-protocol` only when a concrete boundary requires them. Shared vocabulary crates must remain free of business logic.
 
 ## Current Reset State
-- The repository is intentionally reduced to a barebones Cargo workspace.
+- The repository is intentionally reset to a minimal layered-hybrid baseline.
 - Preserve the crate directories and the dependency link from `morbid-app` to `monarch-engine`.
-- Rebuild new functionality from this minimal baseline rather than reviving deleted implementation.
+- `monarch-engine` owns authoritative world/state structures; `morbid-app` owns Bevy-side rendering of that state.
+- Rebuild new functionality from this baseline rather than reviving deleted implementation.
 
 ## Golden Standards (CRITICAL)
 - **Dependency Direction:** `monarch-engine` must not depend on application crates. Application crates may depend on `monarch-engine`.

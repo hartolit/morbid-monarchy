@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 bevy = { workspace = true }
+bitcode = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+
 monarch-engine = { workspace = true }
 
 [lib]
