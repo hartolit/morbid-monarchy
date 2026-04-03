@@ -8,3 +8,4 @@ bevy = { workspace = true }
 rand = { workspace = true }
 rustc-hash = { workspace = true }
 bitflags = { workspace = true }
+ bitcode = { workspace = true }

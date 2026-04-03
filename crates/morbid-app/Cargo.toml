@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bevy = { workspace = true }
 monarch-engine = { workspace = true }
+ bitcode = { workspace = true }
 
 [lib]
 name = "morbid_app"

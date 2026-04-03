@@ -1,11 +1,10 @@
-use bevy::ecs::resource::Resource;
-use rustc_hash::FxHashMap;
-
-use crate::world::chunk::{ChunkData, ChunkKey};
-
+mod active;
 mod chunk;
+mod generation;
 
-#[derive(Resource)]
-pub struct WorldStore {
-    pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
-}
+pub use active::{ActiveGridConfig, ActiveGridView, ChunkWindowDelta, ToroidalGrid, WorldState};
+pub use chunk::{
+    ChunkKey, ChunkView, MaterialId, PersistedChunk, PersistedEntity, Pixel, PixelFlags,
+    StoredChunk, StoredEntity, StoredPixel, ThemeId, CHUNK_PIXELS, CHUNK_SIDE,
+};
+pub use generation::{chunk_theme, empty_chunk, generate_chunk};
