@@ -34,22 +34,26 @@ pub struct ChunkKey {
 }
 
 impl ChunkKey {
-    pub fn from_dvec3(pos: DVec3, chunk_size: f64) -> Self {
+    pub fn from_dvec3(pos: DVec3) -> Self {
+        let chunk_f64 = CHUNK_SIZE as f64;
         Self {
             key: IVec3::new(
-                (pos.x / chunk_size).floor() as i32,
-                (pos.y / chunk_size).floor() as i32,
-                (pos.z / chunk_size).floor() as i32,
+                (pos.x / chunk_f64).floor() as i32,
+                (pos.y / chunk_f64).floor() as i32,
+                (pos.z / chunk_f64).floor() as i32,
             ),
         }
     }
 
     /// Returns the center of the chunk.
-    pub fn center(&self, chunk_size: f64) -> DVec3 {
+    pub fn center(&self) -> DVec3 {
+        let chunk_f64 = CHUNK_SIZE as f64;
+        let half_chunk = chunk_f64 / 2.0;
+
         DVec3::new(
-            (self.key.x as f64 * chunk_size) + (chunk_size / 2.0),
-            (self.key.y as f64 * chunk_size) + (chunk_size / 2.0),
-            (self.key.z as f64 * chunk_size) + (chunk_size / 2.0),
+            (self.key.x as f64 * chunk_f64) + half_chunk,
+            (self.key.y as f64 * chunk_f64) + half_chunk,
+            (self.key.z as f64 * chunk_f64) + half_chunk,
         )
     }
 
@@ -67,9 +71,9 @@ pub struct ChunkView {
 impl ChunkView {
     /// Creates a cubic bounding box centered at `center_pos`.
     /// `radius` controls the size of the bounding box.
-    pub fn new_cubic(center_pos: DVec3, radius: f64, chunk_size: f64) -> Self {
-        let center = ChunkKey::from_dvec3(center_pos, chunk_size);
-        let r_chunks = (radius / chunk_size).ceil() as i32;
+    pub fn new_cubic(center_pos: DVec3, radius: usize) -> Self {
+        let center = ChunkKey::from_dvec3(center_pos);
+        let r_chunks = radius.div_ceil(CHUNK_SIZE) as i32;
 
         Self {
             min: ChunkKey {
@@ -92,10 +96,10 @@ impl ChunkView {
     /// Creates a flattened bounding box centered at `center_pos`.
     /// `h_radius` controls the horizontal spread (X and Z axes).
     /// `v_radius` controls the vertical spread (Y axis).
-    pub fn new_flat(center_pos: DVec3, h_radius: f64, v_radius: f64, chunk_size: f64) -> Self {
-        let center = ChunkKey::from_dvec3(center_pos, chunk_size);
-        let r_chunks = (h_radius / chunk_size).ceil() as i32;
-        let y_chunks = (v_radius / chunk_size).ceil() as i32;
+    pub fn new_flat(center_pos: DVec3, h_radius: usize, v_radius: usize) -> Self {
+        let center = ChunkKey::from_dvec3(center_pos);
+        let r_chunks = h_radius.div_ceil(CHUNK_SIZE) as i32;
+        let y_chunks = v_radius.div_ceil(CHUNK_SIZE) as i32;
 
         Self {
             min: ChunkKey {
