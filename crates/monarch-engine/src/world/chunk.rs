@@ -1,57 +1,31 @@
 use bevy::{
     ecs::{component::Component, entity::Entity},
-    math::{DVec3, IVec3},
+    math::{DVec3, IVec2, IVec3},
     time::Time,
 };
-use bitflags::bitflags;
 
-const CHUNK_PIXELS: usize = 4096;
+use crate::world::types::{Pixel, WorldCell};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThemeId(pub u8);
-
-impl ThemeId {
-    pub const GRASS_PLAINS: Self = Self(0);
-    pub const OCEAN: Self = Self(1);
-    pub const DESERT: Self = Self(2);
-    pub const CAVE: Self = Self(3);
-}
+pub const CHUNK_SIZE: usize = 64;
+pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
 #[derive(Component)]
 pub struct ChunkData {
     pub is_loaded: bool,
     pub last_simulated: Time,
-    pub theme: u8,
-    pub pixels: Box<[Pixel; CHUNK_PIXELS]>,
-    pub entities: Vec<Entity>, // TODO! This might not be the best choice for entities, however it follows the chunking approach
+    pub theme: ChunkTheme,
+    pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
+    pub entities: Vec<Entity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MaterialId(pub u8);
+pub struct ChunkTheme(pub u8);
 
-impl MaterialId {
-    pub const EMPTY: Self = Self(0);
-    pub const DIRT: Self = Self(1);
-    pub const ROCK: Self = Self(2);
-    pub const WATER: Self = Self(3);
-}
-
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PixelFlags: u8 {
-        const NONE = 0;
-        const IS_SOLID = 1 << 0;
-        const WAKES_AWAKE = 1 << 1;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct Pixel {
-    pub material: MaterialId,
-    pub state: u8,
-    pub variant: u8,
-    pub flags: PixelFlags,
+impl ChunkTheme {
+    pub const GRASS_PLAINS: Self = Self(0);
+    pub const OCEAN: Self = Self(1);
+    pub const DESERT: Self = Self(2);
+    pub const CAVE: Self = Self(3);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +51,10 @@ impl ChunkKey {
             (self.key.y as f64 * chunk_size) + (chunk_size / 2.0),
             (self.key.z as f64 * chunk_size) + (chunk_size / 2.0),
         )
+    }
+
+    pub fn to_ivec2(&self) -> IVec2 {
+        IVec2::new(self.key.x, self.key.y)
     }
 }
 
