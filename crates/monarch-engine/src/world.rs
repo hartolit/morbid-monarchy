@@ -8,6 +8,4 @@ mod grid;
 mod types;
 
 #[derive(Resource)]
-pub struct WorldStore {
-    pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
-}
+pub struct WorldStore {}
