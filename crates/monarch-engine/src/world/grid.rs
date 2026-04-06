@@ -68,7 +68,7 @@ impl ActiveWorldGrid {
 
     /// Extracts a chunk's data from the active grid for saving/unloading.
     #[inline(always)]
-    pub fn extract_chunk(&self, chunk_key: ChunkKey) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
+    pub fn unload_chunk(&self, chunk_key: ChunkKey) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
         let world_origin = chunk_key.to_ivec2() * (CHUNK_SIZE as i32);
         let chunk_span = CHUNK_SIZE as i32;
 
@@ -88,5 +88,17 @@ impl ActiveWorldGrid {
 
         // Safely downcast the Box<[WorldCell]> back to Box<[WorldCell; 4096]>
         chunk_cells.try_into().unwrap()
+    }
+
+    /// Replaces a chunk's data in the active grid, returning the old chunk for unloading.
+    #[inline(always)]
+    pub fn replace_chunk(
+        &mut self,
+        chunk_key: ChunkKey,
+        chunk_cells: &[WorldCell; CHUNK_CELL_COUNT],
+    ) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
+        let old_chunk = self.unload_chunk(chunk_key);
+        self.load_chunk(chunk_key, chunk_cells);
+        old_chunk
     }
 }
