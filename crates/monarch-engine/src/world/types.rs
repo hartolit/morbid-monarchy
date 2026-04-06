@@ -1,4 +1,24 @@
+use bevy::math::DVec3;
 use bitflags::bitflags;
+
+#[derive(Debug, Clone, Copy)]
+pub struct SerializedEntity {
+    pub entity_type: EntityTypeId,
+    pub position: DVec3,
+    pub rotation: f32,
+    pub scale: f32,
+    pub health: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntityTypeId(pub u32);
+
+impl EntityTypeId {
+    pub const HERO: Self = Self(1);
+    pub const WIZARD: Self = Self(2);
+    pub const MINION_HUMAN: Self = Self(3);
+    pub const MINION_GIANT: Self = Self(4);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaterialId(pub u8);

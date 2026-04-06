@@ -90,15 +90,17 @@ impl ActiveWorldGrid {
         chunk_cells.try_into().unwrap()
     }
 
-    /// Replaces a chunk's data in the active grid, returning the old chunk for unloading.
+    /// Extracts the old chunk from the grid, and immediately overwrites that
+    /// modular space with the new chunk data.
     #[inline(always)]
-    pub fn replace_chunk(
+    pub fn swap_boundary_chunks(
         &mut self,
-        chunk_key: ChunkKey,
-        chunk_cells: &[WorldCell; CHUNK_CELL_COUNT],
+        evicted_key: ChunkKey,
+        incoming_key: ChunkKey,
+        incoming_cells: &[WorldCell; CHUNK_CELL_COUNT],
     ) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
-        let old_chunk = self.unload_chunk(chunk_key);
-        self.load_chunk(chunk_key, chunk_cells);
+        let old_chunk = self.unload_chunk(evicted_key);
+        self.load_chunk(incoming_key, incoming_cells);
         old_chunk
     }
 }

@@ -1,24 +1,24 @@
-use crate::world::{
-    chunk::{CHUNK_CELL_COUNT, ChunkKey},
-    types::WorldCell,
-};
+use crate::world::chunk::{ChunkData, ChunkKey};
 use bevy::prelude::Event;
 
-/// Engine tells App: "The player is moving near this chunk, please fetch it."
-#[derive(Event)]
-pub struct ChunkLoadRequest(pub ChunkKey);
-
-/// App tells Engine: "Here is the data from disk (or freshly generated)."
-#[derive(Event)]
-pub struct ChunkLoadEvent {
-    pub key: ChunkKey,
-    pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
-    pub missed_ticks: u32, // How much time passed since it was last saved
-}
-
-/// Engine tells App: "This chunk left the view radius. I have extracted it from the grid. Save it."
+/// Emitted by monarch-engine when the player moves and a chunk falls out of the Active Window.
+/// morbid-app listens to this and writes the Box to disk.
 #[derive(Event)]
 pub struct ChunkUnloadEvent {
     pub key: ChunkKey,
-    pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
+    pub data: ChunkData,
+}
+
+/// Emitted by monarch-engine to tell morbid-app: "I need this chunk to fill the grid!"
+#[derive(Event)]
+pub struct ChunkLoadRequest {
+    pub key: ChunkKey,
+}
+
+/// Emitted by morbid-app when it finishes reading the chunk from disk (or generating it).
+/// monarch-engine listens to this and injects it into the ActiveWorldGrid.
+#[derive(Event)]
+pub struct ChunkLoadedEvent {
+    pub key: ChunkKey,
+    pub data: ChunkData,
 }

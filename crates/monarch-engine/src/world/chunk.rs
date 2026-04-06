@@ -1,10 +1,9 @@
 use bevy::{
-    ecs::{component::Component, entity::Entity},
+    ecs::component::Component,
     math::{DVec3, IVec2, IVec3},
-    time::Time,
 };
 
-use crate::world::types::{Pixel, WorldCell};
+use crate::world::types::{SerializedEntity, WorldCell};
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
@@ -12,10 +11,10 @@ pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 #[derive(Component)]
 pub struct ChunkData {
     pub is_loaded: bool,
-    pub last_simulated: Time,
+    pub last_simulated: f64,
     pub theme: ChunkTheme,
     pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
-    pub entities: Vec<Entity>,
+    pub serialized_entities: Vec<SerializedEntity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
