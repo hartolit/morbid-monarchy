@@ -75,67 +75,41 @@ impl Default for ChunkView {
 }
 
 impl ChunkView {
-    /// Returns `true` if `min` and `max` are equal, indicating an empty view.
-    /// Used to check if the view is empty before iterating over chunks.
+    /// Returns `true` if the view contains zero chunks.
     #[inline]
-    pub fn is_none(&self) -> bool {
-        self.min == self.max
+    pub fn is_empty(&self) -> bool {
+        self.min.key.x > self.max.key.x
+            || self.min.key.y > self.max.key.y
+            || self.min.key.z > self.max.key.z
     }
 
-    /// Creates a cubic bounding box centered at `center_pos`.
-    /// `radius` controls the size of the bounding box.
-    pub fn from_cubic(center_pos: DVec3, radius: usize) -> Self {
-        let center = ChunkKey::from_dvec3(center_pos);
-        let r_chunks = radius.div_ceil(CHUNK_SIZE) as i32;
-
+    /// Creates a cubic bounding box centered on a specific chunk.
+    /// A `radius` of 1 results in a 3x3x3 volume (27 chunks).
+    pub fn from_cubic(center: ChunkKey, radius: i32) -> Self {
         Self {
             min: ChunkKey {
-                key: IVec3::new(
-                    center.key.x - r_chunks,
-                    center.key.y - r_chunks,
-                    center.key.z - r_chunks,
-                ),
+                key: center.key - IVec3::splat(radius),
             },
             max: ChunkKey {
-                key: IVec3::new(
-                    center.key.x + r_chunks,
-                    center.key.y + r_chunks,
-                    center.key.z + r_chunks,
-                ),
+                key: center.key + IVec3::splat(radius),
             },
         }
     }
 
     /// Creates a cuboid bounding box centered at `center_pos`.
-    /// `h_radius` controls the horizontal spread (X and Z axes).
-    /// `v_radius` controls the vertical spread (Y axis).
-    pub fn from_cuboid(center_pos: DVec3, h_radius: usize, v_radius: usize) -> Self {
-        let center = ChunkKey::from_dvec3(center_pos);
-        let r_chunks = h_radius.div_ceil(CHUNK_SIZE) as i32;
-        let y_chunks = v_radius.div_ceil(CHUNK_SIZE) as i32;
-
+    /// `h_chunk_radius` controls the horizontal spread (X and Z axes).
+    /// `v_chunk_radius` controls the vertical spread (Y axis).
+    /// A `chunk_radius` of 1 results in a 3x3x3 volume (27 chunks).
+    pub fn from_cuboid(center: ChunkKey, h_chunk_radius: i32, v_chunk_radius: i32) -> Self {
+        let extent = IVec3::new(h_chunk_radius, v_chunk_radius, h_chunk_radius);
         Self {
             min: ChunkKey {
-                key: IVec3::new(
-                    center.key.x - r_chunks,
-                    center.key.y - y_chunks,
-                    center.key.z - r_chunks,
-                ),
+                key: center.key - extent,
             },
             max: ChunkKey {
-                key: IVec3::new(
-                    center.key.x + r_chunks,
-                    center.key.y + y_chunks,
-                    center.key.z + r_chunks,
-                ),
+                key: center.key + extent,
             },
         }
-    }
-
-    /// Creates a flat 2D bounding box centered at `center_pos` with a square shape.
-    /// `radius` controls the size of the bounding box.
-    pub fn from_square(center_pos: DVec3, radius: usize) -> Self {
-        ChunkView::from_cuboid(center_pos, 1, radius)
     }
 
     /// Returns `true` if the given `chunk` is contained within this bounding box.
@@ -164,10 +138,14 @@ impl ChunkView {
     /// Iterates chunks in expanding concentric shells.
     /// Zero-Allocation (uses stack arrays [r, -r] and chaining).
     pub fn iter_concentric(&self, center: ChunkKey) -> impl Iterator<Item = ChunkKey> + '_ {
+        // Finds the maximum possible distance to ANY edge (min or max)
         let max_r = (self.max.key.x - center.key.x)
             .abs()
+            .max((center.key.x - self.min.key.x).abs())
             .max((self.max.key.y - center.key.y).abs())
-            .max((self.max.key.z - center.key.z).abs());
+            .max((center.key.y - self.min.key.y).abs())
+            .max((self.max.key.z - center.key.z).abs())
+            .max((center.key.z - self.min.key.z).abs());
 
         // The Center (r=0) - Handle separately to avoid branching/allocs in the loop
         std::iter::once(center)
