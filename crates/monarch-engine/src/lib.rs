@@ -7,7 +7,7 @@ use crate::world::{
     types::{ChunkManager, WorldFocus, WorldStore},
 };
 
-mod world;
+pub mod world;
 
 pub struct MonarchEnginePlugin;
 
@@ -23,5 +23,3 @@ impl Plugin for MonarchEnginePlugin {
             .add_systems(Update, (manage_chunk_window, handle_chunk_loaded));
     }
 }
-
-pub fn test_system() {}

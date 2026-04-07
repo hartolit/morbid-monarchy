@@ -1,5 +1,5 @@
 use bevy::{ecs::resource::Resource, math::DVec3};
-use bitflags::bitflags;
+use bitcode::{Decode, Encode};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
@@ -31,16 +31,42 @@ impl Default for ChunkManager {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, bitcode::Encode, bitcode::Decode)]
 pub struct SerializedEntity {
     pub entity_type: EntityTypeId,
-    pub position: DVec3,
+    pub position: [f64; 3],
     pub rotation: f32,
     pub scale: f32,
     pub health: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl SerializedEntity {
+    /// Helper to easily extract the Bevy math type when loading the chunk into the ECS
+    #[inline(always)]
+    pub fn get_position(&self) -> DVec3 {
+        DVec3::from_array(self.position)
+    }
+
+    /// Helper to easily create a SerializedEntity from Bevy transforms
+    #[inline(always)]
+    pub fn new(
+        entity_type: EntityTypeId,
+        pos: DVec3,
+        rotation: f32,
+        scale: f32,
+        health: f32,
+    ) -> Self {
+        Self {
+            entity_type,
+            position: pos.to_array(),
+            rotation,
+            scale,
+            health,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct EntityTypeId(pub u32);
 
 impl EntityTypeId {
@@ -50,7 +76,7 @@ impl EntityTypeId {
     pub const MINION_GIANT: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct MaterialId(pub u8);
 
 impl MaterialId {
@@ -61,16 +87,31 @@ impl MaterialId {
     pub const BLOOD: Self = Self(4);
 }
 
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PixelFlags: u8 {
-        const NONE = 0;
-        const IS_SOLID = 1 << 0;
-        const WAKES_AWAKE = 1 << 1;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct PixelFlags(pub u8);
+
+impl PixelFlags {
+    pub const NONE: Self = Self(0);
+    pub const IS_SOLID: Self = Self(1 << 0);
+    pub const WAKES_AWAKE: Self = Self(1 << 1);
+
+    #[inline(always)]
+    pub fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    #[inline(always)]
+    pub fn remove(&mut self, other: Self) {
+        self.0 &= !other.0;
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[repr(C)]
 pub struct Pixel {
     pub material: MaterialId,
@@ -92,7 +133,7 @@ impl Default for Pixel {
 
 /// A single X/Y coordinate in the top-down world, containing multiple Z-layers.
 /// Note: Perfectly aligned for 64-byte CPU cache lines (4 cells / 16 bytes per line).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 #[repr(C)]
 pub struct WorldCell {
     /// Layer 0: The base ground (Rock, Dirt, Pit).

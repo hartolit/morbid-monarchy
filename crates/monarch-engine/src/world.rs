@@ -7,10 +7,10 @@ use bevy::{
 };
 
 use crate::world::{
-    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
+    chunk::{CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
-    types::{ChunkManager, MaterialId, WorldFocus, WorldStore},
+    types::{ChunkManager, WorldCell, WorldFocus, WorldStore},
 };
 
 pub mod chunk;
@@ -40,8 +40,12 @@ pub fn manage_chunk_window(
         for key in old_view.iter().filter(|k| !new_view.contains(k)) {
             if let Some(mut chunk_data) = store.active_chunks.remove(&key) {
                 // Extract simulated pixels data from the grid
-                chunk_data.cells = grid.unload_chunk(key);
+                // Zero-allocation conversion: Box<[T; N]> -> Box<[T]> -> Vec<T>
+                // Due to ChunkData storing cells as a Vec<WorldCell> for serialization
+                let boxed_array = grid.unload_chunk(key);
+                let boxed_slice: Box<[WorldCell]> = boxed_array;
 
+                chunk_data.cells = boxed_slice.into_vec();
                 chunk_data.last_simulated = time.elapsed_secs_f64();
 
                 unload_writer.write(ChunkUnloadEvent {
@@ -88,7 +92,18 @@ pub fn handle_chunk_loaded(
         }
 
         chunk_data.last_simulated = current_time;
-        grid.load_chunk(event.key, &event.data.cells);
+
+        // Convert the Vec back into a fixed-size slice reference for the Grid
+        grid.load_chunk(
+            event.key,
+            event
+                .data
+                .cells
+                .as_slice()
+                .try_into()
+                .expect("Loaded chunk cells must be exactly CHUNK_CELL_COUNT in length"),
+        );
+
         store.active_chunks.insert(event.key, event.data.clone());
     }
 }

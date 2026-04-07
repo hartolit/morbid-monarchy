@@ -6,10 +6,11 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-bevy = "0.18.1"
+bevy = { version = "0.18.1", features = ["serialize"] }
+bitcode = { version = "0.6.9", features = ["derive"] }
 rand = "0.10.0"
 rustc-hash = "2.1.2"
-bitflags = "2.11.0"
+redb = "4.0.0"
 
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }

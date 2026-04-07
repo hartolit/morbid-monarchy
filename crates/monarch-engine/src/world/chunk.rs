@@ -1,19 +1,20 @@
 use bevy::math::{DVec3, IVec2, IVec3};
+use bitcode::{Decode, Encode};
 
 use crate::world::types::{SerializedEntity, WorldCell};
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
-#[derive(Clone)]
+#[derive(Clone, Encode, Decode)]
 pub struct ChunkData {
     pub last_simulated: f64,
     pub theme: ChunkTheme,
-    pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
+    pub cells: Vec<WorldCell>,
     pub serialized_entities: Vec<SerializedEntity>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct ChunkTheme(pub u8);
 
 impl ChunkTheme {
