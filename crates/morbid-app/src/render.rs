@@ -99,7 +99,6 @@ fn sync_grid_rendering(
         return;
     }
 
-    // Modern Bevy uses single_mut() and single() for safe Result unwrapping
     let Ok(mut transform) = quad_query.single_mut() else {
         return;
     };

@@ -27,7 +27,7 @@ impl Default for ChunkManager {
     fn default() -> Self {
         Self {
             current_view: None,
-            view_radius: 0, // 1x1 chunk grid
+            view_radius: 2, // 1x1 chunk grid
         }
     }
 }

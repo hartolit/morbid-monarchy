@@ -112,5 +112,5 @@ pub fn handle_chunk_loaded(
 /// Fast-forwards chunk physics (e.g., settling water/blood) to catch up with missed time.
 /// Note: This is a single pass calculation to catch up with missed time and not a 1:1 simulation.
 fn fast_forward_chunk(_chunk_data: &mut ChunkData, _delta_secs: f64) {
-    todo!("Implement fast-forward physics")
+    //todo!("Implement fast-forward physics")
 }

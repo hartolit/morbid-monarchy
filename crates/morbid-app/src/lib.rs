@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, window::WindowResolution};
 use monarch_engine::{MonarchEnginePlugin, world::types::WorldFocus};
 
 use crate::render::WorldRenderPlugin;
@@ -10,7 +10,20 @@ pub fn run() {
     let world_db = database::initialize_database();
 
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Morbid Monarchy".to_string(),
+                        resolution: WindowResolution::new(1024, 1024),
+                        resizable: false, // Lock resolution for the 1024x1024 grid prototype
+                        ..default()
+                    }),
+                    ..default()
+                })
+                // Prevents anti-aliasing blur on textures
+                .set(ImagePlugin::default_nearest()),
+        )
         .add_plugins(MonarchEnginePlugin)
         .add_plugins(WorldRenderPlugin)
         .insert_resource(world_db)
@@ -34,9 +47,11 @@ pub fn run() {
 struct FocalPoint;
 
 fn setup_focal_point(mut commands: Commands) {
-    commands
-        .spawn((FocalPoint, Transform::from_translation(Vec3::ZERO)))
-        .with_child(Camera2d);
+    commands.spawn((
+        FocalPoint,
+        Camera2d,
+        Transform::from_translation(Vec3::ZERO),
+    ));
 }
 
 fn player_movement(
