@@ -28,11 +28,8 @@ impl ActiveWorldGrid {
 
     #[inline(always)]
     pub fn get_index(&self, world_pos: IVec2) -> usize {
-        let local_x = world_pos.x - self.window_origin.x;
-        let local_y = world_pos.y - self.window_origin.y;
-
-        let buffer_x = local_x.rem_euclid(self.width);
-        let buffer_y = local_y.rem_euclid(self.height);
+        let buffer_x = world_pos.x.rem_euclid(self.width);
+        let buffer_y = world_pos.y.rem_euclid(self.height);
 
         (buffer_y * self.width + buffer_x) as usize
     }

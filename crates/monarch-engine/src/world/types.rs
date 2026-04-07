@@ -1,5 +1,35 @@
-use bevy::math::DVec3;
+use bevy::{ecs::resource::Resource, math::DVec3};
 use bitflags::bitflags;
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
+
+/// Engine-side storage for lightweight metadata of active chunks.
+#[derive(Resource, Default)]
+pub struct WorldStore {
+    pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
+    pub pending_requests: FxHashSet<ChunkKey>,
+}
+
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct WorldFocus {
+    pub position: DVec3,
+}
+
+#[derive(Resource)]
+pub struct ChunkManager {
+    pub current_view: Option<ChunkView>,
+    pub view_radius: usize,
+}
+
+impl Default for ChunkManager {
+    fn default() -> Self {
+        Self {
+            current_view: None,
+            view_radius: 0, // 1x1 chunk grid
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SerializedEntity {

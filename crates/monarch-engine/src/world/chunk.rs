@@ -5,6 +5,7 @@ use crate::world::types::{SerializedEntity, WorldCell};
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
+#[derive(Clone)]
 pub struct ChunkData {
     pub is_loaded: bool,
     pub last_simulated: f64,
@@ -57,7 +58,7 @@ impl ChunkKey {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkView {
     pub min: ChunkKey,
     pub max: ChunkKey,

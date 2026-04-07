@@ -1,20 +1,80 @@
-use bevy::{ecs::resource::Resource, math::DVec3};
-use rustc_hash::FxHashMap;
+use bevy::ecs::{
+    message::{MessageReader, MessageWriter},
+    system::{Res, ResMut},
+};
 
-use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
+use crate::world::{
+    chunk::{CHUNK_SIZE, ChunkKey, ChunkView},
+    events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
+    grid::ActiveWorldGrid,
+    types::{ChunkManager, WorldFocus, WorldStore},
+};
 
-mod chunk;
-mod events;
-mod grid;
-mod types;
+pub mod chunk;
+pub mod events;
+pub mod grid;
+pub mod types;
 
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct WorldFocus {
-    pub position: DVec3,
+pub fn manage_chunk_window(
+    focus: Res<WorldFocus>,
+    mut manager: ResMut<ChunkManager>,
+    mut grid: ResMut<ActiveWorldGrid>,
+    mut store: ResMut<WorldStore>,
+    mut unload_writer: MessageWriter<ChunkUnloadEvent>,
+    mut load_writer: MessageWriter<ChunkLoadRequest>,
+) {
+    let center = ChunkKey::from_dvec3(focus.position);
+    // Creates a flat top-down view centered around the player's position
+    let new_view = ChunkView::from_cuboid(center, manager.view_radius as i32, 0);
+
+    if let Some(old_view) = manager.current_view {
+        if old_view == new_view {
+            return;
+        }
+
+        // Filters evicted chunks and unloads them (Zero-Allocation)
+        for key in old_view.iter().filter(|k| !new_view.contains(k)) {
+            if let Some(mut chunk_data) = store.active_chunks.remove(&key) {
+                // Extract simulated pixels data from the grid
+                chunk_data.cells = grid.unload_chunk(key);
+
+                unload_writer.write(ChunkUnloadEvent {
+                    key,
+                    data: chunk_data,
+                });
+            }
+        }
+    }
+
+    // Shift the Toroidal Grid's window anchor
+    grid.window_origin = new_view.min.to_ivec2() * (CHUNK_SIZE as i32);
+
+    // Requests incoming chunks (Zero-Allocation)
+    let old_view_ref = manager.current_view.as_ref();
+    for key in new_view
+        .iter()
+        .filter(|k| old_view_ref.map_or(true, |old| !old.contains(k)))
+    {
+        if !store.active_chunks.contains_key(&key) && store.pending_requests.insert(key) {
+            load_writer.write(ChunkLoadRequest { key });
+        }
+    }
+
+    manager.current_view = Some(new_view);
 }
 
-#[derive(Resource)]
-pub struct ChunkManager {
-    pub current_view: ChunkView,
-    pub view_radius: usize,
+pub fn handle_chunk_loaded(
+    mut reader: MessageReader<ChunkLoadedEvent>,
+    mut store: ResMut<WorldStore>,
+    mut grid: ResMut<ActiveWorldGrid>,
+) {
+    for event in reader.read() {
+        store.pending_requests.remove(&event.key);
+
+        // Injects pixel into active grid
+        grid.load_chunk(event.key, &event.data.cells);
+
+        // Store the persistent data state
+        store.active_chunks.insert(event.key, event.data.clone());
+    }
 }
