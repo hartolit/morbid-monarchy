@@ -30,7 +30,7 @@ pub fn manage_chunk_window(
 ) {
     let center = ChunkKey::from_dvec3(focus.position);
     // Creates a flat top-down view centered around the player's position
-    let new_view = ChunkView::from_cuboid(center, manager.view_radius as i32, 0);
+    let new_view = ChunkView::from_flat_xy(center, manager.view_radius as i32);
 
     if let Some(old_view) = manager.current_view {
         if old_view == new_view {

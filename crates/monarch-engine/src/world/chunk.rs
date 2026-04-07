@@ -113,6 +113,20 @@ impl ChunkView {
         }
     }
 
+    /// Creates a flat top-down bounding box on the X/Y plane.
+    /// `radius` controls the spread along the X and Y axes, leaving Z at 0.
+    pub fn from_flat_xy(center: ChunkKey, radius: i32) -> Self {
+        let extent = IVec3::new(radius, radius, 0);
+        Self {
+            min: ChunkKey {
+                key: center.key - extent,
+            },
+            max: ChunkKey {
+                key: center.key + extent,
+            },
+        }
+    }
+
     /// Returns `true` if the given `chunk` is contained within this bounding box.
     pub fn contains(&self, chunk: &ChunkKey) -> bool {
         chunk.key.x >= self.min.key.x

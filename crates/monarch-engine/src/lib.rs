@@ -16,7 +16,7 @@ impl Plugin for MonarchEnginePlugin {
         app.init_resource::<WorldFocus>()
             .init_resource::<ChunkManager>()
             .init_resource::<WorldStore>()
-            .insert_resource(ActiveWorldGrid::new(1024, 1024, bevy::math::IVec2::ZERO))
+            .insert_resource(ActiveWorldGrid::new(2048, 2048, bevy::math::IVec2::ZERO))
             .add_message::<ChunkLoadRequest>()
             .add_message::<ChunkLoadedEvent>()
             .add_message::<ChunkUnloadEvent>()

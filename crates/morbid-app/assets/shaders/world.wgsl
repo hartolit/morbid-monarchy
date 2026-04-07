@@ -17,8 +17,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_w = i32(window.size.x);
     let grid_h = i32(window.size.y);
 
-    let cell_x = i32(floor(local_pos.x));
-    let cell_y = i32(floor(local_pos.y));
+    let cell_x = i32(floor(in.world_position.x));
+    let cell_y = i32(floor(in.world_position.y));
 
     // Handle Toroidal Wrapping
     // Using positive modulo logic since WGSL modulo follows C semantics (allows negative)

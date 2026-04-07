@@ -16,7 +16,8 @@ impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(Material2dPlugin::<WorldMaterial>::default())
             .add_systems(Startup, setup_rendering)
-            .add_systems(Update, sync_grid_rendering);
+            .add_systems(Update, (sync_grid_rendering, sync_quad_to_camera))
+            .add_systems(PostUpdate, sync_quad_to_camera);
     }
 }
 
@@ -90,7 +91,6 @@ fn setup_rendering(
 /// Translates the pure engine grid state into the GPU-bound Storage Buffers
 fn sync_grid_rendering(
     grid: Res<ActiveWorldGrid>,
-    mut quad_query: Query<&mut Transform, With<WorldQuadMarker>>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     material_handles: Query<&MeshMaterial2d<WorldMaterial>, With<WorldQuadMarker>>,
@@ -99,14 +99,10 @@ fn sync_grid_rendering(
         return;
     }
 
-    let Ok(mut transform) = quad_query.single_mut() else {
-        return;
-    };
     let Ok(material_handle) = material_handles.single() else {
         return;
     };
 
-    // Unpack the actual handle via `.0` from the MeshMaterial2d component
     let Some(material) = materials.get_mut(&material_handle.0) else {
         return;
     };
@@ -119,14 +115,22 @@ fn sync_grid_rendering(
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
         let bytes: &[u8] = bytemuck::cast_slice(&grid.cells);
 
-        // Re-allocate the raw buffer to bypass the strict `ShaderType` trait requirements
         *buffer = ShaderStorageBuffer::new(
             bytes,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
     }
+}
 
-    // Keep the Quad snapped directly over the engine's active window coordinates
-    transform.translation.x = grid.window_origin.x as f32 + (grid.width as f32 / 2.0);
-    transform.translation.y = grid.window_origin.y as f32 + (grid.height as f32 / 2.0);
+/// Keeps the rendering canvas perfectly centered over the camera to prevent edge clipping
+fn sync_quad_to_camera(
+    camera_query: Query<&Transform, (With<Camera2d>, Without<WorldQuadMarker>)>,
+    mut quad_query: Query<&mut Transform, With<WorldQuadMarker>>,
+) {
+    if let Ok(camera_transform) = camera_query.single() {
+        if let Ok(mut quad_transform) = quad_query.single_mut() {
+            quad_transform.translation.x = camera_transform.translation.x;
+            quad_transform.translation.y = camera_transform.translation.y;
+        }
+    }
 }
