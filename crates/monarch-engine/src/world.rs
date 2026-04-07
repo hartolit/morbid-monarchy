@@ -1,13 +1,16 @@
-use bevy::ecs::{
-    message::{MessageReader, MessageWriter},
-    system::{Res, ResMut},
+use bevy::{
+    ecs::{
+        message::{MessageReader, MessageWriter},
+        system::{Res, ResMut},
+    },
+    time::Time,
 };
 
 use crate::world::{
-    chunk::{CHUNK_SIZE, ChunkKey, ChunkView},
+    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
-    types::{ChunkManager, WorldFocus, WorldStore},
+    types::{ChunkManager, WorldCell, WorldFocus, WorldStore},
 };
 
 pub mod chunk;
@@ -17,6 +20,7 @@ pub mod types;
 
 pub fn manage_chunk_window(
     focus: Res<WorldFocus>,
+    time: Res<Time>,
     mut manager: ResMut<ChunkManager>,
     mut grid: ResMut<ActiveWorldGrid>,
     mut store: ResMut<WorldStore>,
@@ -37,6 +41,8 @@ pub fn manage_chunk_window(
             if let Some(mut chunk_data) = store.active_chunks.remove(&key) {
                 // Extract simulated pixels data from the grid
                 chunk_data.cells = grid.unload_chunk(key);
+
+                chunk_data.last_simulated = time.elapsed_secs_f64();
 
                 unload_writer.write(ChunkUnloadEvent {
                     key,
@@ -64,6 +70,7 @@ pub fn manage_chunk_window(
 }
 
 pub fn handle_chunk_loaded(
+    time: Res<Time>,
     mut reader: MessageReader<ChunkLoadedEvent>,
     mut store: ResMut<WorldStore>,
     mut grid: ResMut<ActiveWorldGrid>,
@@ -71,10 +78,24 @@ pub fn handle_chunk_loaded(
     for event in reader.read() {
         store.pending_requests.remove(&event.key);
 
-        // Injects pixel into active grid
-        grid.load_chunk(event.key, &event.data.cells);
+        let mut chunk_data = event.data.clone();
 
-        // Store the persistent data state
+        let current_time = time.elapsed_secs_f64();
+        let delta_secs = current_time - event.data.last_simulated;
+
+        if delta_secs > 1.0 {
+            fast_forward_chunk(&mut chunk_data, delta_secs);
+        }
+
+        chunk_data.last_simulated = current_time;
+        grid.load_chunk(event.key, &event.data.cells);
         store.active_chunks.insert(event.key, event.data.clone());
     }
+}
+
+/// Dummy implementation for fast-forwarding chunk physics (e.g., settling water/sand)
+fn fast_forward_chunk(_chunk_data: &mut ChunkData, _delta_secs: f64) {
+    // TODO: Calculate how many ticks `missed_seconds` represents.
+    // Run simplified, large-timestep cellular automata passes to stabilize the environment
+    // before the player sees it.
 }

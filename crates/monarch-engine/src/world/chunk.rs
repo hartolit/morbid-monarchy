@@ -7,7 +7,6 @@ pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
 #[derive(Clone)]
 pub struct ChunkData {
-    pub is_loaded: bool,
     pub last_simulated: f64,
     pub theme: ChunkTheme,
     pub cells: Box<[WorldCell; CHUNK_CELL_COUNT]>,
