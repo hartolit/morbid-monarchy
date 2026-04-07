@@ -1,5 +1,6 @@
 use bevy::{ecs::resource::Resource, math::DVec3};
 use bitcode::{Decode, Encode};
+use bytemuck::{Pod, Zeroable};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
@@ -76,7 +77,8 @@ impl EntityTypeId {
     pub const MINION_GIANT: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
+#[repr(transparent)]
 pub struct MaterialId(pub u8);
 
 impl MaterialId {
@@ -87,7 +89,8 @@ impl MaterialId {
     pub const BLOOD: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
+#[repr(transparent)]
 pub struct PixelFlags(pub u8);
 
 impl PixelFlags {
@@ -111,7 +114,7 @@ impl PixelFlags {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(C)]
 pub struct Pixel {
     pub material: MaterialId,
@@ -133,7 +136,7 @@ impl Default for Pixel {
 
 /// A single X/Y coordinate in the top-down world, containing multiple Z-layers.
 /// Note: Perfectly aligned for 64-byte CPU cache lines (4 cells / 16 bytes per line).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(C)]
 pub struct WorldCell {
     /// Layer 0: The base ground (Rock, Dirt, Pit).

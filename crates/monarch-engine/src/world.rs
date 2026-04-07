@@ -15,6 +15,7 @@ use crate::world::{
 
 pub mod chunk;
 pub mod events;
+pub mod generation;
 pub mod grid;
 pub mod types;
 

@@ -1,7 +1,7 @@
 use bevy::math::{DVec3, IVec2, IVec3};
 use bitcode::{Decode, Encode};
 
-use crate::world::types::{MaterialId, Pixel, PixelFlags, SerializedEntity, WorldCell};
+use crate::world::types::{SerializedEntity, WorldCell};
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
@@ -12,26 +12,6 @@ pub struct ChunkData {
     pub theme: ChunkTheme,
     pub cells: Vec<WorldCell>,
     pub serialized_entities: Vec<SerializedEntity>,
-}
-
-impl ChunkData {
-    pub fn generate(key: ChunkKey) -> Self {
-        let theme = theme_for_chunk(key);
-        let mut cells = Vec::with_capacity(CHUNK_CELL_COUNT);
-
-        for local_y in 0..CHUNK_SIZE as i32 {
-            for local_x in 0..CHUNK_SIZE as i32 {
-                cells.push(generate_cell(key, theme, local_x, local_y));
-            }
-        }
-
-        Self {
-            last_simulated: 0.0,
-            theme,
-            cells,
-            serialized_entities: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
@@ -76,98 +56,6 @@ impl ChunkKey {
     pub fn to_ivec2(&self) -> IVec2 {
         IVec2::new(self.key.x, self.key.y)
     }
-}
-
-const BIOME_SPAN_CHUNKS: i32 = 6;
-const TERRAIN_VARIANT_COUNT: u64 = 4;
-const PLAINS_ROCK_PATCH_MODULUS: u64 = 11;
-const DESERT_ROCK_PATCH_MODULUS: u64 = 17;
-const CAVE_DIRT_PATCH_MODULUS: u64 = 5;
-const THEME_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
-const TERRAIN_SALT: u64 = 0xa076_1d64_78bd_642f;
-
-fn theme_for_chunk(key: ChunkKey) -> ChunkTheme {
-    let biome_x = key.key.x.div_euclid(BIOME_SPAN_CHUNKS);
-    let biome_y = key.key.y.div_euclid(BIOME_SPAN_CHUNKS);
-    let biome_z = key.key.z.div_euclid(BIOME_SPAN_CHUNKS);
-
-    match hash_coords(biome_x, biome_y, biome_z, THEME_SALT) % 4 {
-        0 => ChunkTheme::GRASS_PLAINS,
-        1 => ChunkTheme::OCEAN,
-        2 => ChunkTheme::DESERT,
-        _ => ChunkTheme::CAVE,
-    }
-}
-
-fn generate_cell(key: ChunkKey, theme: ChunkTheme, local_x: i32, local_y: i32) -> WorldCell {
-    let world_x = key.key.x * CHUNK_SIZE as i32 + local_x;
-    let world_y = key.key.y * CHUNK_SIZE as i32 + local_y;
-    let sample = hash_coords(world_x, world_y, key.key.z, TERRAIN_SALT);
-    let variant = (sample % TERRAIN_VARIANT_COUNT) as u8;
-    let mut cell = WorldCell::default();
-
-    if theme == ChunkTheme::GRASS_PLAINS {
-        let material = if sample % PLAINS_ROCK_PATCH_MODULUS == 0 {
-            MaterialId::ROCK
-        } else {
-            MaterialId::DIRT
-        };
-        cell.terrain = solid_pixel(material, variant);
-    } else if theme == ChunkTheme::OCEAN {
-        cell.terrain = solid_pixel(MaterialId::ROCK, variant);
-        cell.fluid = liquid_pixel(MaterialId::WATER, variant);
-    } else if theme == ChunkTheme::DESERT {
-        let material = if sample % DESERT_ROCK_PATCH_MODULUS == 0 {
-            MaterialId::ROCK
-        } else {
-            MaterialId::DIRT
-        };
-        cell.terrain = solid_pixel(material, variant);
-    } else {
-        let material = if sample % CAVE_DIRT_PATCH_MODULUS == 0 {
-            MaterialId::DIRT
-        } else {
-            MaterialId::ROCK
-        };
-        cell.terrain = solid_pixel(material, variant);
-    }
-
-    cell
-}
-
-fn solid_pixel(material: MaterialId, variant: u8) -> Pixel {
-    Pixel {
-        material,
-        state: 0,
-        variant,
-        flags: PixelFlags::IS_SOLID,
-    }
-}
-
-fn liquid_pixel(material: MaterialId, variant: u8) -> Pixel {
-    Pixel {
-        material,
-        state: 0,
-        variant,
-        flags: PixelFlags::NONE,
-    }
-}
-
-fn hash_coords(x: i32, y: i32, z: i32, salt: u64) -> u64 {
-    mix64(
-        salt
-            ^ ((x as u32 as u64) << 32)
-            ^ ((y as u32 as u64) << 1)
-            ^ ((z as u32 as u64) << 17),
-    )
-}
-
-fn mix64(mut value: u64) -> u64 {
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

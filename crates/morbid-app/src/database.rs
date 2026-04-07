@@ -5,6 +5,7 @@ use bevy::{
 use monarch_engine::world::{
     chunk::{ChunkData, ChunkKey},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
+    generation::WorldGenerator,
 };
 use redb::{Database, ReadableDatabase, TableDefinition};
 use std::{path::PathBuf, sync::Arc};
@@ -54,13 +55,20 @@ pub fn handle_load_requests(
         let task = pool.spawn(async move {
             let data = match load_chunk_from_db(&db_clone, key) {
                 Ok(Some(chunk_data)) => chunk_data,
-                Ok(None) => ChunkData::generate(key), // Not in DB, generate new
+                Ok(None) => {
+                    // TODO - Fix generation
+                    let generator = WorldGenerator::new(42);
+                    generator.generate_chunk(key)
+                }
                 Err(e) => {
                     error!(
                         "Database read error for chunk {:?}: {}. Generating chunk.",
                         key, e
                     );
-                    ChunkData::generate(key)
+
+                    // TODO - Fix generation
+                    let generator = WorldGenerator::new(42);
+                    generator.generate_chunk(key)
                 }
             };
 
