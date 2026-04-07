@@ -3320,6 +3320,7 @@ dependencies = [
  "bevy",
  "bitcode",
  "monarch-engine",
+ "redb",
 ]
 
 [[package]]
@@ -4192,6 +4193,15 @@ name = "rectangle-pack"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0d463f2884048e7153449a55166f91028d5b0ea53c79377099ce4e8cf0cf9bb"
+
+[[package]]
+name = "redb"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67f7f231ea7b1172b7ac00ccf96b1250f0fb5a16d5585836aa4ebc997df7cbde"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "redox_syscall"
