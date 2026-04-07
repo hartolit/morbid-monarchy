@@ -7,7 +7,7 @@ use monarch_engine::world::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     types::{MaterialId, Pixel, PixelFlags, WorldCell},
 };
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use std::{path::PathBuf, sync::Arc};
 
 const WORLD_DATA_DIR: &str = "world_data";
@@ -35,6 +35,7 @@ pub fn initialize_database() -> WorldDatabase {
 
     let db_path = dir.join(DB_FILE);
     let db = Database::create(db_path).expect("Failed to initialize redb database");
+    ensure_chunks_table(&db).expect("Failed to initialize chunks table");
 
     WorldDatabase(Arc::new(db))
 }
@@ -122,6 +123,16 @@ pub fn poll_save_tasks(
 
 // --- Internal DB I/O & Generation ---
 
+fn ensure_chunks_table(db: &Database) -> Result<(), Box<dyn std::error::Error>> {
+    let write_txn = db.begin_write()?;
+    {
+        let _table = write_txn.open_table(CHUNKS_TABLE)?;
+    }
+    write_txn.commit()?;
+
+    Ok(())
+}
+
 fn save_chunk_to_db(
     db: &Database,
     key: ChunkKey,
@@ -148,12 +159,7 @@ fn load_chunk_from_db(
 ) -> Result<Option<ChunkData>, Box<dyn std::error::Error>> {
     let read_txn = db.begin_read()?;
 
-    // Trap the missing table error safely, allowing us to generate chunks gracefully
-    let table = match read_txn.open_table(CHUNKS_TABLE) {
-        Ok(t) => t,
-        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
+    let table = read_txn.open_table(CHUNKS_TABLE)?;
 
     if let Some(access) = table.get([key.key.x, key.key.y, key.key.z])? {
         let bytes = access.value();

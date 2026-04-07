@@ -2,7 +2,7 @@ use bevy::{ecs::resource::Resource, math::IVec2};
 
 use crate::world::{
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkKey},
-    types::{Pixel, WorldCell},
+    types::WorldCell,
 };
 
 /// Toroidal (wrapping) grid where cellular automata runs.
