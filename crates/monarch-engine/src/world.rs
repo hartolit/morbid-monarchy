@@ -10,7 +10,7 @@ use crate::world::{
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
-    types::{ChunkManager, WorldCell, WorldFocus, WorldStore},
+    types::{ChunkManager, MaterialId, WorldFocus, WorldStore},
 };
 
 pub mod chunk;
@@ -94,8 +94,8 @@ pub fn handle_chunk_loaded(
 }
 
 /// Dummy implementation for fast-forwarding chunk physics (e.g., settling water/sand)
+/// Fast-forwards chunk physics (e.g., settling water/blood) to catch up with missed time.
+/// Note: This is a single pass calculation to catch up with missed time and not a 1:1 simulation.
 fn fast_forward_chunk(_chunk_data: &mut ChunkData, _delta_secs: f64) {
-    // TODO: Calculate how many ticks `missed_seconds` represents.
-    // Run simplified, large-timestep cellular automata passes to stabilize the environment
-    // before the player sees it.
+    todo!("Implement fast-forward physics")
 }
