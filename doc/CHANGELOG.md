@@ -1,3 +1,3 @@
 # Agentic Changelog
 
-- Improved `morbid-app` database architecture by establishing the `chunks` table during startup initialization, importing `ReadableDatabase` for `redb 4.0.0` read transactions, and simplifying chunk loads to rely on the startup schema invariant instead of handling table bootstrap in the read path.
+- Improved chunk loading architecture by establishing the `chunks` table during `morbid-app` startup, moving authoritative procedural chunk generation into `monarch-engine` via `ChunkData::generate`, delegating cache-miss fallback in `morbid-app` to that engine API, and ensuring `monarch-engine` stores the normalized loaded chunk state after fast-forward handling.

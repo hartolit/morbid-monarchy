@@ -96,15 +96,14 @@ pub fn handle_chunk_loaded(
         // Convert the Vec back into a fixed-size slice reference for the Grid
         grid.load_chunk(
             event.key,
-            event
-                .data
+            chunk_data
                 .cells
                 .as_slice()
                 .try_into()
                 .expect("Loaded chunk cells must be exactly CHUNK_CELL_COUNT in length"),
         );
 
-        store.active_chunks.insert(event.key, event.data.clone());
+        store.active_chunks.insert(event.key, chunk_data);
     }
 }
 

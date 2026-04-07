@@ -3,9 +3,8 @@ use bevy::{
     tasks::{IoTaskPool, Task, block_on, futures_lite::future},
 };
 use monarch_engine::world::{
-    chunk::{CHUNK_CELL_COUNT, ChunkData, ChunkKey, ChunkTheme},
+    chunk::{ChunkData, ChunkKey},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
-    types::{MaterialId, Pixel, PixelFlags, WorldCell},
 };
 use redb::{Database, ReadableDatabase, TableDefinition};
 use std::{path::PathBuf, sync::Arc};
@@ -55,13 +54,13 @@ pub fn handle_load_requests(
         let task = pool.spawn(async move {
             let data = match load_chunk_from_db(&db_clone, key) {
                 Ok(Some(chunk_data)) => chunk_data,
-                Ok(None) => generate_fallback_chunk(), // Not in DB, generate new
+                Ok(None) => ChunkData::generate(key), // Not in DB, generate new
                 Err(e) => {
                     error!(
-                        "Database read error for chunk {:?}: {}. Generating fallback.",
+                        "Database read error for chunk {:?}: {}. Generating chunk.",
                         key, e
                     );
-                    generate_fallback_chunk()
+                    ChunkData::generate(key)
                 }
             };
 
@@ -167,26 +166,5 @@ fn load_chunk_from_db(
         Ok(Some(data))
     } else {
         Ok(None)
-    }
-}
-
-/// Procedurally generates a baseline chunk if one does not exist on disk.
-fn generate_fallback_chunk() -> ChunkData {
-    let mut cells = vec![WorldCell::default(); CHUNK_CELL_COUNT];
-
-    for cell in cells.iter_mut() {
-        cell.terrain = Pixel {
-            material: MaterialId::DIRT,
-            state: 0,
-            variant: 0,
-            flags: PixelFlags::IS_SOLID,
-        };
-    }
-
-    ChunkData {
-        last_simulated: 0.0, // Will be stamped correctly by the engine's catch-up pass
-        theme: ChunkTheme::GRASS_PLAINS,
-        cells,
-        serialized_entities: Vec::new(),
     }
 }
