@@ -17,6 +17,7 @@ pub mod chunk;
 pub mod events;
 pub mod generation;
 pub mod grid;
+pub mod simulation;
 pub mod types;
 
 pub fn manage_chunk_window(

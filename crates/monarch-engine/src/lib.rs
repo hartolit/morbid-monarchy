@@ -4,6 +4,7 @@ use crate::world::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
     handle_chunk_loaded, manage_chunk_window,
+    simulation::simulate_biology,
     types::{ChunkManager, WorldFocus, WorldStore},
 };
 
@@ -20,6 +21,9 @@ impl Plugin for MonarchEnginePlugin {
             .add_message::<ChunkLoadRequest>()
             .add_message::<ChunkLoadedEvent>()
             .add_message::<ChunkUnloadEvent>()
-            .add_systems(Update, (manage_chunk_window, handle_chunk_loaded));
+            .add_systems(
+                Update,
+                (manage_chunk_window, handle_chunk_loaded, simulate_biology),
+            );
     }
 }

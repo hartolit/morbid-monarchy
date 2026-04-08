@@ -50,7 +50,8 @@ fn setup_focal_point(mut commands: Commands) {
     commands.spawn((
         FocalPoint,
         Camera2d,
-        Transform::from_translation(Vec3::ZERO),
+        // Zoom in 8x so each grid cell takes up an 8x8 block of pixels on screen
+        Transform::from_translation(Vec3::ZERO), //.with_scale(Vec3::splat(0.5)),
     ));
 }
 

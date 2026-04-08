@@ -62,10 +62,10 @@ fn setup_rendering(
     // Initialize Palette (Maps MaterialId 0..255 to RGBA)
     let mut palette = vec![[0.0f32; 4]; 256];
     palette[0] = [0.0, 0.0, 0.0, 0.0]; // Empty
-    palette[1] = [0.35, 0.25, 0.15, 1.0]; // Dirt
-    palette[2] = [0.45, 0.45, 0.45, 1.0]; // Rock
-    palette[3] = [0.15, 0.35, 0.85, 1.0]; // Water
-    palette[4] = [0.65, 0.05, 0.05, 1.0]; // Blood
+    palette[1] = [0.15, 0.35, 0.85, 1.0]; // Water
+    palette[2] = [0.65, 0.05, 0.05, 1.0]; // Blood
+    palette[3] = [0.15, 0.40, 0.10, 1.0]; // Grass
+    palette[4] = [0.80, 0.70, 0.45, 1.0]; // Sand
 
     let palette_buffer = buffers.add(ShaderStorageBuffer::new(
         bytemuck::cast_slice(&palette),

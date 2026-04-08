@@ -83,10 +83,10 @@ pub struct MaterialId(pub u8);
 
 impl MaterialId {
     pub const EMPTY: Self = Self(0);
-    pub const DIRT: Self = Self(1);
-    pub const ROCK: Self = Self(2);
-    pub const WATER: Self = Self(3);
-    pub const BLOOD: Self = Self(4);
+    pub const WATER: Self = Self(1);
+    pub const BLOOD: Self = Self(2);
+    pub const GRASS: Self = Self(3);
+    pub const SAND: Self = Self(4);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
