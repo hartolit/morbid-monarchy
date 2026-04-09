@@ -81,9 +81,9 @@ fn setup_rendering(
     // Spawn the Canvas Quad
     // Note: The size matches the engine's active window size (1024x1024)
     commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(1024.0, 1024.0))),
-        MeshMaterial2d(material), // <-- Modern Bevy uses the MeshMaterial2d component wrapper
-        Transform::from_translation(Vec3::new(512.0, 512.0, 0.0)),
+        Mesh2d(meshes.add(Rectangle::new(768.0, 768.0))),
+        MeshMaterial2d(material),
+        Transform::from_translation(Vec3::new(384.0, 384.0, 0.0)),
         WorldQuadMarker,
     ));
 }
