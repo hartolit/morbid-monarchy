@@ -1,6 +1,7 @@
 use bevy::{ecs::resource::Resource, math::DVec3};
 use bitcode::{Decode, Encode};
 use bytemuck::{Pod, Zeroable};
+use lru::LruCache;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
@@ -9,6 +10,7 @@ use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
 #[derive(Resource, Default)]
 pub struct WorldStore {
     pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
+    //pub cached_chunks: LruCache<ChunkKey, ChunkData>,
     pub pending_requests: FxHashSet<ChunkKey>,
 }
 
@@ -27,7 +29,7 @@ impl Default for ChunkManager {
     fn default() -> Self {
         Self {
             current_view: None,
-            view_radius: 4, // 1x1 chunk grid
+            view_radius: 6, // 1x1 chunk grid
         }
     }
 }
@@ -118,8 +120,8 @@ impl PixelFlags {
 #[repr(C)]
 pub struct Pixel {
     pub material: MaterialId,
-    pub state: u8,
-    pub variant: u8,
+    pub state: u8,   // Tracks dynamic state (e.g. health, velocity, temperature)
+    pub variant: u8, // Used for visual representation or static sub-properties
     pub flags: PixelFlags,
 }
 

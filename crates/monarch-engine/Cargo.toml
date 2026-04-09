@@ -8,5 +8,6 @@ bevy = { workspace = true }
 rand = { workspace = true }
 noise = { workspace = true }
 rustc-hash = { workspace = true }
+lru = { workspace = true }
 bitcode = { workspace = true, features = ["derive"] }
 bytemuck = { workspace = true }

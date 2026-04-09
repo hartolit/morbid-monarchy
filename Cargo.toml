@@ -9,6 +9,7 @@ resolver = "2"
 bevy = { version = "0.18.1", features = ["serialize"] }
 bitcode = { version = "0.6.9", features = ["derive"] }
 bytemuck = { version = "1.25.0", features = ["derive"] }
+lru = "0.16.3"
 rand = "0.10.0"
 rustc-hash = "2.1.2"
 redb = "4.0.0"
