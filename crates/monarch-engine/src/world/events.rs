@@ -22,3 +22,10 @@ pub struct ChunkLoadedEvent {
     pub key: ChunkKey,
     pub data: ChunkData,
 }
+
+/// Emitted to resize the active simulation domain and its preloading buffer.
+#[derive(Message)]
+pub struct ResizeSimulationEvent {
+    pub new_active_radius: u32,
+    pub new_preload_radius: u32,
+}

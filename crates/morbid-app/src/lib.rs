@@ -1,5 +1,8 @@
 use bevy::{prelude::*, window::WindowResolution};
-use monarch_engine::{MonarchEnginePlugin, world::types::WorldFocus};
+use monarch_engine::{
+    MonarchEnginePlugin,
+    world::{ChunkManager, WorldFocus, events::ResizeSimulationEvent},
+};
 
 use crate::render::WorldRenderPlugin;
 
@@ -32,6 +35,7 @@ pub fn run() {
             Update,
             (
                 player_movement,
+                handle_resize_input,
                 database::handle_load_requests,
                 database::handle_unload_events,
                 database::poll_load_tasks,
@@ -81,6 +85,44 @@ fn player_movement(
     if direction.length_squared() > 0.0 {
         let speed = 500.0; // Pixels per second translation
         transform.translation += direction.normalize() * speed * time.delta_secs();
+    }
+}
+
+/// Listens for +/- keys to dynamically resize the simulation grid
+fn handle_resize_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    manager: Res<ChunkManager>,
+    mut writer: MessageWriter<ResizeSimulationEvent>,
+) {
+    let mut new_radius = manager.active_radius;
+    let mut changed = false;
+
+    // Expand (Keys: +, =, or Numpad +)
+    if keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd) {
+        new_radius += 1;
+        changed = true;
+    }
+
+    // Shrink (Keys: - or Numpad -)
+    if (keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract))
+        && new_radius > 0
+    {
+        new_radius -= 1;
+        changed = true;
+    }
+
+    if changed {
+        info!("Resizing Simulation: Radius {}", new_radius);
+
+        // Ensure the preload boundary stays comfortably ahead of the new active boundary
+        let new_preload = manager
+            .preload_radius
+            .max(new_radius + manager.preload_trigger + 1);
+
+        writer.write(ResizeSimulationEvent {
+            new_active_radius: new_radius,
+            new_preload_radius: new_preload,
+        });
     }
 }
 

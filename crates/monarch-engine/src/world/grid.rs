@@ -10,7 +10,7 @@ use crate::world::{
 pub struct ActiveWorldGrid {
     pub width: i32,
     pub height: i32,
-    pub cells: Box<[WorldCell]>,
+    pub cells: Vec<WorldCell>,
     // The world coordinates of the bottom-left corner of the current active window.
     pub window_origin: IVec2,
 }
@@ -21,7 +21,7 @@ impl ActiveWorldGrid {
         Self {
             width,
             height,
-            cells: vec![WorldCell::default(); size].into_boxed_slice(),
+            cells: vec![WorldCell::default(); size],
             window_origin: origin,
         }
     }
@@ -45,9 +45,11 @@ impl ActiveWorldGrid {
         self.cells[index] = cell;
     }
 
-    /// Injects a chunk's data from disk into the active grid.
+    /// Injects a chunk's data from disk/RAM into the active grid.
     #[inline(always)]
-    pub fn load_chunk(&mut self, chunk_key: ChunkKey, chunk_cells: &[WorldCell; CHUNK_CELL_COUNT]) {
+    pub fn load_chunk(&mut self, chunk_key: ChunkKey, chunk_cells: &[WorldCell]) {
+        debug_assert_eq!(chunk_cells.len(), CHUNK_CELL_COUNT);
+
         let world_origin = chunk_key.to_ivec2() * (CHUNK_SIZE as i32);
         let chunk_span = CHUNK_SIZE as i32;
 
@@ -63,14 +65,13 @@ impl ActiveWorldGrid {
         }
     }
 
-    /// Extracts a chunk's data from the active grid for saving/unloading.
+    /// Extracts a chunk's data directly into an existing buffer. (Zero Allocation)
     #[inline(always)]
-    pub fn unload_chunk(&self, chunk_key: ChunkKey) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
+    pub fn extract_chunk_into(&self, chunk_key: ChunkKey, dest: &mut [WorldCell]) {
+        debug_assert_eq!(dest.len(), CHUNK_CELL_COUNT);
+
         let world_origin = chunk_key.to_ivec2() * (CHUNK_SIZE as i32);
         let chunk_span = CHUNK_SIZE as i32;
-
-        // Allocate directly on the heap
-        let mut chunk_cells = vec![WorldCell::default(); CHUNK_CELL_COUNT].into_boxed_slice();
 
         let mut chunk_idx = 0;
         for y in 0..chunk_span {
@@ -78,26 +79,24 @@ impl ActiveWorldGrid {
                 let world_pos = IVec2::new(world_origin.x + x, world_origin.y + y);
                 let buffer_idx = self.get_index(world_pos);
 
-                chunk_cells[chunk_idx] = self.cells[buffer_idx];
+                dest[chunk_idx] = self.cells[buffer_idx];
                 chunk_idx += 1;
             }
         }
-
-        // Safely downcast the Box<[WorldCell]> back to Box<[WorldCell; 4096]>
-        chunk_cells.try_into().unwrap()
     }
 
-    /// Extracts the old chunk from the grid, and immediately overwrites that
-    /// modular space with the new chunk data.
-    #[inline(always)]
-    pub fn swap_boundary_chunks(
-        &mut self,
-        evicted_key: ChunkKey,
-        incoming_key: ChunkKey,
-        incoming_cells: &[WorldCell; CHUNK_CELL_COUNT],
-    ) -> Box<[WorldCell; CHUNK_CELL_COUNT]> {
-        let old_chunk = self.unload_chunk(evicted_key);
-        self.load_chunk(incoming_key, incoming_cells);
-        old_chunk
+    /// Resizes the grid's underlying vector in-place and updates the math variables.
+    /// WARNING: This changes the stride. Caller MUST extract data before calling this.
+    pub fn resize_in_place(&mut self, new_width: i32, new_height: i32, new_origin: IVec2) {
+        let new_size = (new_width * new_height) as usize;
+
+        // This will expand capacity if needed, or simply truncate the len if shrinking.
+        // It does not drop the underlying allocation.
+        self.cells.clear();
+        self.cells.resize(new_size, WorldCell::default());
+
+        self.width = new_width;
+        self.height = new_height;
+        self.window_origin = new_origin;
     }
 }

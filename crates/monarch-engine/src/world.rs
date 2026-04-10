@@ -13,8 +13,8 @@ use lru::LruCache;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::world::{
-    chunk::{CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
-    events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
+    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
+    events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
     grid::ActiveWorldGrid,
     types::WorldCell,
 };
@@ -53,18 +53,89 @@ pub struct WorldFocus {
 pub struct ChunkManager {
     pub active_view: Option<ChunkView>,
     pub preload_view: Option<ChunkView>,
+    /// The radius of the simulation area (e.g., 1 = 3x3 chunks)
     pub active_radius: u32,
+    /// The radius of the total memory buffer fetched from disk (e.g., 4 = 9x9 chunks)
     pub preload_radius: u32,
+    /// The safety margin. If the active view gets within this many chunks of the
+    /// preload view's boundary, it triggers a recenter and batch fetch.
+    pub preload_trigger: u32,
 }
 
 impl Default for ChunkManager {
     fn default() -> Self {
         Self {
             active_view: None,
-            active_radius: 0, // 1x1 chunk grid
+            active_radius: 1, // 3x3 active simulation grid
             preload_view: None,
-            preload_radius: 1, // 3x3 chunk grid
+            preload_radius: 12, // 9x9 fetch boundary (outer)
+            preload_trigger: 1, // Trigger fetch if active view gets 1 chunk away from outer edge
         }
+    }
+}
+
+pub fn handle_simulation_resize(
+    focus: Res<WorldFocus>,
+    time: Res<Time>,
+    mut reader: MessageReader<ResizeSimulationEvent>,
+    mut manager: ResMut<ChunkManager>,
+    mut grid: ResMut<ActiveWorldGrid>,
+    mut store: ResMut<WorldStore>,
+    mut unload_writer: MessageWriter<ChunkUnloadEvent>,
+) {
+    for event in reader.read() {
+        let center = ChunkKey::from_dvec3(focus.position);
+        let new_active_view = ChunkView::from_flat_xy(center, event.new_active_radius as i32);
+
+        if let Some(old_active) = manager.active_view {
+            // BACKUP: Extract ALL active chunks directly into their existing ChunkData vectors.
+            // This safely preserves the physics states before we shatter the grid's stride.
+            for key in old_active.iter() {
+                if let Some(chunk_data) = store.active_chunks.get_mut(&key) {
+                    // Ensure the vec has the correct capacity, then overwrite
+                    if chunk_data.cells.len() != CHUNK_CELL_COUNT {
+                        chunk_data
+                            .cells
+                            .resize(CHUNK_CELL_COUNT, WorldCell::default());
+                    }
+                    grid.extract_chunk_into(key, &mut chunk_data.cells);
+                    chunk_data.last_simulated = time.elapsed_secs_f64();
+                }
+            }
+
+            // EVICT: Move demoted chunks from Active to LRU Cache
+            for key in old_active.iter().filter(|k| !new_active_view.contains(k)) {
+                // remove() takes ownership of the ChunkData out of the active map
+                if let Some(chunk_data) = store.active_chunks.remove(&key) {
+                    // Push to cache, handling potential overflow evictions to disk
+                    if let Some((evicted_key, evicted_data)) =
+                        store.cached_chunks.push(key, chunk_data)
+                    {
+                        unload_writer.write(ChunkUnloadEvent {
+                            key: evicted_key,
+                            data: evicted_data,
+                        });
+                    }
+                }
+            }
+        }
+
+        // MUTATE STRIDE: Resize the grid in-place
+        let span_chunks = (event.new_active_radius * 2 + 1) as i32;
+        let new_size = span_chunks * (CHUNK_SIZE as i32);
+        let new_origin = new_active_view.min.to_ivec2() * (CHUNK_SIZE as i32);
+
+        grid.resize_in_place(new_size, new_size, new_origin);
+
+        // RESTORE: Repopulate the grid (cleaner slice passing)
+        for (key, chunk_data) in store.active_chunks.iter() {
+            grid.load_chunk(*key, &chunk_data.cells);
+        }
+
+        // Update Configuration
+        manager.active_radius = event.new_active_radius;
+        manager.preload_radius = event.new_preload_radius;
+        manager.active_view = Some(new_active_view);
     }
 }
 
@@ -77,63 +148,112 @@ pub fn manage_chunk_window(
     mut unload_writer: MessageWriter<ChunkUnloadEvent>,
     mut load_writer: MessageWriter<ChunkLoadRequest>,
 ) {
-    // Creates a flat top-down view centered around the player's position
     let center = ChunkKey::from_dvec3(focus.position);
-    let new_view = ChunkView::from_flat_xy(center, manager.view_radius as i32);
+    let new_active_view = ChunkView::from_flat_xy(center, manager.active_radius as i32);
 
-    if let Some(old_view) = manager.current_view {
-        if old_view == new_view {
-            return;
-        }
+    // Handle Active Simulation View (Promotions & Demotions)
+    if manager.active_view != Some(new_active_view) {
+        if let Some(old_active) = manager.active_view {
+            // Evict chunks that fell out of the active simulation view
+            for key in old_active.iter().filter(|k| !new_active_view.contains(k)) {
+                if let Some(mut chunk_data) = store.active_chunks.remove(&key) {
+                    // ZERO-ALLOCATION EXTRACTION
+                    if chunk_data.cells.len() != CHUNK_CELL_COUNT {
+                        chunk_data
+                            .cells
+                            .resize(CHUNK_CELL_COUNT, WorldCell::default());
+                    }
+                    grid.extract_chunk_into(key, &mut chunk_data.cells);
+                    chunk_data.last_simulated = time.elapsed_secs_f64();
 
-        // Filters evicted chunks and unloads them (Zero-Allocation)
-        for key in old_view.iter().filter(|k| !new_view.contains(k)) {
-            if let Some(mut chunk_data) = store.active_chunks.remove(&key) {
-                // Extract simulated pixels data from the grid
-                // Zero-allocation conversion: Box<[T; N]> -> Box<[T]> -> Vec<T>
-                // Due to ChunkData storing cells as a Vec<WorldCell> for serialization
-                let boxed_array = grid.unload_chunk(key);
-                let boxed_slice: Box<[WorldCell]> = boxed_array;
-
-                chunk_data.cells = boxed_slice.into_vec();
-                chunk_data.last_simulated = time.elapsed_secs_f64();
-
-                unload_writer.write(ChunkUnloadEvent {
-                    key,
-                    data: chunk_data,
-                });
+                    // Push demoted chunk into the LRU Cache.
+                    if let Some((evicted_key, evicted_data)) =
+                        store.cached_chunks.push(key, chunk_data)
+                    {
+                        unload_writer.write(ChunkUnloadEvent {
+                            key: evicted_key,
+                            data: evicted_data,
+                        });
+                    }
+                }
             }
         }
-    }
 
-    // Shift the Toroidal Grid's window anchor
-    grid.window_origin = new_view.min.to_ivec2() * (CHUNK_SIZE as i32);
+        // Shift the Toroidal Grid's window anchor
+        grid.window_origin = new_active_view.min.to_ivec2() * (CHUNK_SIZE as i32);
 
-    // Requests incoming chunks (Zero-Allocation)
-    let old_view_ref = manager.current_view.as_ref();
-    for key in new_view
-        .iter()
-        .filter(|k| old_view_ref.map_or(true, |old| !old.contains(k)))
-    {
-        if !store.active_chunks.contains_key(&key) && store.pending_requests.insert(key) {
-            load_writer.write(ChunkLoadRequest { key });
+        // Promote chunks entering the active simulation view
+        let old_active_ref = manager.active_view.as_ref();
+        for key in new_active_view
+            .iter()
+            .filter(|k| old_active_ref.map_or(true, |old| !old.contains(k)))
+        {
+            if let Some(chunk_data) = store.cached_chunks.pop(&key) {
+                // Cleaner slice passing
+                grid.load_chunk(key, &chunk_data.cells);
+                store.active_chunks.insert(key, chunk_data);
+            } else if !store.active_chunks.contains_key(&key) && store.pending_requests.insert(key)
+            {
+                load_writer.write(ChunkLoadRequest { key });
+            }
         }
+        manager.active_view = Some(new_active_view);
     }
 
-    manager.current_view = Some(new_view);
+    // Trigger Check for Disk I/O Batching
+    let mut requires_preload_fetch = false;
+
+    if let Some(current_preload) = manager.preload_view {
+        // Create a "danger zone" view around the active view
+        let danger_view = ChunkView::from_flat_xy(
+            center,
+            (manager.active_radius + manager.preload_trigger) as i32,
+        );
+
+        // If our danger zone bleeds outside the preloaded chunks, we must fetch
+        if !current_preload.contains(&danger_view.min)
+            || !current_preload.contains(&danger_view.max)
+        {
+            requires_preload_fetch = true;
+        }
+    } else {
+        requires_preload_fetch = true; // First time setup
+    }
+
+    // Batch Fetching from Disk (Only happens when trigger is hit)
+    if requires_preload_fetch {
+        let new_preload_view = ChunkView::from_flat_xy(center, manager.preload_radius as i32);
+        let old_preload_ref = manager.preload_view.as_ref();
+
+        for key in new_preload_view
+            .iter()
+            .filter(|k| old_preload_ref.map_or(true, |old| !old.contains(k)))
+        {
+            // If it's totally cold, ask morbid-app to spin up the disk
+            if !store.active_chunks.contains_key(&key)
+                && !store.cached_chunks.contains(&key)
+                && store.pending_requests.insert(key)
+            {
+                load_writer.write(ChunkLoadRequest { key });
+            }
+        }
+
+        manager.preload_view = Some(new_preload_view);
+    }
 }
 
 pub fn handle_chunk_loaded(
     time: Res<Time>,
     mut reader: MessageReader<ChunkLoadedEvent>,
+    manager: Res<ChunkManager>,
     mut store: ResMut<WorldStore>,
     mut grid: ResMut<ActiveWorldGrid>,
+    mut unload_writer: MessageWriter<ChunkUnloadEvent>,
 ) {
     for event in reader.read() {
         store.pending_requests.remove(&event.key);
 
         let mut chunk_data = event.data.clone();
-
         let current_time = time.elapsed_secs_f64();
         let delta_secs = current_time - event.data.last_simulated;
 
@@ -143,17 +263,24 @@ pub fn handle_chunk_loaded(
 
         chunk_data.last_simulated = current_time;
 
-        // Convert the Vec back into a fixed-size slice reference for the Grid
-        grid.load_chunk(
-            event.key,
-            chunk_data
-                .cells
-                .as_slice()
-                .try_into()
-                .expect("Loaded chunk cells must be exactly CHUNK_CELL_COUNT in length"),
-        );
+        let is_active = manager
+            .active_view
+            .map_or(false, |v| v.contains(&event.key));
 
-        store.active_chunks.insert(event.key, chunk_data);
+        if is_active {
+            grid.load_chunk(event.key, &chunk_data.cells);
+            store.active_chunks.insert(event.key, chunk_data);
+        } else {
+            // The chunk arrived, but the player already walked away. Stow it in Cache.
+            if let Some((evicted_key, evicted_data)) =
+                store.cached_chunks.push(event.key, chunk_data)
+            {
+                unload_writer.write(ChunkUnloadEvent {
+                    key: evicted_key,
+                    data: evicted_data,
+                });
+            }
+        }
     }
 }
 
