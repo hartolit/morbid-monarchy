@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
 use crate::world::{
+    ChunkManager, WorldFocus, WorldStore,
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
     handle_chunk_loaded, manage_chunk_window,
     simulation::simulate_biology,
-    types::{ChunkManager, WorldFocus, WorldStore},
 };
 
 pub mod world;

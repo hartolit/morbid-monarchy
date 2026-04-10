@@ -1,16 +1,22 @@
+use std::num::NonZeroUsize;
+
 use bevy::{
     ecs::{
         message::{MessageReader, MessageWriter},
+        resource::Resource,
         system::{Res, ResMut},
     },
+    math::DVec3,
     time::Time,
 };
+use lru::LruCache;
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::world::{
     chunk::{CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent},
     grid::ActiveWorldGrid,
-    types::{ChunkManager, WorldCell, WorldFocus, WorldStore},
+    types::WorldCell,
 };
 
 pub mod chunk;
@@ -19,6 +25,48 @@ pub mod generation;
 pub mod grid;
 pub mod simulation;
 pub mod types;
+
+/// Engine-side storage for lightweight metadata of active chunks.
+#[derive(Resource)]
+pub struct WorldStore {
+    pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
+    pub cached_chunks: LruCache<ChunkKey, ChunkData, FxBuildHasher>,
+    pub pending_requests: FxHashSet<ChunkKey>,
+}
+
+impl Default for WorldStore {
+    fn default() -> Self {
+        Self {
+            active_chunks: FxHashMap::default(),
+            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(256).unwrap(), FxBuildHasher),
+            pending_requests: FxHashSet::default(),
+        }
+    }
+}
+
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct WorldFocus {
+    pub position: DVec3,
+}
+
+#[derive(Resource)]
+pub struct ChunkManager {
+    pub active_view: Option<ChunkView>,
+    pub preload_view: Option<ChunkView>,
+    pub active_radius: u32,
+    pub preload_radius: u32,
+}
+
+impl Default for ChunkManager {
+    fn default() -> Self {
+        Self {
+            active_view: None,
+            active_radius: 0, // 1x1 chunk grid
+            preload_view: None,
+            preload_radius: 1, // 3x3 chunk grid
+        }
+    }
+}
 
 pub fn manage_chunk_window(
     focus: Res<WorldFocus>,
@@ -29,8 +77,8 @@ pub fn manage_chunk_window(
     mut unload_writer: MessageWriter<ChunkUnloadEvent>,
     mut load_writer: MessageWriter<ChunkLoadRequest>,
 ) {
-    let center = ChunkKey::from_dvec3(focus.position);
     // Creates a flat top-down view centered around the player's position
+    let center = ChunkKey::from_dvec3(focus.position);
     let new_view = ChunkView::from_flat_xy(center, manager.view_radius as i32);
 
     if let Some(old_view) = manager.current_view {

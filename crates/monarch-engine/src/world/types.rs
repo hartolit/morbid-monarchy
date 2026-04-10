@@ -1,38 +1,6 @@
-use bevy::{ecs::resource::Resource, math::DVec3};
+use bevy::math::DVec3;
 use bitcode::{Decode, Encode};
 use bytemuck::{Pod, Zeroable};
-use lru::LruCache;
-use rustc_hash::{FxHashMap, FxHashSet};
-
-use crate::world::chunk::{ChunkData, ChunkKey, ChunkView};
-
-/// Engine-side storage for lightweight metadata of active chunks.
-#[derive(Resource, Default)]
-pub struct WorldStore {
-    pub active_chunks: FxHashMap<ChunkKey, ChunkData>,
-    //pub cached_chunks: LruCache<ChunkKey, ChunkData>,
-    pub pending_requests: FxHashSet<ChunkKey>,
-}
-
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct WorldFocus {
-    pub position: DVec3,
-}
-
-#[derive(Resource)]
-pub struct ChunkManager {
-    pub current_view: Option<ChunkView>,
-    pub view_radius: usize,
-}
-
-impl Default for ChunkManager {
-    fn default() -> Self {
-        Self {
-            current_view: None,
-            view_radius: 6, // 1x1 chunk grid
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, bitcode::Encode, bitcode::Decode)]
 pub struct SerializedEntity {
