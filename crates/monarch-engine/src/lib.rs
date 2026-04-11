@@ -38,9 +38,9 @@ impl Plugin for MonarchEnginePlugin {
                     handle_simulation_resize,
                     manage_chunk_window,
                     handle_chunk_loaded,
-                    simulate_biology,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Update, (simulate_biology,));
     }
 }

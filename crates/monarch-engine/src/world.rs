@@ -135,7 +135,10 @@ pub fn handle_simulation_resize(
         // Update Configuration
         manager.active_radius = event.new_active_radius;
         manager.preload_radius = event.new_preload_radius;
-        manager.active_view = Some(new_active_view);
+
+        // Triggers a recenter and batch fetch
+        manager.active_view = None;
+        manager.preload_view = None;
     }
 }
 
