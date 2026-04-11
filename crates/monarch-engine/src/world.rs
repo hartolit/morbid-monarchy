@@ -38,7 +38,7 @@ impl Default for WorldStore {
     fn default() -> Self {
         Self {
             active_chunks: FxHashMap::default(),
-            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(1024).unwrap(), FxBuildHasher),
+            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(2048).unwrap(), FxBuildHasher), // TODO: Change
             pending_requests: FxHashSet::default(),
         }
     }
@@ -68,7 +68,7 @@ impl Default for ChunkManager {
             active_view: None,
             active_radius: 1, // 3x3 active simulation grid
             preload_view: None,
-            preload_radius: 12, // 9x9 fetch boundary (outer)
+            preload_radius: 4,  // 9x9 fetch boundary (outer)
             preload_trigger: 1, // Trigger fetch if active view gets 1 chunk away from outer edge
         }
     }
