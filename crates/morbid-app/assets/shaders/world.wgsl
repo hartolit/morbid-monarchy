@@ -10,8 +10,8 @@ struct WorldWindow {
 @group(2) @binding(2) var<uniform> window: WorldWindow;
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let local_pos = in.world_position.xy - window.origin;
+fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
+    let local_pos = mesh.world_position.xy - window.origin;
 
     // If the pixel is outside our active grid simulation, render void/black
     if local_pos.x < 0.0 || local_pos.y < 0.0 || local_pos.x >= window.size.x || local_pos.y >= window.size.y {
@@ -21,8 +21,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_w = i32(window.size.x);
     let grid_h = i32(window.size.y);
 
-    let cell_x = i32(floor(in.world_position.x));
-    let cell_y = i32(floor(in.world_position.y));
+    let cell_x = i32(floor(mesh.world_position.x));
+    let cell_y = i32(floor(mesh.world_position.y));
 
     // Handle Toroidal Wrapping
     let wrap_x = ((cell_x % grid_w) + grid_w) % grid_w;
