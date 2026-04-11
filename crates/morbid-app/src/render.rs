@@ -16,8 +16,7 @@ impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(Material2dPlugin::<WorldMaterial>::default())
             .add_systems(Startup, setup_rendering)
-            .add_systems(Update, (sync_grid_rendering, sync_quad_to_camera))
-            .add_systems(PostUpdate, sync_quad_to_camera);
+            .add_systems(Update, sync_grid_rendering);
     }
 }
 
@@ -88,18 +87,23 @@ fn setup_rendering(
     ));
 }
 
-/// Translates the pure engine grid state into the GPU-bound Storage Buffers
+/// Translates the pure engine grid state into the GPU-bound Storage Buffers,
+/// and ensures the rendering Quad perfectly maps to the physical simulation grid.
 fn sync_grid_rendering(
     grid: Res<ActiveWorldGrid>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
-    material_handles: Query<&MeshMaterial2d<WorldMaterial>, With<WorldQuadMarker>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut quad_query: Query<
+        (&mut Transform, &mut Mesh2d, &MeshMaterial2d<WorldMaterial>),
+        With<WorldQuadMarker>,
+    >,
 ) {
     if !grid.is_changed() {
         return;
     }
 
-    let Ok(material_handle) = material_handles.single() else {
+    let Ok((mut transform, mut mesh2d, material_handle)) = quad_query.single_mut() else {
         return;
     };
 
@@ -107,11 +111,22 @@ fn sync_grid_rendering(
         return;
     };
 
-    // Update Uniform offsets
-    material.window.origin = Vec2::new(grid.window_origin.x as f32, grid.window_origin.y as f32);
-    material.window.size = Vec2::new(grid.width as f32, grid.height as f32);
+    let grid_w = grid.width as f32;
+    let grid_h = grid.height as f32;
 
-    // Sync Memory payload (Zero-cost safe cast from `WorldCell` -> `u8` slice)
+    // Center the Quad perfectly over the Toroidal grid's mathematical bounds.
+    // The window_origin is the bottom-left corner, so the center is origin + (size / 2.0)
+    transform.translation.x = grid.window_origin.x as f32 + (grid_w / 2.0);
+    transform.translation.y = grid.window_origin.y as f32 + (grid_h / 2.0);
+
+    // Resize the actual Bevy Mesh so it never overhangs the buffer and creates Toroidal Seams
+    mesh2d.0 = meshes.add(Rectangle::new(grid_w, grid_h));
+
+    // Update Uniform offsets for the WGSL Shader
+    material.window.origin = Vec2::new(grid.window_origin.x as f32, grid.window_origin.y as f32);
+    material.window.size = Vec2::new(grid_w, grid_h);
+
+    // Sync Memory payload (Zero-cost safe cast from `WorldCell` Vec -> `u8` slice)
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
         let bytes: &[u8] = bytemuck::cast_slice(&grid.cells);
 
@@ -119,18 +134,5 @@ fn sync_grid_rendering(
             bytes,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
-    }
-}
-
-/// Keeps the rendering canvas perfectly centered over the camera to prevent edge clipping
-fn sync_quad_to_camera(
-    camera_query: Query<&Transform, (With<Camera2d>, Without<WorldQuadMarker>)>,
-    mut quad_query: Query<&mut Transform, With<WorldQuadMarker>>,
-) {
-    if let Ok(camera_transform) = camera_query.single() {
-        if let Ok(mut quad_transform) = quad_query.single_mut() {
-            quad_transform.translation.x = camera_transform.translation.x;
-            quad_transform.translation.y = camera_transform.translation.y;
-        }
     }
 }

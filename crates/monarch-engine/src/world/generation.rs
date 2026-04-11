@@ -22,11 +22,13 @@ impl WorldGenerator {
 
     pub fn generate_chunk(&self, key: ChunkKey) -> ChunkData {
         let mut cells = Vec::with_capacity(CHUNK_CELL_COUNT);
+
+        // Cast to u32 first to prevent sign-extension bit bleeding
         let mut rng = StdRng::seed_from_u64(
             (self.seed as u64)
-                ^ ((key.key.x as u64) << 32)
-                ^ (key.key.y as u64)
-                ^ ((key.key.z as u64) << 16),
+                ^ (((key.key.x as u32) as u64) << 32)
+                ^ ((key.key.y as u32) as u64)
+                ^ (((key.key.z as u32) as u64) << 16),
         );
 
         if key.key.z < 0 {

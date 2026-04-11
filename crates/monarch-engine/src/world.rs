@@ -38,7 +38,7 @@ impl Default for WorldStore {
     fn default() -> Self {
         Self {
             active_chunks: FxHashMap::default(),
-            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(256).unwrap(), FxBuildHasher),
+            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(1024).unwrap(), FxBuildHasher),
             pending_requests: FxHashSet::default(),
         }
     }
