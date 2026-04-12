@@ -183,7 +183,7 @@ pub fn manage_chunk_window(
         }
 
         // Shift the Toroidal Grid's window anchor
-        grid.window_origin = new_active_view.min.to_ivec2() * (CHUNK_SIZE as i32);
+        grid.shift_window(new_active_view.min.to_ivec2() * (CHUNK_SIZE as i32));
 
         // Promote chunks entering the active simulation view
         let old_active_ref = manager.active_view.as_ref();

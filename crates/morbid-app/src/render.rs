@@ -41,6 +41,7 @@ impl Material2d for WorldMaterial {
 pub struct WorldWindowUniform {
     pub origin: Vec2,
     pub size: Vec2,
+    pub head: Vec2,
 }
 
 #[derive(Component)]
@@ -125,6 +126,7 @@ fn sync_grid_rendering(
     // Update Uniform offsets for the WGSL Shader
     material.window.origin = Vec2::new(grid.window_origin.x as f32, grid.window_origin.y as f32);
     material.window.size = Vec2::new(grid_w, grid_h);
+    material.window.head = Vec2::new(grid.buffer_head.x as f32, grid.buffer_head.y as f32);
 
     // Sync Memory payload (Zero-cost safe cast from `WorldCell` Vec -> `u8` slice)
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {

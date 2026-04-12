@@ -1,0 +1,2 @@
+- Fixed chunk-view seams at negative/global modulo boundaries by separating visible `window_origin` from the toroidal buffer head and rotating the head on window shifts.
+- Aligned engine and shader indexing to sample the active grid via window-local coordinates plus `buffer_head`, preserving the toroidal grid without full rebuilds.

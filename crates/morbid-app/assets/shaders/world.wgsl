@@ -3,6 +3,7 @@
 struct WorldWindow {
     origin: vec2<f32>,
     size: vec2<f32>,
+    head: vec2<f32>,
 }
 
 @group(2) @binding(0) var<storage, read> world_buffer: array<u32>;
@@ -21,8 +22,8 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let grid_w = i32(window.size.x);
     let grid_h = i32(window.size.y);
 
-    let cell_x = i32(floor(mesh.world_position.x));
-    let cell_y = i32(floor(mesh.world_position.y));
+    let cell_x = i32(floor(local_pos.x + window.head.x));
+    let cell_y = i32(floor(local_pos.y + window.head.y));
 
     // Handle Toroidal Wrapping
     let wrap_x = ((cell_x % grid_w) + grid_w) % grid_w;

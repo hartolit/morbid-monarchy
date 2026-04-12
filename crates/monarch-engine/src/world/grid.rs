@@ -13,6 +13,7 @@ pub struct ActiveWorldGrid {
     pub cells: Vec<WorldCell>,
     // The world coordinates of the bottom-left corner of the current active window.
     pub window_origin: IVec2,
+    pub buffer_head: IVec2,
 }
 
 impl ActiveWorldGrid {
@@ -23,15 +24,31 @@ impl ActiveWorldGrid {
             height,
             cells: vec![WorldCell::default(); size],
             window_origin: origin,
+            buffer_head: IVec2::ZERO,
         }
     }
 
     #[inline(always)]
-    pub fn get_index(&self, world_pos: IVec2) -> usize {
-        let buffer_x = world_pos.x.rem_euclid(self.width);
-        let buffer_y = world_pos.y.rem_euclid(self.height);
+    fn wrap_offset(&self, offset: IVec2) -> IVec2 {
+        IVec2::new(
+            offset.x.rem_euclid(self.width),
+            offset.y.rem_euclid(self.height),
+        )
+    }
 
-        (buffer_y * self.width + buffer_x) as usize
+    #[inline(always)]
+    pub fn shift_window(&mut self, new_origin: IVec2) {
+        let delta = new_origin - self.window_origin;
+        self.buffer_head = self.wrap_offset(self.buffer_head + delta);
+        self.window_origin = new_origin;
+    }
+
+    #[inline(always)]
+    pub fn get_index(&self, world_pos: IVec2) -> usize {
+        let local_pos = world_pos - self.window_origin;
+        let buffer_pos = self.wrap_offset(local_pos + self.buffer_head);
+
+        (buffer_pos.y * self.width + buffer_pos.x) as usize
     }
 
     #[inline(always)]
@@ -98,5 +115,6 @@ impl ActiveWorldGrid {
         self.width = new_width;
         self.height = new_height;
         self.window_origin = new_origin;
+        self.buffer_head = IVec2::ZERO;
     }
 }
