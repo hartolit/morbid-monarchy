@@ -2,13 +2,17 @@ use bevy::math::DVec3;
 use bitcode::{Decode, Encode};
 use bytemuck::{Pod, Zeroable};
 
+// TODO: This should be a generic type that can be used for any entity type
+// SerializedEntity is used for entity persistence through chunks
 #[derive(Debug, Clone, Copy, bitcode::Encode, bitcode::Decode)]
 pub struct SerializedEntity {
     pub entity_type: EntityTypeId,
     pub position: [f64; 3],
     pub rotation: f32,
     pub scale: f32,
-    pub health: f32,
+    pub state: u8,
+    pub variant: u8,
+    pub flags: EntityFlags,
 }
 
 impl SerializedEntity {
@@ -25,14 +29,18 @@ impl SerializedEntity {
         pos: DVec3,
         rotation: f32,
         scale: f32,
-        health: f32,
+        state: u8,
+        variant: u8,
+        flags: EntityFlags,
     ) -> Self {
         Self {
             entity_type,
             position: pos.to_array(),
             rotation,
             scale,
-            health,
+            state,
+            variant,
+            flags,
         }
     }
 }
@@ -45,6 +53,22 @@ impl EntityTypeId {
     pub const WIZARD: Self = Self(2);
     pub const MINION_HUMAN: Self = Self(3);
     pub const MINION_GIANT: Self = Self(4);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct EntityFlags(pub u16);
+
+impl EntityFlags {
+    pub const NONE: Self = Self(0);
+    pub const IS_ACTIVE: Self = Self(1 << 0);
+    pub const IS_VISIBLE: Self = Self(1 << 1);
+    pub const IS_COLLIDABLE: Self = Self(1 << 2);
+    pub const IS_INTERACTABLE: Self = Self(1 << 3);
+    pub const IS_DESTRUCTIBLE: Self = Self(1 << 4);
+    pub const IS_TRANSPARENT: Self = Self(1 << 5);
+    pub const IS_ANIMATED: Self = Self(1 << 6);
+    pub const IS_HOSTILE: Self = Self(1 << 8);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
