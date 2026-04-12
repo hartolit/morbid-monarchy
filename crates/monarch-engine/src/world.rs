@@ -192,7 +192,6 @@ pub fn manage_chunk_window(
             .filter(|k| old_active_ref.map_or(true, |old| !old.contains(k)))
         {
             if let Some(chunk_data) = store.cached_chunks.pop(&key) {
-                // Cleaner slice passing
                 grid.load_chunk(key, &chunk_data.cells);
                 store.active_chunks.insert(key, chunk_data);
             } else if !store.active_chunks.contains_key(&key) && store.pending_requests.insert(key)

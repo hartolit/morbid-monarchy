@@ -3,7 +3,7 @@ use bitcode::{Decode, Encode};
 
 use crate::world::types::{SerializedEntity, WorldCell};
 
-pub const CHUNK_SIZE: usize = 64;
+pub const CHUNK_SIZE: usize = 128;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
 #[derive(Clone, Encode, Decode)]
