@@ -1,7 +1,7 @@
 use bevy::math::{DVec3, IVec2, IVec3};
 use bitcode::{Decode, Encode};
 
-use crate::world::types::{SerializedEntity, WorldCell};
+use crate::world::{cell::WorldCell, entity::SerializedEntity};
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
@@ -30,6 +30,7 @@ pub struct ChunkKey {
 }
 
 impl ChunkKey {
+    #[inline(always)]
     pub fn from_dvec3(pos: DVec3) -> Self {
         let chunk_f64 = CHUNK_SIZE as f64;
         Self {
@@ -42,6 +43,7 @@ impl ChunkKey {
     }
 
     /// Returns the center of the chunk.
+    #[inline(always)]
     pub fn center(&self) -> DVec3 {
         let chunk_f64 = CHUNK_SIZE as f64;
         let half_chunk = chunk_f64 / 2.0;
@@ -53,6 +55,7 @@ impl ChunkKey {
         )
     }
 
+    #[inline(always)]
     pub fn to_ivec2(&self) -> IVec2 {
         IVec2::new(self.key.x, self.key.y)
     }
@@ -86,6 +89,7 @@ impl ChunkView {
 
     /// Creates a cubic bounding box centered on a specific chunk.
     /// A `radius` of 1 results in a 3x3x3 volume (27 chunks).
+    #[inline]
     pub fn from_cubic(center: ChunkKey, radius: i32) -> Self {
         Self {
             min: ChunkKey {
@@ -101,6 +105,7 @@ impl ChunkView {
     /// `h_chunk_radius` controls the horizontal spread (X and Z axes).
     /// `v_chunk_radius` controls the vertical spread (Y axis).
     /// A `chunk_radius` of 1 results in a 3x3x3 volume (27 chunks).
+    #[inline]
     pub fn from_cuboid(center: ChunkKey, h_chunk_radius: i32, v_chunk_radius: i32) -> Self {
         let extent = IVec3::new(h_chunk_radius, v_chunk_radius, h_chunk_radius);
         Self {
@@ -115,6 +120,7 @@ impl ChunkView {
 
     /// Creates a flat top-down rect on the X/Y plane.
     /// `radius_x` and `radius_y` controls the spread along the X and Y axes, leaving Z at 0.
+    #[inline]
     pub fn from_rect_xy(center: ChunkKey, radius_x: i32, radius_y: i32) -> Self {
         let extent = IVec3::new(radius_x, radius_y, 0);
         Self {
@@ -128,6 +134,7 @@ impl ChunkView {
     }
 
     /// Returns `true` if the given `chunk` is contained within this bounding box.
+    #[inline]
     pub fn contains(&self, chunk: &ChunkKey) -> bool {
         chunk.key.x >= self.min.key.x
             && chunk.key.x <= self.max.key.x
@@ -138,6 +145,7 @@ impl ChunkView {
     }
 
     /// Iterates all chunks within this bounding box.
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = ChunkKey> + '_ {
         let min = self.min.key;
         let max = self.max.key;
@@ -152,6 +160,7 @@ impl ChunkView {
 
     /// Iterates chunks in expanding concentric shells.
     /// Zero-Allocation (uses stack arrays [r, -r] and chaining).
+    #[inline]
     pub fn iter_concentric(&self, center: ChunkKey) -> impl Iterator<Item = ChunkKey> + '_ {
         // Finds the maximum possible distance to ANY edge (min or max)
         let max_r = (self.max.key.x - center.key.x)

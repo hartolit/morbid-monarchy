@@ -1,8 +1,7 @@
 use bevy::prelude::*;
 use rand::RngExt;
 
-use crate::world::grid::ActiveWorldGrid;
-use crate::world::types::MaterialId;
+use crate::world::{cell::MaterialId, grid::ActiveWorldGrid};
 
 pub fn simulate_biology(mut grid: ResMut<ActiveWorldGrid>) {
     let mut rng = rand::rng();
@@ -33,7 +32,9 @@ pub fn simulate_biology(mut grid: ResMut<ActiveWorldGrid>) {
 
         for dy in -1..=1 {
             for dx in -1..=1 {
-                if dx == 0 && dy == 0 { continue; }
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
 
                 let nx = (x + dx + width) % width;
                 let ny = (y + dy + height) % height;

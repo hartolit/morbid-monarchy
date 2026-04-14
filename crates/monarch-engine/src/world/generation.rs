@@ -1,6 +1,6 @@
 use crate::world::{
+    cell::{MaterialId, Pixel, PixelFlags, WorldCell},
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkTheme},
-    types::{MaterialId, Pixel, PixelFlags, WorldCell},
 };
 use noise::{NoiseFn, OpenSimplex};
 use rand::{RngExt, SeedableRng, rngs::StdRng};

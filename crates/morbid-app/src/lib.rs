@@ -1,4 +1,4 @@
-use bevy::{prelude::*, window::WindowResolution};
+use bevy::prelude::*;
 use monarch_engine::{
     MonarchEnginePlugin,
     world::{ChunkManager, WorldFocus, events::ResizeSimulationEvent},
@@ -11,6 +11,7 @@ mod render;
 
 pub fn run() {
     let world_db = database::initialize_database();
+    let startup_seed = 42;
 
     App::new()
         .add_plugins(
@@ -18,8 +19,6 @@ pub fn run() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Morbid Monarchy".to_string(),
-                        resolution: WindowResolution::new(1024, 1024),
-                        resizable: false, // Lock resolution for the 1024x1024 grid prototype
                         ..default()
                     }),
                     ..default()
@@ -30,6 +29,12 @@ pub fn run() {
         .add_plugins(MonarchEnginePlugin)
         .add_plugins(WorldRenderPlugin)
         .insert_resource(world_db)
+        .insert_resource(database::WorldSeed(startup_seed))
+        .init_resource::<database::ChunkSaveQueue>()
+        .insert_resource(database::SaveTimer(Timer::from_seconds(
+            2.0,
+            TimerMode::Repeating,
+        )))
         .add_systems(Startup, setup_focal_point)
         .add_systems(
             Update,
@@ -38,6 +43,8 @@ pub fn run() {
                 handle_resize_input,
                 database::handle_load_requests,
                 database::handle_unload_events,
+                database::process_save_queue,
+                database::emergency_flush_on_exit,
                 database::poll_load_tasks,
                 database::poll_save_tasks,
                 sync_world_focus,

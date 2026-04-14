@@ -13,18 +13,19 @@ use lru::LruCache;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::world::{
+    cell::WorldCell,
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
     grid::ActiveWorldGrid,
-    types::WorldCell,
 };
 
+pub mod cell;
 pub mod chunk;
+pub mod entity;
 pub mod events;
 pub mod generation;
 pub mod grid;
 pub mod simulation;
-pub mod types;
 
 pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 5; // Active simulation view
 pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 3; // Active simulation view
