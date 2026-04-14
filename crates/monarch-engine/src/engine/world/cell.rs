@@ -6,11 +6,54 @@ use bytemuck::{Pod, Zeroable};
 pub struct MaterialId(pub u8);
 
 impl MaterialId {
+    // ==========================================
+    // SYSTEM (0, 255)
+    // ==========================================
     pub const EMPTY: Self = Self(0);
-    pub const WATER: Self = Self(1);
-    pub const BLOOD: Self = Self(2);
-    pub const GRASS: Self = Self(3);
-    pub const SAND: Self = Self(4);
+    pub const VOID: Self = Self(255);
+
+    // ==========================================
+    // LIQUIDS (1 - 31)
+    // ==========================================
+    pub const LIQUID_WATER: Self = Self(1);
+    pub const LIQUID_MAGMA: Self = Self(2);
+    pub const LIQUID_BLOOD: Self = Self(3);
+    pub const LIQUID_ACID:  Self = Self(4);
+    pub const LIQUID_OIL:   Self = Self(5);
+
+    // ==========================================
+    // GASES & PLASMAS (32 - 63)
+    // ==========================================
+    pub const GAS_STEAM:  Self = Self(32);
+    pub const GAS_SMOKE:  Self = Self(33);
+    pub const GAS_POISON: Self = Self(34);
+    pub const FIRE:       Self = Self(35);
+
+    // ==========================================
+    // ORGANICS (64 - 127)
+    // ==========================================
+    pub const ORGANIC_WOOD:    Self = Self(64);
+    pub const ORGANIC_FOLIAGE: Self = Self(65); // Variants: 0=Grass, 1=Flower, 2=Vine
+    pub const ORGANIC_FLESH:   Self = Self(66); // Variants: 0=Human, 1=Goblin, 2=Animal
+    pub const ORGANIC_BONE:    Self = Self(67); // High acid resistance
+    pub const ORGANIC_ROT:     Self = Self(68); // Decayed flesh/plants
+
+    // ==========================================
+    // POWDERS & LOOSE SOLIDS (128 - 191)
+    // ==========================================
+    pub const LOOSE_SAND: Self = Self(128);
+    pub const LOOSE_DIRT: Self = Self(129);
+    pub const LOOSE_ASH:  Self = Self(130);
+    pub const LOOSE_SNOW: Self = Self(131);
+
+    // ==========================================
+    // SOLIDS (192 - 254)
+    // ==========================================
+    pub const SOLID_STONE: Self = Self(192);
+    pub const SOLID_CLAY:  Self = Self(193);
+    pub const SOLID_ICE:   Self = Self(194);
+    pub const SOLID_METAL: Self = Self(195);
+    pub const SOLID_GLASS: Self = Self(196);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]

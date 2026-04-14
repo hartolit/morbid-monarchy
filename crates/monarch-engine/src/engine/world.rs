@@ -23,7 +23,6 @@ use crate::engine::{
 
 pub mod cell;
 pub mod chunk;
-pub mod generation;
 pub mod grid;
 
 pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 5; // Active simulation view

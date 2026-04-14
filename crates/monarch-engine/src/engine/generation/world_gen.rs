@@ -36,7 +36,7 @@ impl WorldGenerator {
             for _ in 0..CHUNK_CELL_COUNT {
                 let variant = rng.random_range(0..4);
                 let mut cell = WorldCell::default();
-                cell.terrain = Self::solid_pixel(MaterialId::SAND, variant);
+                cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
                 cells.push(cell);
             }
             return ChunkData {
@@ -85,7 +85,7 @@ impl WorldGenerator {
 
         // --- ORGANIC WATER & COASTLINES ---
         if final_elevation < -0.2 {
-            cell.terrain = Self::solid_pixel(MaterialId::SAND, variant);
+            cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
 
             let depth_normalized = ((-0.2 - final_elevation) * 5.0).clamp(0.0, 1.0);
             let state = if depth_normalized > 0.6 {
@@ -96,7 +96,7 @@ impl WorldGenerator {
                 64
             };
 
-            let mut fluid_pixel = Self::liquid_pixel(MaterialId::WATER, 0);
+            let mut fluid_pixel = Self::liquid_pixel(MaterialId::LIQUID_WATER, 0);
             fluid_pixel.state = state;
             cell.fluid = fluid_pixel;
 
@@ -105,7 +105,7 @@ impl WorldGenerator {
 
         // --- NATURAL BEACHES ---
         if final_elevation < -0.15 {
-            cell.terrain = Self::solid_pixel(MaterialId::SAND, variant);
+            cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
             return cell;
         }
 
@@ -115,15 +115,15 @@ impl WorldGenerator {
         let final_moisture = moisture + (detail_noise * 0.1);
 
         let material = if final_moisture > -0.15 {
-            MaterialId::GRASS
+            MaterialId::ORGANIC_FOLIAGE
         } else {
-            MaterialId::SAND
+            MaterialId::LOOSE_SAND
         };
 
         cell.terrain = Self::solid_pixel(material, variant);
 
         // Both Sand and Grass spawn with initial cellular strength
-        if material == MaterialId::GRASS || material == MaterialId::SAND {
+        if material == MaterialId::ORGANIC_FOLIAGE || material == MaterialId::LOOSE_SAND {
             cell.terrain.state = rng.random_range(5..=10);
         }
 
