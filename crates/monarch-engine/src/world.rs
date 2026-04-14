@@ -26,6 +26,14 @@ pub mod grid;
 pub mod simulation;
 pub mod types;
 
+pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 5; // Active simulation view
+pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 3; // Active simulation view
+pub const PRELOAD_EXT_RADIUS: u32 = 3; // Fetch boundary (outer)
+pub const PRELOAD_TRIGGER: u32 = 2; // Trigger fetch if active view gets chunks away from outer edge
+pub const CACHE_CHUNK_SIZE: usize = (((DEFAULT_ACTIVE_RADIUS_X * 2)
+    * (DEFAULT_ACTIVE_RADIUS_Y * 2))
+    * (PRELOAD_EXT_RADIUS * 2)) as usize;
+
 /// Engine-side storage for lightweight metadata of active chunks.
 #[derive(Resource)]
 pub struct WorldStore {
@@ -38,7 +46,10 @@ impl Default for WorldStore {
     fn default() -> Self {
         Self {
             active_chunks: FxHashMap::default(),
-            cached_chunks: LruCache::with_hasher(NonZeroUsize::new(2048).unwrap(), FxBuildHasher), // TODO: Change
+            cached_chunks: LruCache::with_hasher(
+                NonZeroUsize::new(CACHE_CHUNK_SIZE).unwrap(),
+                FxBuildHasher,
+            ), // TODO: Change
             pending_requests: FxHashSet::default(),
         }
     }
@@ -54,10 +65,11 @@ pub struct ChunkManager {
     pub active_view: Option<ChunkView>,
     pub preload_view: Option<ChunkView>,
     /// The radius of the simulation area (e.g., 1 = 3x3 chunks)
-    pub active_radius: u32,
-    /// The radius of the total memory buffer fetched from disk (e.g., 4 = 9x9 chunks)
-    pub preload_radius: u32,
-    /// The safety margin. If the active view gets within this many chunks of the
+    pub active_radius_x: u32,
+    pub active_radius_y: u32,
+    /// Extends the preload view beyond the active view by this many chunks.
+    pub preload_ext_radius: u32,
+    /// If the active view gets within this many chunks of the
     /// preload view's boundary, it triggers a recenter and batch fetch.
     pub preload_trigger: u32,
 }
@@ -66,10 +78,11 @@ impl Default for ChunkManager {
     fn default() -> Self {
         Self {
             active_view: None,
-            active_radius: 1, // 3x3 active simulation grid
+            active_radius_x: DEFAULT_ACTIVE_RADIUS_X,
+            active_radius_y: DEFAULT_ACTIVE_RADIUS_Y,
             preload_view: None,
-            preload_radius: 4,  // 9x9 fetch boundary (outer)
-            preload_trigger: 1, // Trigger fetch if active view gets 1 chunk away from outer edge
+            preload_ext_radius: PRELOAD_EXT_RADIUS,
+            preload_trigger: PRELOAD_TRIGGER,
         }
     }
 }
@@ -85,7 +98,11 @@ pub fn handle_simulation_resize(
 ) {
     for event in reader.read() {
         let center = ChunkKey::from_dvec3(focus.position);
-        let new_active_view = ChunkView::from_flat_xy(center, event.new_active_radius as i32);
+        let new_active_view = ChunkView::from_rect_xy(
+            center,
+            event.new_active_radius_x as i32,
+            event.new_active_radius_y as i32,
+        );
 
         if let Some(old_active) = manager.active_view {
             // BACKUP: Extract ALL active chunks directly into their existing ChunkData vectors.
@@ -121,22 +138,25 @@ pub fn handle_simulation_resize(
         }
 
         // MUTATE STRIDE: Resize the grid in-place
-        let span_chunks = (event.new_active_radius * 2 + 1) as i32;
-        let new_size = span_chunks * (CHUNK_SIZE as i32);
+        let span_chunks_x = (event.new_active_radius_x * 2 + 1) as i32;
+        let span_chunks_y = (event.new_active_radius_y * 2 + 1) as i32;
+
+        let new_width = span_chunks_x * (CHUNK_SIZE as i32);
+        let new_height = span_chunks_y * (CHUNK_SIZE as i32);
         let new_origin = new_active_view.min.to_ivec2() * (CHUNK_SIZE as i32);
 
-        grid.resize_in_place(new_size, new_size, new_origin);
+        grid.resize_in_place(new_width, new_height, new_origin);
 
         // RESTORE: Repopulate the grid (cleaner slice passing)
         for (key, chunk_data) in store.active_chunks.iter() {
             grid.load_chunk(*key, &chunk_data.cells);
         }
 
-        // Update Configuration
-        manager.active_radius = event.new_active_radius;
-        manager.preload_radius = event.new_preload_radius;
+        // Update view
+        manager.active_radius_x = event.new_active_radius_x;
+        manager.active_radius_y = event.new_active_radius_y;
 
-        // Triggers a recenter and batch fetch
+        // Trigger recenter and batch fetch
         manager.active_view = None;
         manager.preload_view = None;
     }
@@ -152,7 +172,11 @@ pub fn manage_chunk_window(
     mut load_writer: MessageWriter<ChunkLoadRequest>,
 ) {
     let center = ChunkKey::from_dvec3(focus.position);
-    let new_active_view = ChunkView::from_flat_xy(center, manager.active_radius as i32);
+    let new_active_view = ChunkView::from_rect_xy(
+        center,
+        manager.active_radius_x as i32,
+        manager.active_radius_y as i32,
+    );
 
     // Handle Active Simulation View (Promotions & Demotions)
     if manager.active_view != Some(new_active_view) {
@@ -207,9 +231,10 @@ pub fn manage_chunk_window(
 
     if let Some(current_preload) = manager.preload_view {
         // Create a "danger zone" view around the active view
-        let danger_view = ChunkView::from_flat_xy(
+        let danger_view = ChunkView::from_rect_xy(
             center,
-            (manager.active_radius + manager.preload_trigger) as i32,
+            (manager.active_radius_x + manager.preload_trigger) as i32,
+            (manager.active_radius_y + manager.preload_trigger) as i32,
         );
 
         // If our danger zone bleeds outside the preloaded chunks, we must fetch
@@ -224,7 +249,12 @@ pub fn manage_chunk_window(
 
     // Batch Fetching from Disk (Only happens when trigger is hit)
     if requires_preload_fetch {
-        let new_preload_view = ChunkView::from_flat_xy(center, manager.preload_radius as i32);
+        let new_preload_view = ChunkView::from_rect_xy(
+            center,
+            (manager.active_radius_x + manager.preload_ext_radius) as i32,
+            (manager.active_radius_y + manager.preload_ext_radius) as i32,
+        );
+
         let old_preload_ref = manager.preload_view.as_ref();
 
         for key in new_preload_view

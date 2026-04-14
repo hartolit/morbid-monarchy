@@ -3,7 +3,7 @@ use bitcode::{Decode, Encode};
 
 use crate::world::types::{SerializedEntity, WorldCell};
 
-pub const CHUNK_SIZE: usize = 128;
+pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;
 
 #[derive(Clone, Encode, Decode)]
@@ -113,10 +113,10 @@ impl ChunkView {
         }
     }
 
-    /// Creates a flat top-down bounding box on the X/Y plane.
-    /// `radius` controls the spread along the X and Y axes, leaving Z at 0.
-    pub fn from_flat_xy(center: ChunkKey, radius: i32) -> Self {
-        let extent = IVec3::new(radius, radius, 0);
+    /// Creates a flat top-down rect on the X/Y plane.
+    /// `radius_x` and `radius_y` controls the spread along the X and Y axes, leaving Z at 0.
+    pub fn from_rect_xy(center: ChunkKey, radius_x: i32, radius_y: i32) -> Self {
+        let extent = IVec3::new(radius_x, radius_y, 0);
         Self {
             min: ChunkKey {
                 key: center.key - extent,

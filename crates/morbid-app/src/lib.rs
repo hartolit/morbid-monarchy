@@ -94,34 +94,39 @@ fn handle_resize_input(
     manager: Res<ChunkManager>,
     mut writer: MessageWriter<ResizeSimulationEvent>,
 ) {
-    let mut new_radius = manager.active_radius;
+    let mut new_radius_x = manager.active_radius_x;
+    let mut new_radius_y = manager.active_radius_y;
     let mut changed = false;
 
-    // Expand (Keys: +, =, or Numpad +)
-    if keyboard.just_pressed(KeyCode::Equal) || keyboard.just_pressed(KeyCode::NumpadAdd) {
-        new_radius += 1;
+    if keyboard.just_pressed(KeyCode::ArrowLeft) {
+        new_radius_x += 1;
         changed = true;
     }
 
-    // Shrink (Keys: - or Numpad -)
-    if (keyboard.just_pressed(KeyCode::Minus) || keyboard.just_pressed(KeyCode::NumpadSubtract))
-        && new_radius > 0
-    {
-        new_radius -= 1;
+    if (keyboard.just_pressed(KeyCode::ArrowRight)) && new_radius_x > 0 {
+        new_radius_x -= 1;
+        changed = true;
+    }
+
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        new_radius_y += 1;
+        changed = true;
+    }
+
+    if (keyboard.just_pressed(KeyCode::ArrowDown)) && new_radius_y > 0 {
+        new_radius_y -= 1;
         changed = true;
     }
 
     if changed {
-        info!("Resizing Simulation: Radius {}", new_radius);
-
-        // Ensure the preload boundary stays comfortably ahead of the new active boundary
-        let new_preload = manager
-            .preload_radius
-            .max(new_radius + manager.preload_trigger + 1);
+        info!(
+            "Resizing Simulation: radius_x {} radius_y {}",
+            new_radius_x, new_radius_y
+        );
 
         writer.write(ResizeSimulationEvent {
-            new_active_radius: new_radius,
-            new_preload_radius: new_preload,
+            new_active_radius_x: new_radius_x,
+            new_active_radius_y: new_radius_y,
         });
     }
 }

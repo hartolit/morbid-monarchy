@@ -16,6 +16,16 @@ pub struct ActiveWorldGrid {
     pub buffer_head: IVec2,
 }
 
+impl Default for ActiveWorldGrid {
+    fn default() -> Self {
+        Self::new(
+            (CHUNK_SIZE * 1) as i32,
+            (CHUNK_SIZE * 1) as i32,
+            IVec2::ZERO,
+        )
+    }
+}
+
 impl ActiveWorldGrid {
     pub fn new(width: i32, height: i32, origin: IVec2) -> Self {
         let size = (width * height) as usize;
