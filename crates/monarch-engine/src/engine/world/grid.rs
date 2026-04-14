@@ -1,6 +1,6 @@
 use bevy::{ecs::resource::Resource, math::IVec2};
 
-use crate::world::{
+use crate::engine::world::{
     DEFAULT_ACTIVE_RADIUS_X, DEFAULT_ACTIVE_RADIUS_Y,
     cell::WorldCell,
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkKey},

@@ -1,7 +1,7 @@
 use bevy::math::{DVec3, IVec2, IVec3};
 use bitcode::{Decode, Encode};
 
-use crate::world::{cell::WorldCell, entity::SerializedEntity};
+use crate::engine::{entity::SerializedEntity, world::cell::WorldCell};
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;

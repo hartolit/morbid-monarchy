@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use rand::RngExt;
 
-use crate::world::{cell::MaterialId, grid::ActiveWorldGrid};
+use crate::engine::world::{cell::MaterialId, grid::ActiveWorldGrid};
 
 pub fn simulate_biology(mut grid: ResMut<ActiveWorldGrid>) {
     let mut rng = rand::rng();

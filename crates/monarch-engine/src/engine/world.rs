@@ -12,20 +12,19 @@ use bevy::{
 use lru::LruCache;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use crate::world::{
-    cell::WorldCell,
-    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
+use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    grid::ActiveWorldGrid,
+    world::{
+        cell::WorldCell,
+        chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkView},
+        grid::ActiveWorldGrid,
+    },
 };
 
 pub mod cell;
 pub mod chunk;
-pub mod entity;
-pub mod events;
 pub mod generation;
 pub mod grid;
-pub mod simulation;
 
 pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 5; // Active simulation view
 pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 3; // Active simulation view

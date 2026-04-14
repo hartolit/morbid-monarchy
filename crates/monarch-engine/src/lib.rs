@@ -1,14 +1,16 @@
 use bevy::prelude::*;
 
-use crate::world::{
-    ChunkManager, WorldFocus, WorldStore,
+use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    grid::ActiveWorldGrid,
-    handle_chunk_loaded, handle_simulation_resize, manage_chunk_window,
     simulation::simulate_biology,
+    world::{
+        ChunkManager, WorldFocus, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
+        handle_simulation_resize, manage_chunk_window,
+    },
 };
 
-pub mod world;
+pub mod engine;
+pub mod prelude;
 
 pub struct MonarchEnginePlugin;
 

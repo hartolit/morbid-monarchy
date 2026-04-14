@@ -1,4 +1,4 @@
-use crate::world::chunk::{ChunkData, ChunkKey};
+use crate::engine::world::chunk::{ChunkData, ChunkKey};
 use bevy::ecs::message::Message;
 
 /// Emitted by monarch-engine when the player moves and a chunk falls out of the Active Window.

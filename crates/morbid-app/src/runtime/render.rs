@@ -8,7 +8,7 @@ use bevy::{
     shader::ShaderRef,
     sprite_render::{Material2d, Material2dPlugin},
 };
-use monarch_engine::world::grid::ActiveWorldGrid;
+use monarch_engine::prelude::ActiveWorldGrid;
 
 pub struct WorldRenderPlugin;
 
