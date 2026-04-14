@@ -1,6 +1,7 @@
 use bevy::{ecs::resource::Resource, math::IVec2};
 
 use crate::world::{
+    DEFAULT_ACTIVE_RADIUS_X, DEFAULT_ACTIVE_RADIUS_Y,
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkKey},
     types::WorldCell,
 };
@@ -18,11 +19,21 @@ pub struct ActiveWorldGrid {
 
 impl Default for ActiveWorldGrid {
     fn default() -> Self {
-        Self::new(
-            (CHUNK_SIZE * 1) as i32,
-            (CHUNK_SIZE * 1) as i32,
-            IVec2::ZERO,
-        )
+        let span_chunks_x = (DEFAULT_ACTIVE_RADIUS_X * 2 + 1) as i32;
+        let span_chunks_y = (DEFAULT_ACTIVE_RADIUS_Y * 2 + 1) as i32;
+
+        let width = span_chunks_x * (CHUNK_SIZE as i32);
+        let height = span_chunks_y * (CHUNK_SIZE as i32);
+
+        let origin_chunk_x = -(DEFAULT_ACTIVE_RADIUS_X as i32);
+        let origin_chunk_y = -(DEFAULT_ACTIVE_RADIUS_Y as i32);
+
+        let window_origin = IVec2::new(
+            origin_chunk_x * (CHUNK_SIZE as i32),
+            origin_chunk_y * (CHUNK_SIZE as i32),
+        );
+
+        Self::new(width, height, window_origin)
     }
 }
 
