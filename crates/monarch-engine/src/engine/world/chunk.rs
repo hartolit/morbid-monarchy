@@ -22,6 +22,10 @@ impl ChunkTheme {
     pub const OCEAN: Self = Self(1);
     pub const DESERT: Self = Self(2);
     pub const CAVE: Self = Self(3);
+    pub const FOREST: Self = Self(4);
+    pub const SWAMP: Self = Self(5);
+    pub const TUNDRA: Self = Self(6);
+    pub const MOUNTAIN: Self = Self(7);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

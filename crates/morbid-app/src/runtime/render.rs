@@ -59,13 +59,45 @@ fn setup_rendering(
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     ));
 
-    // Initialize Palette (Maps MaterialId 0..255 to RGBA)
+    // Initialize Palette (Maps MaterialId 0..255 to RGBA base colors)
     let mut palette = vec![[0.0f32; 4]; 256];
-    palette[0] = [0.0, 0.0, 0.0, 0.0]; // Empty
-    palette[1] = [0.15, 0.35, 0.85, 1.0]; // Water
-    palette[2] = [0.65, 0.05, 0.05, 1.0]; // Blood
-    palette[3] = [0.15, 0.40, 0.10, 1.0]; // Grass
-    palette[4] = [0.80, 0.70, 0.45, 1.0]; // Sand
+
+    // System
+    palette[0] = [0.0, 0.0, 0.0, 0.0];       // EMPTY
+    palette[255] = [0.0, 0.0, 0.0, 1.0];      // VOID
+
+    // Liquids (1-31)
+    palette[1] = [0.15, 0.35, 0.85, 1.0];     // LIQUID_WATER
+    palette[2] = [0.85, 0.25, 0.05, 1.0];     // LIQUID_MAGMA
+    palette[3] = [0.55, 0.02, 0.02, 1.0];     // LIQUID_BLOOD
+    palette[4] = [0.30, 0.75, 0.10, 1.0];     // LIQUID_ACID
+    palette[5] = [0.12, 0.08, 0.04, 1.0];     // LIQUID_OIL
+
+    // Gases & Plasmas (32-63)
+    palette[32] = [0.85, 0.85, 0.90, 0.6];    // GAS_STEAM
+    palette[33] = [0.30, 0.30, 0.30, 0.7];    // GAS_SMOKE
+    palette[34] = [0.40, 0.15, 0.50, 0.5];    // GAS_POISON
+    palette[35] = [1.00, 0.60, 0.10, 1.0];    // FIRE
+
+    // Organics (64-127)
+    palette[64] = [0.45, 0.28, 0.12, 1.0];    // ORGANIC_WOOD
+    palette[65] = [0.18, 0.45, 0.12, 1.0];    // ORGANIC_FOLIAGE
+    palette[66] = [0.75, 0.50, 0.45, 1.0];    // ORGANIC_FLESH
+    palette[67] = [0.88, 0.85, 0.75, 1.0];    // ORGANIC_BONE
+    palette[68] = [0.30, 0.22, 0.10, 1.0];    // ORGANIC_ROT
+
+    // Powders & Loose Solids (128-191)
+    palette[128] = [0.82, 0.72, 0.48, 1.0];   // LOOSE_SAND
+    palette[129] = [0.40, 0.28, 0.15, 1.0];   // LOOSE_DIRT
+    palette[130] = [0.45, 0.42, 0.40, 1.0];   // LOOSE_ASH
+    palette[131] = [0.92, 0.94, 0.96, 1.0];   // LOOSE_SNOW
+
+    // Solids (192-254)
+    palette[192] = [0.48, 0.46, 0.44, 1.0];   // SOLID_STONE
+    palette[193] = [0.68, 0.42, 0.28, 1.0];   // SOLID_CLAY
+    palette[194] = [0.70, 0.85, 0.95, 1.0];   // SOLID_ICE
+    palette[195] = [0.60, 0.60, 0.65, 1.0];   // SOLID_METAL
+    palette[196] = [0.75, 0.88, 0.92, 0.8];   // SOLID_GLASS
 
     let palette_buffer = buffers.add(ShaderStorageBuffer::new(
         bytemuck::cast_slice(&palette),
