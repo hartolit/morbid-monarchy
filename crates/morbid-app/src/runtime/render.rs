@@ -245,9 +245,11 @@ fn sync_grid_rendering(
     );
     material.window.size = Vec2::new(grid_ref.width as f32, grid_ref.height as f32);
     material.window.head = Vec2::new(grid_ref.buffer_head.x as f32, grid_ref.buffer_head.y as f32);
+
+    // INCREASE FOR STEEPER TERRAIN
     // TODO: expose h_max / elevation_scale to a typed tuning Resource.
-    material.window.h_max = 50.0;
-    material.window.elevation_scale = 0.15;
+    material.window.h_max = 150.0;
+    material.window.elevation_scale = 0.45;
 
     // -----------------------------------------------------------------------
     // Expensive path: only runs when actual cell data changed.
