@@ -8,9 +8,9 @@ pub struct FocalPoint;
 pub fn setup_focal_point(mut commands: Commands) {
     commands.spawn((
         FocalPoint,
-        Camera2d,
-        // Zoom in 2x so each grid cell takes up an 8x8 block of pixels on screen
-        Transform::from_translation(Vec3::ZERO).with_scale(Vec3::splat(0.20)),
+        Camera3d::default(),
+        // Pull the camera back and angle it down to see the 3D relief
+        Transform::from_xyz(0.0, 150.0, 150.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
@@ -24,11 +24,12 @@ pub fn player_movement(
     };
     let mut direction = Vec3::ZERO;
 
+    // Movement is mapped to the X/Z plane for Top-Down 3D
     if keyboard.pressed(KeyCode::KeyW) {
-        direction.y += 1.0;
+        direction.z -= 1.0;
     }
     if keyboard.pressed(KeyCode::KeyS) {
-        direction.y -= 1.0;
+        direction.z += 1.0;
     }
     if keyboard.pressed(KeyCode::KeyA) {
         direction.x -= 1.0;
@@ -38,12 +39,11 @@ pub fn player_movement(
     }
 
     if direction.length_squared() > 0.0 {
-        let speed = 500.0; // Pixels per second translation
+        let speed = 250.0;
         transform.translation += direction.normalize() * speed * time.delta_secs();
     }
 }
 
-/// Listens for +/- keys to dynamically resize the simulation grid
 pub fn handle_resize_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     manager: Res<ChunkManager>,
@@ -58,7 +58,7 @@ pub fn handle_resize_input(
         changed = true;
     }
 
-    if (keyboard.just_pressed(KeyCode::ArrowRight)) && new_radius_x > 0 {
+    if keyboard.just_pressed(KeyCode::ArrowRight) && new_radius_x > 0 {
         new_radius_x -= 1;
         changed = true;
     }
@@ -68,7 +68,7 @@ pub fn handle_resize_input(
         changed = true;
     }
 
-    if (keyboard.just_pressed(KeyCode::ArrowDown)) && new_radius_y > 0 {
+    if keyboard.just_pressed(KeyCode::ArrowDown) && new_radius_y > 0 {
         new_radius_y -= 1;
         changed = true;
     }
@@ -90,5 +90,6 @@ pub fn sync_world_focus(
     target: Single<&Transform, With<FocalPoint>>,
     mut focus: ResMut<WorldFocus>,
 ) {
+    // Map the 3D transform back to the engine's conceptual 3D space
     focus.position = target.translation.as_dvec3();
 }

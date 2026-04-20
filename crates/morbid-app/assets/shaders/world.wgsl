@@ -1,133 +1,120 @@
-#import bevy_sprite::mesh2d_vertex_output::VertexOutput
+#import bevy_pbr::mesh_functions::{get_world_from_local, mesh_position_local_to_clip}
 
 struct WorldWindow {
     origin: vec2<f32>,
     size: vec2<f32>,
     head: vec2<f32>,
+    h_max: f32,
+    elevation_scale: f32,
 }
 
-@group(2) @binding(0) var<storage, read> world_buffer: array<u32>;
-@group(2) @binding(1) var<storage, read> palette: array<vec4<f32>>;
-@group(2) @binding(2) var<uniform> window: WorldWindow;
+@group(2) @binding(10) var<storage, read> world_buffer: array<u32>;
+@group(2) @binding(11) var<storage, read> palette: array<vec4<f32>>;
+@group(2) @binding(12) var<uniform> window: WorldWindow;
 
-@fragment
-fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
-    let local_pos = mesh.world_position.xy - window.origin;
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(10) cell_index: u32,
+    @location(11) layer: u32,
+};
 
-    // If the pixel is outside our active grid simulation, render void/black
-    if local_pos.x < 0.0 || local_pos.y < 0.0 || local_pos.x >= window.size.x || local_pos.y >= window.size.y {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vertex(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
 
     let grid_w = i32(window.size.x);
     let grid_h = i32(window.size.y);
 
-    let cell_x = i32(floor(local_pos.x + window.head.x));
-    let cell_y = i32(floor(local_pos.y + window.head.y));
+    let x = i32(in.cell_index) % grid_w;
+    let y = i32(in.cell_index) / grid_w;
 
-    // Handle Toroidal Wrapping
-    let wrap_x = ((cell_x % grid_w) + grid_w) % grid_w;
-    let wrap_y = ((cell_y % grid_h) + grid_h) % grid_h;
+    // Toroidal wrapping alignment
+    let wrap_x = ((x + i32(window.head.x)) % grid_w + grid_w) % grid_w;
+    let wrap_y = ((y + i32(window.head.y)) % grid_h + grid_h) % grid_h;
+    let buffer_idx = wrap_y * grid_w + wrap_x;
 
-    let index = wrap_y * grid_w + wrap_x;
+    let cell_terrain = world_buffer[buffer_idx * 4 + 0];
+    let cell_fluid = world_buffer[buffer_idx * 4 + 1];
+    let cell_atmos = world_buffer[buffer_idx * 4 + 2];
+    let cell_surface = world_buffer[buffer_idx * 4 + 3];
 
-    let cell_terrain = world_buffer[index * 4 + 0];
-    let cell_fluid = world_buffer[index * 4 + 1];
-    let cell_atmos = world_buffer[index * 4 + 2];
-    let cell_surface = world_buffer[index * 4 + 3];
+    let atmos_state = f32((cell_atmos >> 8u) & 0xFFu);
+    let fluid_state = f32((cell_fluid >> 8u) & 0xFFu);
 
-    // Unpack Material, State, and Variant (Little-Endian shifting)
-    let mat_surface = cell_surface & 0xFFu;
-    let state_surface = (cell_surface >> 8u) & 0xFFu;
-    let variant_surface = (cell_surface >> 16u) & 0xFFu;
+    // --- ALGEBRAIC MEMBRANE PHYSICS ---
+    // Extract constants from uniform to avoid slop
+    let z_terrain = max(0.0, window.h_max - (atmos_state * window.elevation_scale) - (fluid_state * window.elevation_scale));
+    let fluid_depth = fluid_state * window.elevation_scale;
 
-    let mat_fluid = cell_fluid & 0xFFu;
-    let state_fluid = (cell_fluid >> 8u) & 0xFFu;
-    let variant_fluid = (cell_fluid >> 16u) & 0xFFu;
-
-    let mat_terrain = cell_terrain & 0xFFu;
-    let state_terrain = (cell_terrain >> 8u) & 0xFFu;
-    let variant_terrain = (cell_terrain >> 16u) & 0xFFu;
-
+    var final_y_bottom = 0.0;
+    var final_y_top = 0.0;
     var active_mat = 0u;
-    var active_state = 0u;
-    var active_variant = 0u;
+    var is_visible = true;
 
-    if mat_surface != 0u {
-        active_mat = mat_surface;
-        active_state = state_surface;
-        active_variant = variant_surface;
-    } else if mat_fluid != 0u {
-        active_mat = mat_fluid;
-        active_state = state_fluid;
-        active_variant = variant_fluid;
-    } else if mat_terrain != 0u {
-        active_mat = mat_terrain;
-        active_state = state_terrain;
-        active_variant = variant_terrain;
+    // Evaluate Structural Bounds based on custom Layer Attribute
+    if in.layer == 0u {
+        // LAYER 0: Terrain Block
+        active_mat = cell_terrain & 0xFFu;
+        final_y_bottom = 0.0;
+        final_y_top = z_terrain;
+        if active_mat == 0u || active_mat == 255u { is_visible = false; }
+    } else if in.layer == 1u {
+        // LAYER 1: Fluid Block (Stacks on terrain)
+        active_mat = cell_fluid & 0xFFu;
+        final_y_bottom = z_terrain;
+        final_y_top = z_terrain + fluid_depth;
+        if active_mat == 0u || fluid_depth <= 0.0 { is_visible = false; }
+    } else {
+        // LAYER 2: Surface Block (Boats, Foliage, Items)
+        active_mat = cell_surface & 0xFFu;
+        final_y_bottom = z_terrain + fluid_depth;
+        final_y_top = final_y_bottom + 1.0;
+        if active_mat == 0u { is_visible = false; }
     }
 
-    // Process valid materials (Ignore 0 = EMPTY and 255 = VOID)
-    if active_mat != 0u && active_mat != 255u {
-        var color = palette[active_mat];
+    var local_pos = in.position;
 
-        // The variant byte (0-255) becomes a visual multiplier ranging from -1.0 to 1.0.
-        // If variant is 128, the shift is 0.0 (default palette color).
-        let visual_shift = (f32(active_variant) - 128.0) / 128.0;
-
-        // --- LIQUIDS (1 - 31) ---
-        if active_mat >= 1u && active_mat <= 31u {
-            // Dynamic State: represents fluid depth/mass
-            let depth_factor = f32(active_state) / 255.0;
-            let darken = depth_factor * 0.4;
-            color.r = saturate(color.r - darken);
-            color.g = saturate(color.g - darken);
-            color.b = saturate(color.b - darken);
-
-            // Static Variant: shifts the liquid's hue (e.g. murky swamp water vs pristine water)
-            color.g = saturate(color.g + visual_shift * 0.15);
-            color.b = saturate(color.b - visual_shift * 0.1);
+    // Zero-cost geometric culling: plunge non-existent blocks underground
+    if !is_visible {
+        local_pos.y = -100.0;
+        local_pos.x = 0.0;
+        local_pos.z = 0.0;
+    } else {
+        // Stretch the standard 1x1x1 cube physically along the Y axis
+        if local_pos.y > 0.5 {
+            local_pos.y = final_y_top;
+        } else {
+            local_pos.y = final_y_bottom;
         }
-        
-        // --- ORGANICS (64 - 127) ---
-        else if active_mat >= 64u && active_mat <= 127u {
-            // Dynamic State: represents health/age. 
-            // As organics age (state increases), they brown out and lose vibrancy.
-            let age_factor = f32(active_state) / 255.0;
-            color.g = saturate(color.g - age_factor * 0.3);
-            color.r = saturate(color.r + age_factor * 0.1); // Shift toward brown/rot
-            color.b = saturate(color.b - age_factor * 0.1);
-
-            // Static Variant: shifts the species hue (Human pink vs Goblin green)
-            color.r = saturate(color.r + visual_shift * 0.3);
-            color.g = saturate(color.g - visual_shift * 0.2);
-        }
-        
-        // --- POWDERS & LOOSE SOLIDS (128 - 191) ---
-        else if active_mat >= 128u && active_mat <= 191u {
-            // Dynamic State: might represent moisture or compaction
-            let moisture = f32(active_state) / 255.0;
-            color.r = saturate(color.r - moisture * 0.25);
-            color.g = saturate(color.g - moisture * 0.25);
-            color.b = saturate(color.b - moisture * 0.25);
-
-            // Static Variant: changes lightness (e.g., dark soil vs pale sand)
-            color.r = saturate(color.r + visual_shift * 0.15);
-            color.g = saturate(color.g + visual_shift * 0.15);
-            color.b = saturate(color.b + visual_shift * 0.15);
-        }
-        
-        // --- RIGID SOLIDS (192 - 254) ---
-        else if active_mat >= 192u && active_mat <= 254u {
-            // Static Variant: purely structural lightness (obsidian/basalt vs bright marble)
-            color.r = saturate(color.r + visual_shift * 0.3);
-            color.g = saturate(color.g + visual_shift * 0.3);
-            color.b = saturate(color.b + visual_shift * 0.3);
-        }
-
-        return color;
     }
 
-    // Fallback void/emptiness
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.clip_position = mesh_position_local_to_clip(get_world_from_local(0u), vec4<f32>(local_pos, 1.0));
+
+    // Resolve color variance
+    let active_variant = (world_buffer[buffer_idx * 4 + i32(in.layer)] >> 16u) & 0xFFu;
+    var color = palette[active_mat];
+    let visual_shift = (f32(active_variant) - 128.0) / 128.0;
+
+    color.r = saturate(color.r + visual_shift * 0.15);
+    color.g = saturate(color.g + visual_shift * 0.15);
+    color.b = saturate(color.b + visual_shift * 0.15);
+
+    // Apply strict geometric Lambertian lighting
+    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
+    let diffuse = max(dot(in.normal, light_dir), 0.3);
+    out.color = vec4<f32>(color.rgb * diffuse, color.a);
+
+    return out;
+}
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
 }

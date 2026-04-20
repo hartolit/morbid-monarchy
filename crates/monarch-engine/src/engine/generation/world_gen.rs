@@ -9,7 +9,6 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 pub struct WorldGenerator {
     pub seed: u32,
     elevation_noise: OpenSimplex,
-    moisture_noise: OpenSimplex,
 }
 
 impl WorldGenerator {
@@ -17,35 +16,18 @@ impl WorldGenerator {
         Self {
             seed,
             elevation_noise: OpenSimplex::new(seed),
-            moisture_noise: OpenSimplex::new(seed.wrapping_add(1337)),
         }
     }
 
     pub fn generate_chunk(&self, key: ChunkKey) -> ChunkData {
         let mut cells = Vec::with_capacity(CHUNK_CELL_COUNT);
 
-        // Cast to u32 first to prevent sign-extension bit bleeding
         let mut rng = StdRng::seed_from_u64(
             (self.seed as u64)
                 ^ (((key.key.x as u32) as u64) << 32)
                 ^ ((key.key.y as u32) as u64)
                 ^ (((key.key.z as u32) as u64) << 16),
         );
-
-        if key.key.z < 0 {
-            for _ in 0..CHUNK_CELL_COUNT {
-                let variant = rng.random_range(0..4);
-                let mut cell = WorldCell::default();
-                cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
-                cells.push(cell);
-            }
-            return ChunkData {
-                last_simulated: 0.0,
-                theme: ChunkTheme::CAVE,
-                cells,
-                serialized_entities: Vec::new(),
-            };
-        }
 
         for local_y in 0..CHUNK_SIZE as i32 {
             for local_x in 0..CHUNK_SIZE as i32 {
@@ -65,88 +47,58 @@ impl WorldGenerator {
     }
 
     fn generate_cell(&self, rng: &mut StdRng, world_x: i32, world_y: i32) -> WorldCell {
-        let variant = rng.random_range(0..4);
         let mut cell = WorldCell::default();
 
-        let global_scale = 0.002;
-        let base_elevation = self
+        let global_scale = 0.005;
+        let base_noise = self
             .elevation_noise
             .get([world_x as f64 * global_scale, world_y as f64 * global_scale]);
-        let moisture = self
-            .moisture_noise
-            .get([world_x as f64 * global_scale, world_y as f64 * global_scale]);
 
-        let detail_scale = 0.02;
-        let detail_noise = self
-            .elevation_noise
-            .get([world_x as f64 * detail_scale, world_y as f64 * detail_scale]);
+        // Normalize noise (-1.0 to 1.0) into a 0.0 to 1.0 range
+        let normalized = (base_noise + 1.0) * 0.5;
 
-        let final_elevation = base_elevation + (detail_noise * 0.05);
+        // ALGEBRAIC PHYSICS RULE: High gas pressure = crushed terrain (valleys). Low gas pressure = mountains.
+        // So we invert the noise: high noise (mountains) maps to low gas (0). Low noise maps to high gas (255).
+        let gas_pressure = ((1.0 - normalized) * 255.0).clamp(0.0, 255.0) as u8;
 
-        // --- ORGANIC WATER & COASTLINES ---
-        if final_elevation < -0.2 {
-            cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
+        let variant = rng.random_range(0..4);
 
-            let depth_normalized = ((-0.2 - final_elevation) * 5.0).clamp(0.0, 1.0);
-            let state = if depth_normalized > 0.6 {
-                255
-            } else if depth_normalized > 0.3 {
-                128
-            } else {
-                64
-            };
-
-            let mut fluid_pixel = Self::liquid_pixel(MaterialId::LIQUID_WATER, 0);
-            fluid_pixel.state = state;
-            cell.fluid = fluid_pixel;
-
-            return cell;
-        }
-
-        // --- NATURAL BEACHES ---
-        if final_elevation < -0.15 {
-            cell.terrain = Self::solid_pixel(MaterialId::LOOSE_SAND, variant);
-            return cell;
-        }
-
-        // --- PER-CELL LAND BIOMES ---
-        // Utilize the moisture noise for macro-biome separation.
-        // Detail noise adds slight jitter to the border so it isn't completely smooth.
-        let final_moisture = moisture + (detail_noise * 0.1);
-
-        let material = if final_moisture > -0.15 {
-            MaterialId::ORGANIC_FOLIAGE
-        } else {
-            MaterialId::LOOSE_SAND
-        };
-
-        cell.terrain = Self::solid_pixel(material, variant);
-
-        // Both Sand and Grass spawn with initial cellular strength
-        if material == MaterialId::ORGANIC_FOLIAGE || material == MaterialId::LOOSE_SAND {
-            cell.terrain.state = rng.random_range(5..=10);
-        }
-
-        cell
-    }
-
-    #[inline(always)]
-    fn solid_pixel(material: MaterialId, variant: u8) -> Pixel {
-        Pixel {
-            material,
+        // Set Base Terrain
+        cell.terrain = Pixel {
+            material: MaterialId::SOLID_STONE,
             state: 0,
             variant,
             flags: PixelFlags::IS_SOLID,
-        }
-    }
+        };
 
-    #[inline(always)]
-    fn liquid_pixel(material: MaterialId, variant: u8) -> Pixel {
-        Pixel {
-            material,
-            state: 0,
-            variant,
+        // Set Atmospheric Pressure (The invisible weight crushing the terrain)
+        cell.atmosphere = Pixel {
+            material: MaterialId::GAS_STEAM, // Doesn't render visibly in the current shader, but holds the data
+            state: gas_pressure,
+            variant: 0,
             flags: PixelFlags::NONE,
+        };
+
+        // Biomes generated based on atmospheric pressure
+        if gas_pressure > 160 {
+            // DEEP CRATER: Fill it with water
+            let fluid_depth = gas_pressure - 160;
+            cell.fluid = Pixel {
+                material: MaterialId::LIQUID_WATER,
+                state: fluid_depth,
+                variant: rng.random_range(0..2),
+                flags: PixelFlags::NONE,
+            };
+            cell.terrain.material = MaterialId::LOOSE_SAND;
+        } else if gas_pressure > 140 {
+            // COASTLINE / SHALLOWS
+            cell.terrain.material = MaterialId::LOOSE_SAND;
+        } else {
+            // HIGHLANDS / MOUNTAINS
+            cell.terrain.material = MaterialId::ORGANIC_FOLIAGE;
+            cell.terrain.state = rng.random_range(0..10); // Plant aging
         }
+
+        cell
     }
 }
