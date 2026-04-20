@@ -16,9 +16,18 @@ use monarch_engine::prelude::ActiveWorldGrid;
 
 pub struct WorldRenderPlugin;
 
+/// Tracks the dimensions of the last-built voxel grid mesh so we can detect
+/// when the grid is resized and the mesh needs to be rebuilt.
+#[derive(Resource, Default)]
+struct GridMeshSize {
+    width: i32,
+    height: i32,
+}
+
 impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WorldMaterial>::default())
+            .init_resource::<GridMeshSize>()
             .add_systems(Startup, setup_rendering)
             .add_systems(Update, sync_grid_rendering);
     }
@@ -176,6 +185,7 @@ fn sync_grid_rendering(
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut mesh_size: ResMut<GridMeshSize>,
     mut grid_query: Query<
         (&mut Transform, &mut Mesh3d, &MeshMaterial3d<WorldMaterial>),
         With<WorldGridMarker>,
@@ -202,13 +212,18 @@ fn sync_grid_rendering(
     transform.translation.x = grid.window_origin.x as f32;
     transform.translation.z = grid.window_origin.y as f32;
 
-    // Only rebuild the static geometry when the grid dimensions change.
-    if mesh3d.0.id() == Handle::<Mesh>::default().id()
+    // Rebuild the static geometry when the grid dimensions change or the mesh
+    // is missing / empty (e.g. first frame or after a resize event).
+    let dims_changed = mesh_size.width != grid.width || mesh_size.height != grid.height;
+    if dims_changed
+        || mesh3d.0.id() == Handle::<Mesh>::default().id()
         || meshes
             .get(&mesh3d.0)
             .map_or(true, |m| m.count_vertices() == 0)
     {
         mesh3d.0 = meshes.add(build_voxel_grid(grid.width as u32, grid.height as u32));
+        mesh_size.width = grid.width;
+        mesh_size.height = grid.height;
     }
 
     // Update cell data in-place by writing directly into the buffer's byte vec.
@@ -295,13 +310,16 @@ fn build_voxel_grid(width: u32, height: u32) -> Mesh {
                         layer_ids.push(layer);
                     }
 
+                    // CCW winding from outside the cube (Bevy/wgpu default: CCW = front face).
+                    // Previous order (0,1,2, 0,2,3) was CW from outside, causing all faces to
+                    // be back-facing and culled, producing the "open cube" pyramid artifact.
                     indices.extend_from_slice(&[
                         index_offset,
+                        index_offset + 2,
                         index_offset + 1,
-                        index_offset + 2,
                         index_offset,
-                        index_offset + 2,
                         index_offset + 3,
+                        index_offset + 2,
                     ]);
                     index_offset += 4;
                 }

@@ -94,6 +94,7 @@ pub fn handle_simulation_resize(
     mut grid: ResMut<ActiveWorldGrid>,
     mut store: ResMut<WorldStore>,
     mut unload_writer: MessageWriter<ChunkUnloadEvent>,
+    mut load_writer: MessageWriter<ChunkLoadRequest>,
 ) {
     for event in reader.read() {
         let center = ChunkKey::from_dvec3(focus.position);
@@ -146,17 +147,28 @@ pub fn handle_simulation_resize(
 
         grid.resize_in_place(new_width, new_height, new_origin);
 
-        // RESTORE: Repopulate the grid (cleaner slice passing)
-        for (key, chunk_data) in store.active_chunks.iter() {
-            grid.load_chunk(*key, &chunk_data.cells);
+        // RESTORE + PROMOTE: Repopulate the new grid from every available source
+        for key in new_active_view.iter() {
+            if store.active_chunks.contains_key(&key) {
+                // Already retained (was in both old and new view, never evicted)
+                let cells = store.active_chunks[&key].cells.clone();
+                grid.load_chunk(key, &cells);
+            } else if let Some(chunk_data) = store.cached_chunks.pop(&key) {
+                // Was evicted to cache during this resize or previously
+                grid.load_chunk(key, &chunk_data.cells);
+                store.active_chunks.insert(key, chunk_data);
+            } else if store.pending_requests.insert(key) {
+                // Cold miss — request from disk/generator
+                load_writer.write(ChunkLoadRequest { key });
+            }
         }
 
         // Update view
         manager.active_radius_x = event.new_active_radius_x;
         manager.active_radius_y = event.new_active_radius_y;
 
-        // Trigger recenter and batch fetch
-        manager.active_view = None;
+        // View is fully populated — set it so manage_chunk_window knows the current state
+        manager.active_view = Some(new_active_view);
         manager.preload_view = None;
     }
 }
