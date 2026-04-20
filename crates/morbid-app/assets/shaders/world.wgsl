@@ -8,9 +8,9 @@ struct WorldWindow {
     elevation_scale: f32,
 }
 
-@group(2) @binding(10) var<storage, read> world_buffer: array<u32>;
-@group(2) @binding(11) var<storage, read> palette: array<vec4<f32>>;
-@group(2) @binding(12) var<uniform> window: WorldWindow;
+@group(1) @binding(10) var<storage, read> world_buffer: array<u32>;
+@group(1) @binding(11) var<storage, read> palette: array<vec4<f32>>;
+@group(1) @binding(12) var<uniform> window: WorldWindow;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,

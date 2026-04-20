@@ -27,11 +27,10 @@ pub const ATTRIBUTE_LAYER: MeshVertexAttribute =
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct WorldMaterial {
-    // Explicitly grant the Vertex shader permission to read the memory for physical displacement
-    #[storage(10, read_only, visibility(vertex, fragment))]
+    #[storage(10, read_only)]
     pub grid_buffer: Handle<ShaderStorageBuffer>,
 
-    #[storage(11, read_only, visibility(vertex, fragment))]
+    #[storage(11, read_only)]
     pub palette_buffer: Handle<ShaderStorageBuffer>,
 
     #[uniform(12)]
