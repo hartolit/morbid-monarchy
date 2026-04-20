@@ -32,7 +32,7 @@ impl Plugin for MonarchEnginePlugin {
                     handle_chunk_loaded,
                 )
                     .chain(),
-            )
-            .add_systems(Update, (simulate_biology,));
+            );
+        //.add_systems(Update, (simulate_biology,));
     }
 }

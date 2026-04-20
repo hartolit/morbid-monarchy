@@ -1,7 +1,14 @@
 use bevy::prelude::*;
 use monarch_engine::prelude::*;
 
-use crate::runtime::{input::*, persistence, render::WorldRenderPlugin};
+use crate::runtime::{
+    input::{
+        apply_camera_transform, handle_resize_input, orbit_camera, player_movement,
+        setup_focal_point, sync_world_focus, zoom_camera,
+    },
+    persistence,
+    render::WorldRenderPlugin,
+};
 
 mod runtime;
 
@@ -19,7 +26,6 @@ pub fn run() {
                     }),
                     ..default()
                 })
-                // Prevents anti-aliasing blur on textures
                 .set(ImagePlugin::default_nearest()),
         )
         .add_plugins(MonarchEnginePlugin)
@@ -32,18 +38,33 @@ pub fn run() {
             TimerMode::Repeating,
         )))
         .add_systems(Startup, setup_focal_point)
+        // Camera: pan mutates anchor, orbit/zoom mutate angles/distance,
+        // then the single transform-derivation pass runs last in this group.
         .add_systems(
             Update,
             (
                 player_movement,
-                handle_resize_input,
+                orbit_camera,
+                zoom_camera,
+                apply_camera_transform,
+            )
+                .chain(),
+        )
+        // Engine sync: runs after the camera group has settled.
+        .add_systems(
+            Update,
+            (sync_world_focus, handle_resize_input).after(apply_camera_transform),
+        )
+        // Persistence: independent of camera, runs every frame.
+        .add_systems(
+            Update,
+            (
                 persistence::handle_load_requests,
                 persistence::handle_unload_events,
                 persistence::process_save_queue,
                 persistence::emergency_flush_on_exit,
                 persistence::poll_load_tasks,
                 persistence::poll_save_tasks,
-                sync_world_focus,
             ),
         )
         .run();

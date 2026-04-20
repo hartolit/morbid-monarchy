@@ -51,10 +51,11 @@ impl Material for WorldMaterial {
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Opaque
     }
+
     // The custom vertex shader displaces geometry in ways the standard prepass
-    // shaders cannot replicate. Disabling prevents the pipeline validator from
-    // trying to match our VertexOutput against the default prepass fragment
-    // interface (which expects @location(2) uv: vec2<f32> among others).
+    // shaders cannot replicate — disabling prevents the pipeline validator from
+    // matching our sparse VertexOutput against the default prepass fragment
+    // interface which expects a full UV output at @location(2).
     fn enable_prepass() -> bool {
         false
     }
@@ -68,6 +69,9 @@ impl Material for WorldMaterial {
         layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        // Declare exactly the four attributes the shader reads. Without this,
+        // Bevy's default layout omits the custom attributes and the pipeline
+        // validator rejects Location[10] / Location[11] as unsatisfied inputs.
         let vertex_layout = layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
             Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
@@ -102,10 +106,9 @@ fn setup_rendering(
         RenderAssetUsages::all(),
     ));
 
-    // Initialize Palette (Maps MaterialId 0..255 to RGBA base colors)
+    // Palette: maps MaterialId (0..255) to a linear RGBA base colour.
     let mut palette = vec![[0.0f32; 4]; 256];
 
-    // System
     palette[0] = [0.0, 0.0, 0.0, 0.0]; // EMPTY
     palette[255] = [0.0, 0.0, 0.0, 1.0]; // VOID
 
@@ -192,69 +195,95 @@ fn sync_grid_rendering(
     material.window.origin = Vec2::new(grid.window_origin.x as f32, grid.window_origin.y as f32);
     material.window.size = Vec2::new(grid.width as f32, grid.height as f32);
     material.window.head = Vec2::new(grid.buffer_head.x as f32, grid.buffer_head.y as f32);
-
-    // Physics Config
-    // TODO: expose these to a tuning Resource later
+    // TODO: expose h_max / elevation_scale to a typed tuning Resource.
     material.window.h_max = 50.0;
     material.window.elevation_scale = 0.15;
 
     transform.translation.x = grid.window_origin.x as f32;
     transform.translation.z = grid.window_origin.y as f32;
 
+    // Only rebuild the static geometry when the grid dimensions change.
     if mesh3d.0.id() == Handle::<Mesh>::default().id()
         || meshes
             .get(&mesh3d.0)
-            .map_or(false, |m| m.count_vertices() == 0)
+            .map_or(true, |m| m.count_vertices() == 0)
     {
         mesh3d.0 = meshes.add(build_voxel_grid(grid.width as u32, grid.height as u32));
     }
 
+    // Update cell data in-place by writing directly into the buffer's byte vec.
+    // This avoids allocating a new GPU buffer object every frame, which was the
+    // dominant cause of per-frame lag.
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
-        let bytes: &[u8] = bytemuck::cast_slice(&grid.cells);
-        *buffer = ShaderStorageBuffer::new(
-            bytes,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        );
+        let src: &[u8] = bytemuck::cast_slice(&grid.cells);
+        match &mut buffer.data {
+            Some(dst) => {
+                dst.resize(src.len(), 0);
+                dst.copy_from_slice(src);
+            }
+            slot => *slot = Some(src.to_vec()),
+        }
     }
 }
 
-/// Generates a static mesh containing 3 overlapping cubes (Terrain, Fluid, Surface) for every cell.
+/// Builds a static mesh of `width × height` cells, each with 3 layer-slabs
+/// (terrain, fluid, surface). Every slab is a unit cube; the vertex shader
+/// stretches and culls them at runtime from storage-buffer data.
+///
+/// Z is flipped relative to the grid row index so that row 0 (the engine's
+/// southern / minimum-Y edge) maps to the largest Z offset. This matches
+/// Bevy's right-hand Y-up convention where a camera positioned at positive Z
+/// looking toward the origin sees the southern edge at the bottom of the screen.
 fn build_voxel_grid(width: u32, height: u32) -> Mesh {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut indices = Vec::new();
-    let mut cell_indices = Vec::new();
-    let mut layers = Vec::new();
+    let cell_count = (width * height) as usize;
+    let verts_per_face = 4usize;
+    let faces_per_cube = 6usize;
+    let layers = 3usize;
+    let total_verts = cell_count * faces_per_cube * verts_per_face * layers;
+    let total_indices = cell_count * faces_per_cube * 6 * layers;
 
-    let mut index_offset = 0;
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
+    let mut indices: Vec<u32> = Vec::with_capacity(total_indices);
+    let mut cell_indices: Vec<u32> = Vec::with_capacity(total_verts);
+    let mut layer_ids: Vec<u32> = Vec::with_capacity(total_verts);
 
-    let v_pos = [
-        [0., 0., 0.],
-        [1., 0., 0.],
-        [1., 1., 0.],
-        [0., 1., 0.],
-        [0., 0., 1.],
-        [1., 0., 1.],
-        [1., 1., 1.],
-        [0., 1., 1.],
+    let mut index_offset: u32 = 0;
+
+    // Unit-cube corner positions, indexed 0..7.
+    let v_pos: [[f32; 3]; 8] = [
+        [0., 0., 0.], // 0 front-bottom-left
+        [1., 0., 0.], // 1 front-bottom-right
+        [1., 1., 0.], // 2 front-top-right
+        [0., 1., 0.], // 3 front-top-left
+        [0., 0., 1.], // 4 back-bottom-left
+        [1., 0., 1.], // 5 back-bottom-right
+        [1., 1., 1.], // 6 back-top-right
+        [0., 1., 1.], // 7 back-top-left
     ];
-    let faces = [
-        (0, 1, 2, 3, [0., 0., -1.]), // Front
-        (5, 4, 7, 6, [0., 0., 1.]),  // Back
-        (3, 2, 6, 7, [0., 1., 0.]),  // Top
-        (4, 5, 1, 0, [0., -1., 0.]), // Bottom
-        (1, 5, 6, 2, [1., 0., 0.]),  // Right
-        (4, 0, 3, 7, [-1., 0., 0.]), // Left
+
+    // Each face: corner indices in CCW winding order + outward normal.
+    let face_defs: [(usize, usize, usize, usize, [f32; 3]); 6] = [
+        (0, 1, 2, 3, [0., 0., -1.]), // Front  (-Z)
+        (5, 4, 7, 6, [0., 0., 1.]),  // Back   (+Z)
+        (3, 2, 6, 7, [0., 1., 0.]),  // Top    (+Y)
+        (4, 5, 1, 0, [0., -1., 0.]), // Bottom (-Y)
+        (1, 5, 6, 2, [1., 0., 0.]),  // Right  (+X)
+        (4, 0, 3, 7, [-1., 0., 0.]), // Left   (-X)
     ];
 
     for layer in 0..3u32 {
         for y in 0..height {
             for x in 0..width {
-                let cell_idx = y * width + x;
+                // cell_index encodes the logical (x, y) grid position for the shader.
+                let cell_idx: u32 = y * width + x;
                 let offset_x = x as f32;
-                let offset_z = y as f32;
+                // Flip Z: engine row 0 is the southern (minimum-Y) edge.
+                // The camera sits at positive Z looking toward -Z, so row 0
+                // must occupy the largest Z to appear at the screen bottom.
+                let offset_z = (height - 1 - y) as f32;
 
-                for (a, b, c, d, n) in faces {
+                for (a, b, c, d, n) in face_defs {
                     positions.push([v_pos[a][0] + offset_x, v_pos[a][1], v_pos[a][2] + offset_z]);
                     positions.push([v_pos[b][0] + offset_x, v_pos[b][1], v_pos[b][2] + offset_z]);
                     positions.push([v_pos[c][0] + offset_x, v_pos[c][1], v_pos[c][2] + offset_z]);
@@ -263,7 +292,7 @@ fn build_voxel_grid(width: u32, height: u32) -> Mesh {
                     for _ in 0..4 {
                         normals.push(n);
                         cell_indices.push(cell_idx);
-                        layers.push(layer);
+                        layer_ids.push(layer);
                     }
 
                     indices.extend_from_slice(&[
@@ -284,7 +313,7 @@ fn build_voxel_grid(width: u32, height: u32) -> Mesh {
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(ATTRIBUTE_CELL_INDEX, cell_indices);
-    mesh.insert_attribute(ATTRIBUTE_LAYER, layers);
+    mesh.insert_attribute(ATTRIBUTE_LAYER, layer_ids);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
