@@ -1,9 +1,13 @@
+use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::{
     asset::RenderAssetUsages,
-    mesh::{Indices, MeshVertexAttribute, PrimitiveTopology},
+    mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology},
     prelude::*,
     render::{
-        render_resource::{AsBindGroup, ShaderType, VertexFormat},
+        render_resource::{
+            AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+            VertexFormat,
+        },
         storage::ShaderStorageBuffer,
     },
     shader::ShaderRef,
@@ -27,13 +31,13 @@ pub const ATTRIBUTE_LAYER: MeshVertexAttribute =
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct WorldMaterial {
-    #[storage(10, read_only)]
+    #[storage(10, read_only, visibility(vertex))]
     pub grid_buffer: Handle<ShaderStorageBuffer>,
 
-    #[storage(11, read_only)]
+    #[storage(11, read_only, visibility(vertex))]
     pub palette_buffer: Handle<ShaderStorageBuffer>,
 
-    #[uniform(12)]
+    #[uniform(12, visibility(vertex))]
     pub window: WorldWindowUniform,
 }
 
@@ -46,6 +50,32 @@ impl Material for WorldMaterial {
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Opaque
+    }
+    // The custom vertex shader displaces geometry in ways the standard prepass
+    // shaders cannot replicate. Disabling prevents the pipeline validator from
+    // trying to match our VertexOutput against the default prepass fragment
+    // interface (which expects @location(2) uv: vec2<f32> among others).
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        let vertex_layout = layout.0.get_layout(&[
+            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+            ATTRIBUTE_CELL_INDEX.at_shader_location(10),
+            ATTRIBUTE_LAYER.at_shader_location(11),
+        ])?;
+        descriptor.vertex.buffers = vec![vertex_layout];
+        Ok(())
     }
 }
 
