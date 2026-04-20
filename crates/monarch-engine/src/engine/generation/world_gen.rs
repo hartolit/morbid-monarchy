@@ -71,18 +71,15 @@ impl WorldGenerator {
             flags: PixelFlags::IS_SOLID,
         };
 
-        // Set Atmospheric Pressure (The invisible weight crushing the terrain)
-        cell.atmosphere = Pixel {
-            material: MaterialId::GAS_STEAM, // Doesn't render visibly in the current shader, but holds the data
-            state: gas_pressure,
-            variant: 0,
-            flags: PixelFlags::NONE,
-        };
+        let mut final_atmos = gas_pressure;
 
         // Biomes generated based on atmospheric pressure
         if gas_pressure > 160 {
             // DEEP CRATER: Fill it with water
             let fluid_depth = gas_pressure - 160;
+
+            final_atmos = 160;
+
             cell.fluid = Pixel {
                 material: MaterialId::LIQUID_WATER,
                 state: fluid_depth,
@@ -98,6 +95,14 @@ impl WorldGenerator {
             cell.terrain.material = MaterialId::ORGANIC_FOLIAGE;
             cell.terrain.state = rng.random_range(0..10); // Plant aging
         }
+
+        // Set Atmospheric Pressure AFTER biome logic has calculated displacement
+        cell.atmosphere = Pixel {
+            material: MaterialId::GAS_STEAM,
+            state: final_atmos,
+            variant: 0,
+            flags: PixelFlags::NONE,
+        };
 
         cell
     }

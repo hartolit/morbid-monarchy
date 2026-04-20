@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::{simulate_biology, simulate_water},
+    simulation::{WaterSimulationConfig, simulate_biology},
     world::{
         ChunkManager, WorldFocus, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
         handle_simulation_resize, manage_chunk_window,
@@ -19,6 +19,7 @@ impl Plugin for MonarchEnginePlugin {
         app.init_resource::<WorldFocus>()
             .init_resource::<ChunkManager>()
             .init_resource::<WorldStore>()
+            .init_resource::<WaterSimulationConfig>()
             .insert_resource(ActiveWorldGrid::default())
             .add_message::<ChunkLoadRequest>()
             .add_message::<ChunkLoadedEvent>()
@@ -33,6 +34,6 @@ impl Plugin for MonarchEnginePlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (simulate_water,));
+            .add_systems(Update, (simulate_biology,));
     }
 }
