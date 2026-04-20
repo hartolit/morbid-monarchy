@@ -41,16 +41,22 @@ struct WorldWindow {
 //   6  = Surface top cap   (XZ quad at y = terrain + fluid_depth + 1, normal +Y)
 //
 // Skirt (bridging) rule — for each of the 4 cardinal sides:
-//   neighbour_height = terrain height of the adjacent cell (toroidal lookup)
-//   y_lo = min(my_height, neighbour_height)
-//   y_hi = max(my_height, neighbour_height)
+//   neighbour_height = total visual height (terrain + fluid) of the adjacent cell
+//   y_lo = neighbour_height
+//   y_hi = my_height + fluid_depth (my total visual height)
+//
 //   The skirt quad spans y_lo → y_hi and is owned by whichever cell is TALLER.
-//   If my_height <= neighbour_height  → I am not taller → degenerate (hidden).
-//   If my_height >  neighbour_height  → I own this cliff face → draw it.
-//   When heights are equal → zero-height quad → zero area → culled by rasteriser.
+//   If y_hi <= y_lo  → I am not taller → degenerate (hidden).
+//   If y_hi >  y_lo  → I own this cliff face → draw it.
+//
+// Dynamic Material Swap:
+//   If the bottom of the exposed cliff sits entirely above my terrain floor
+//   (y_lo >= my_height), the cliff consists entirely of fluid. The shader
+//   dynamically swaps the texture from terrain to the fluid material to render
+//   seamless volumetric liquid walls.
 //
 // This guarantees every cliff face is drawn exactly once by the taller cell,
-// with that cell's terrain material, and there are never any gaps or z-fights.
+// sealing the geometry perfectly with no holes and no z-fighting.
 //
 // Decomposition:
 //   cell_index = vertex_index / VERTS_PER_CELL
@@ -62,20 +68,21 @@ const VERTS_PER_CELL: u32 = 42u;   // 7 slots × 6 verts
 
 // ---------------------------------------------------------------------------
 // Helper: toroidal buffer index for an arbitrary logical grid cell (cx, cy).
-// Clamps cx/cy to the grid — edge cells treat out-of-bounds as height 0.
+// Returns the TOTAL visual height (terrain floor + fluid depth).
 // ---------------------------------------------------------------------------
-fn terrain_height_at(cx: i32, cy: i32, grid_w: i32, grid_h: i32, scale: f32, h_max: f32) -> f32 {
-    // Edge cells: no neighbour exists outside the active window → treat as h=0
-    // so the border skirts always draw (the edge cliff is always visible).
+fn visual_height_at(cx: i32, cy: i32, grid_w: i32, grid_h: i32, scale: f32, h_max: f32) -> f32 {
     if cx < 0 || cx >= grid_w || cy < 0 || cy >= grid_h {
         return 0.0;
     }
     let wx = ((cx + i32(window.head.x)) % grid_w + grid_w) % grid_w;
     let wy = ((cy + i32(window.head.y)) % grid_h + grid_h) % grid_h;
     let idx = u32(wy * grid_w + wx);
+
     let atmos_state = f32((world_buffer[idx * 4u + 2u] >> 8u) & 0xFFu);
     let fluid_state = f32((world_buffer[idx * 4u + 1u] >> 8u) & 0xFFu);
-    return max(0.0, h_max - atmos_state * scale - fluid_state * scale);
+
+    let terrain_floor = max(0.0, h_max - atmos_state * scale - fluid_state * scale);
+    return terrain_floor + (fluid_state * scale);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,29 +189,19 @@ fn vertex(in: VertexInput) -> VertexOutput {
         }
 
         // -------------------------------------------------------------------
-        // Slot 1 — Front skirt  (-Z neighbour, i.e. cell_y - 1)
-        //
-        // In engine space, decreasing cell_y means moving north (screen top).
-        // After Z-flip: cell_y-1 renders at offset_z+1 (further from camera).
-        // This cell's -Z face sits at local z=0.
-        //
-        // We own this cliff only when my_height > neighbour_height.
-        // The quad spans from neighbour_height (bottom) to my_height (top).
-        // Normal: -Z (outward from this cell's front face).
-        //
-        // CCW from -Z outside:
-        //   tri0: (0, y_lo, 0), (0, y_hi, 0), (1, y_hi, 0)
-        //   tri1: (0, y_lo, 0), (1, y_hi, 0), (1, y_lo, 0)
+        // Slot 1 — Front skirt (-Z neighbour, cell_y + 1)
         // -------------------------------------------------------------------
         case 1u: {
+            let nb_vis = visual_height_at(cell_x, cell_y + 1, grid_w, grid_h, scale, window.h_max);
+            let y_lo = nb_vis;
+            let y_hi = my_height + fluid_depth;
+
             active_pixel = cell_terrain;
-            normal = vec3<f32>(0.0, 0.0, -1.0);
+            if y_lo >= my_height && fluid_mat != 0u { active_pixel = cell_fluid; }
+            let mat = active_pixel & 0xFFu;
 
-            let nb_height = terrain_height_at(cell_x, cell_y + 1, grid_w, grid_h, scale, window.h_max);
-            let y_lo = nb_height;
-            let y_hi = my_height;
-
-            if terrain_mat != 0u && terrain_mat != 255u && y_hi > y_lo {
+            if mat != 0u && mat != 255u && y_hi > y_lo {
+                normal = vec3<f32>(0.0, 0.0, -1.0);
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(0.0, y_lo, 0.0); }
@@ -219,25 +216,19 @@ fn vertex(in: VertexInput) -> VertexOutput {
         }
 
         // -------------------------------------------------------------------
-        // Slot 2 — Back skirt  (+Z neighbour, i.e. cell_y + 1)
-        //
-        // This cell's +Z face sits at local z=1.
-        // We own this cliff only when my_height > neighbour_height.
-        // Normal: +Z.
-        //
-        // CCW from +Z outside (reverse X):
-        //   tri0: (1, y_lo, 1), (1, y_hi, 1), (0, y_hi, 1)
-        //   tri1: (1, y_lo, 1), (0, y_hi, 1), (0, y_lo, 1)
+        // Slot 2 — Back skirt (+Z neighbour, cell_y - 1)
         // -------------------------------------------------------------------
         case 2u: {
+            let nb_vis = visual_height_at(cell_x, cell_y - 1, grid_w, grid_h, scale, window.h_max);
+            let y_lo = nb_vis;
+            let y_hi = my_height + fluid_depth;
+
             active_pixel = cell_terrain;
-            normal = vec3<f32>(0.0, 0.0, 1.0);
+            if y_lo >= my_height && fluid_mat != 0u { active_pixel = cell_fluid; }
+            let mat = active_pixel & 0xFFu;
 
-            let nb_height = terrain_height_at(cell_x, cell_y - 1, grid_w, grid_h, scale, window.h_max);
-            let y_lo = nb_height;
-            let y_hi = my_height;
-
-            if terrain_mat != 0u && terrain_mat != 255u && y_hi > y_lo {
+            if mat != 0u && mat != 255u && y_hi > y_lo {
+                normal = vec3<f32>(0.0, 0.0, 1.0);
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(1.0, y_lo, 1.0); }
@@ -252,25 +243,19 @@ fn vertex(in: VertexInput) -> VertexOutput {
         }
 
         // -------------------------------------------------------------------
-        // Slot 3 — Right skirt  (+X neighbour, i.e. cell_x + 1)
-        //
-        // This cell's +X face sits at local x=1.
-        // We own this cliff only when my_height > neighbour_height.
-        // Normal: +X.
-        //
-        // CCW from +X outside:
-        //   tri0: (1, y_lo, 0), (1, y_hi, 0), (1, y_hi, 1)
-        //   tri1: (1, y_lo, 0), (1, y_hi, 1), (1, y_lo, 1)
+        // Slot 3 — Right skirt (+X neighbour, cell_x + 1)
         // -------------------------------------------------------------------
         case 3u: {
+            let nb_vis = visual_height_at(cell_x + 1, cell_y, grid_w, grid_h, scale, window.h_max);
+            let y_lo = nb_vis;
+            let y_hi = my_height + fluid_depth;
+
             active_pixel = cell_terrain;
-            normal = vec3<f32>(1.0, 0.0, 0.0);
+            if y_lo >= my_height && fluid_mat != 0u { active_pixel = cell_fluid; }
+            let mat = active_pixel & 0xFFu;
 
-            let nb_height = terrain_height_at(cell_x + 1, cell_y, grid_w, grid_h, scale, window.h_max);
-            let y_lo = nb_height;
-            let y_hi = my_height;
-
-            if terrain_mat != 0u && terrain_mat != 255u && y_hi > y_lo {
+            if mat != 0u && mat != 255u && y_hi > y_lo {
+                normal = vec3<f32>(1.0, 0.0, 0.0);
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(1.0, y_lo, 0.0); }
@@ -285,25 +270,19 @@ fn vertex(in: VertexInput) -> VertexOutput {
         }
 
         // -------------------------------------------------------------------
-        // Slot 4 — Left skirt  (-X neighbour, i.e. cell_x - 1)
-        //
-        // This cell's -X face sits at local x=0.
-        // We own this cliff only when my_height > neighbour_height.
-        // Normal: -X.
-        //
-        // CCW from -X outside (reverse Z):
-        //   tri0: (0, y_lo, 1), (0, y_hi, 1), (0, y_hi, 0)
-        //   tri1: (0, y_lo, 1), (0, y_hi, 0), (0, y_lo, 0)
+        // Slot 4 — Left skirt (-X neighbour, cell_x - 1)
         // -------------------------------------------------------------------
         case 4u: {
+            let nb_vis = visual_height_at(cell_x - 1, cell_y, grid_w, grid_h, scale, window.h_max);
+            let y_lo = nb_vis;
+            let y_hi = my_height + fluid_depth;
+
             active_pixel = cell_terrain;
-            normal = vec3<f32>(-1.0, 0.0, 0.0);
+            if y_lo >= my_height && fluid_mat != 0u { active_pixel = cell_fluid; }
+            let mat = active_pixel & 0xFFu;
 
-            let nb_height = terrain_height_at(cell_x - 1, cell_y, grid_w, grid_h, scale, window.h_max);
-            let y_lo = nb_height;
-            let y_hi = my_height;
-
-            if terrain_mat != 0u && terrain_mat != 255u && y_hi > y_lo {
+            if mat != 0u && mat != 255u && y_hi > y_lo {
+                normal = vec3<f32>(-1.0, 0.0, 0.0);
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(0.0, y_lo, 1.0); }

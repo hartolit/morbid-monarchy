@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::simulate_biology,
+    simulation::old_biology,
     world::{
         ChunkManager, WorldFocus, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
         handle_simulation_resize, manage_chunk_window,
@@ -32,7 +32,7 @@ impl Plugin for MonarchEnginePlugin {
                     handle_chunk_loaded,
                 )
                     .chain(),
-            );
-        //.add_systems(Update, (simulate_biology,));
+            )
+            .add_systems(Update, (old_biology,));
     }
 }
