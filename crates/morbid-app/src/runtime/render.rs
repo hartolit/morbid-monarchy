@@ -215,7 +215,10 @@ fn sync_grid_rendering(
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_size: ResMut<GridMeshSize>,
-    mut grid_query: Query<(&mut Mesh3d, &MeshMaterial3d<WorldMaterial>), With<WorldGridMarker>>,
+    mut grid_query: Query<
+        (&mut Transform, &mut Mesh3d, &MeshMaterial3d<WorldMaterial>),
+        With<WorldGridMarker>,
+    >,
 ) {
     // Use bypass_change_detection for all reads so that merely observing the
     // grid fields does not mark the resource as changed and re-trigger Bevy's
@@ -224,9 +227,10 @@ fn sync_grid_rendering(
     // explicitly clear cells_dirty — that is the one intentional mutation.
     let grid_ref = grid.bypass_change_detection();
 
-    let Ok((mut mesh3d, material_handle)) = grid_query.single_mut() else {
+    let Ok((mut transform, mut mesh3d, material_handle)) = grid_query.single_mut() else {
         return;
     };
+
     let Some(material) = materials.get_mut(&material_handle.0) else {
         return;
     };
@@ -286,6 +290,11 @@ fn sync_grid_rendering(
             slot => *slot = Some(src.to_vec()),
         }
     }
+
+    // Snap the mesh to the world origin
+    // Engine (+Y) renders at Bevy (-Z)
+    transform.translation.x = grid_ref.window_origin.x as f32;
+    transform.translation.z = -(grid_ref.window_origin.y as f32) - (grid_ref.height as f32) + 1.0;
 
     // Acknowledge the upload: clear the dirty flag.
     // This is the only place we take a true &mut — it goes through DerefMut

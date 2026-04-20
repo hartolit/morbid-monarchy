@@ -171,11 +171,11 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 let y = my_height;
                 switch vert {
                     case 0u: { p = vec3<f32>(0.0, y, 0.0); }
-                    case 1u: { p = vec3<f32>(1.0, y, 0.0); }
+                    case 1u: { p = vec3<f32>(0.0, y, 1.0); }
                     case 2u: { p = vec3<f32>(1.0, y, 1.0); }
                     case 3u: { p = vec3<f32>(0.0, y, 0.0); }
                     case 4u: { p = vec3<f32>(1.0, y, 1.0); }
-                    default: { p = vec3<f32>(0.0, y, 1.0); }
+                    default: { p = vec3<f32>(1.0, y, 0.0); }
                 }
                 local_pos = p + vec3<f32>(offset_x, 0.0, offset_z);
             }
@@ -200,7 +200,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             active_pixel = cell_terrain;
             normal = vec3<f32>(0.0, 0.0, -1.0);
 
-            let nb_height = terrain_height_at(cell_x, cell_y - 1, grid_w, grid_h, scale, window.h_max);
+            let nb_height = terrain_height_at(cell_x, cell_y + 1, grid_w, grid_h, scale, window.h_max);
             let y_lo = nb_height;
             let y_hi = my_height;
 
@@ -233,7 +233,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             active_pixel = cell_terrain;
             normal = vec3<f32>(0.0, 0.0, 1.0);
 
-            let nb_height = terrain_height_at(cell_x, cell_y + 1, grid_w, grid_h, scale, window.h_max);
+            let nb_height = terrain_height_at(cell_x, cell_y - 1, grid_w, grid_h, scale, window.h_max);
             let y_lo = nb_height;
             let y_hi = my_height;
 
@@ -331,11 +331,11 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(0.0, y, 0.0); }
-                    case 1u: { p = vec3<f32>(1.0, y, 0.0); }
+                    case 1u: { p = vec3<f32>(0.0, y, 1.0); }
                     case 2u: { p = vec3<f32>(1.0, y, 1.0); }
                     case 3u: { p = vec3<f32>(0.0, y, 0.0); }
                     case 4u: { p = vec3<f32>(1.0, y, 1.0); }
-                    default: { p = vec3<f32>(0.0, y, 1.0); }
+                    default: { p = vec3<f32>(1.0, y, 0.0); }
                 }
                 local_pos = p + vec3<f32>(offset_x, 0.0, offset_z);
             }
@@ -355,11 +355,11 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 var p: vec3<f32>;
                 switch vert {
                     case 0u: { p = vec3<f32>(0.0, y, 0.0); }
-                    case 1u: { p = vec3<f32>(1.0, y, 0.0); }
+                    case 1u: { p = vec3<f32>(0.0, y, 1.0); }
                     case 2u: { p = vec3<f32>(1.0, y, 1.0); }
                     case 3u: { p = vec3<f32>(0.0, y, 0.0); }
                     case 4u: { p = vec3<f32>(1.0, y, 1.0); }
-                    default: { p = vec3<f32>(0.0, y, 1.0); }
+                    default: { p = vec3<f32>(1.0, y, 0.0); }
                 }
                 local_pos = p + vec3<f32>(offset_x, 0.0, offset_z);
             }

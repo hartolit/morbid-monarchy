@@ -90,22 +90,14 @@ pub fn setup_focal_point(mut commands: Commands) {
 }
 
 /// Runs after `setup_focal_point` to reposition the camera anchor at the
-/// centre of the rendered world grid.
-///
-/// The shader places cell (x, y) at world-space offset:
-///   X = cell_x              (0 .. width-1)
-///   Z = grid_h - 1 - cell_y (0 .. height-1)
-///
-/// So the grid occupies X ∈ [0, width] and Z ∈ [0, height], and the centre
-/// is at (width/2, 0, height/2).
-pub fn center_camera_on_grid(grid: Res<ActiveWorldGrid>, mut query: Query<&mut FocalPoint>) {
+/// centre of the focal point.
+pub fn center_camera_on_grid(mut query: Query<&mut FocalPoint>) {
     let Ok(mut focal) = query.single_mut() else {
         return;
     };
 
-    let cx = grid.width as f32 / 2.0;
-    let cz = grid.height as f32 / 2.0;
-    focal.anchor = Vec3::new(cx, 0.0, cz);
+    let half_chunk = CHUNK_SIZE as f32 / 2.0;
+    focal.anchor = Vec3::new(half_chunk, 0.0, -half_chunk);
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +245,7 @@ pub fn handle_resize_input(
 // ---------------------------------------------------------------------------
 
 pub fn sync_world_focus(target: Single<&FocalPoint>, mut focus: ResMut<WorldFocus>) {
-    // The engine cares about the anchor's XZ world position, not camera eye.
-    focus.position = target.anchor.as_dvec3();
+    // Map the Camera's 3D XZ plane to the Engine's 2D XY grid
+    // Bevy's -Z direction is Engine's +Y direction (North)
+    focus.position = bevy::math::DVec3::new(target.anchor.x as f64, -target.anchor.z as f64, 0.0);
 }
