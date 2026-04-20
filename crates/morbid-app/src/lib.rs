@@ -3,8 +3,8 @@ use monarch_engine::prelude::*;
 
 use crate::runtime::{
     input::{
-        apply_camera_transform, handle_resize_input, orbit_camera, player_movement,
-        setup_focal_point, sync_world_focus, zoom_camera,
+        apply_camera_transform, center_camera_on_grid, handle_resize_input, orbit_camera,
+        player_movement, setup_focal_point, sync_world_focus, zoom_camera,
     },
     persistence,
     render::WorldRenderPlugin,
@@ -37,7 +37,7 @@ pub fn run() {
             2.0,
             TimerMode::Repeating,
         )))
-        .add_systems(Startup, setup_focal_point)
+        .add_systems(Startup, (setup_focal_point, center_camera_on_grid).chain())
         // Camera: pan mutates anchor, orbit/zoom mutate angles/distance,
         // then the single transform-derivation pass runs last in this group.
         .add_systems(

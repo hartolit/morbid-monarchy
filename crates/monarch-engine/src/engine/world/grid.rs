@@ -12,9 +12,14 @@ pub struct ActiveWorldGrid {
     pub width: i32,
     pub height: i32,
     pub cells: Vec<WorldCell>,
-    // The world coordinates of the bottom-left corner of the current active window.
+    /// The world coordinates of the bottom-left corner of the current active window.
     pub window_origin: IVec2,
     pub buffer_head: IVec2,
+    /// Set to `true` whenever actual cell data changes (chunk loaded, cell written,
+    /// grid resized). Cleared by the render system after it uploads the buffer to the
+    /// GPU. Window shifts do NOT set this flag — they only update `window_origin` and
+    /// `buffer_head`, which are cheap uniform values pushed every frame regardless.
+    pub cells_dirty: bool,
 }
 
 impl Default for ActiveWorldGrid {
@@ -46,6 +51,8 @@ impl ActiveWorldGrid {
             cells: vec![WorldCell::default(); size],
             window_origin: origin,
             buffer_head: IVec2::ZERO,
+            // Mark dirty on construction so the first render frame uploads initial data.
+            cells_dirty: true,
         }
     }
 
@@ -57,6 +64,10 @@ impl ActiveWorldGrid {
         )
     }
 
+    /// Advances the toroidal window anchor to a new world-space origin.
+    /// Only `window_origin` and `buffer_head` are mutated — cell data is
+    /// untouched and `cells_dirty` is NOT set. The render system propagates
+    /// these as a cheap uniform update every frame.
     #[inline(always)]
     pub fn shift_window(&mut self, new_origin: IVec2) {
         let delta = new_origin - self.window_origin;
@@ -77,13 +88,16 @@ impl ActiveWorldGrid {
         self.cells[self.get_index(world_pos)]
     }
 
+    /// Writes a single cell and marks the buffer dirty for re-upload.
     #[inline(always)]
     pub fn set_cell(&mut self, world_pos: IVec2, cell: WorldCell) {
         let index = self.get_index(world_pos);
         self.cells[index] = cell;
+        self.cells_dirty = true;
     }
 
     /// Injects a chunk's data from disk/RAM into the active grid.
+    /// Marks `cells_dirty` so the render system re-uploads the buffer.
     #[inline(always)]
     pub fn load_chunk(&mut self, chunk_key: ChunkKey, chunk_cells: &[WorldCell]) {
         debug_assert_eq!(chunk_cells.len(), CHUNK_CELL_COUNT);
@@ -101,6 +115,8 @@ impl ActiveWorldGrid {
                 chunk_idx += 1;
             }
         }
+
+        self.cells_dirty = true;
     }
 
     /// Extracts a chunk's data directly into an existing buffer. (Zero Allocation)
@@ -125,6 +141,7 @@ impl ActiveWorldGrid {
 
     /// Resizes the grid's underlying vector in-place and updates the math variables.
     /// WARNING: This changes the stride. Caller MUST extract data before calling this.
+    /// Marks `cells_dirty` because the entire buffer layout has changed.
     pub fn resize_in_place(&mut self, new_width: i32, new_height: i32, new_origin: IVec2) {
         let new_size = (new_width * new_height) as usize;
 
@@ -137,5 +154,6 @@ impl ActiveWorldGrid {
         self.height = new_height;
         self.window_origin = new_origin;
         self.buffer_head = IVec2::ZERO;
+        self.cells_dirty = true;
     }
 }

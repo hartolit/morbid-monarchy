@@ -89,6 +89,25 @@ pub fn setup_focal_point(mut commands: Commands) {
     ));
 }
 
+/// Runs after `setup_focal_point` to reposition the camera anchor at the
+/// centre of the rendered world grid.
+///
+/// The shader places cell (x, y) at world-space offset:
+///   X = cell_x              (0 .. width-1)
+///   Z = grid_h - 1 - cell_y (0 .. height-1)
+///
+/// So the grid occupies X ∈ [0, width] and Z ∈ [0, height], and the centre
+/// is at (width/2, 0, height/2).
+pub fn center_camera_on_grid(grid: Res<ActiveWorldGrid>, mut query: Query<&mut FocalPoint>) {
+    let Ok(mut focal) = query.single_mut() else {
+        return;
+    };
+
+    let cx = grid.width as f32 / 2.0;
+    let cz = grid.height as f32 / 2.0;
+    focal.anchor = Vec3::new(cx, 0.0, cz);
+}
+
 // ---------------------------------------------------------------------------
 // Systems
 // ---------------------------------------------------------------------------

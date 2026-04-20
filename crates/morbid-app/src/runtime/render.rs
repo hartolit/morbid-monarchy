@@ -1,12 +1,12 @@
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::{
     asset::RenderAssetUsages,
-    mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology},
+    mesh::{MeshVertexBufferLayoutRef, PrimitiveTopology},
     prelude::*,
     render::{
         render_resource::{
             AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
-            VertexFormat,
         },
         storage::ShaderStorageBuffer,
     },
@@ -15,14 +15,6 @@ use bevy::{
 use monarch_engine::prelude::ActiveWorldGrid;
 
 pub struct WorldRenderPlugin;
-
-/// Tracks the dimensions of the last-built voxel grid mesh so we can detect
-/// when the grid is resized and the mesh needs to be rebuilt.
-#[derive(Resource, Default)]
-struct GridMeshSize {
-    width: i32,
-    height: i32,
-}
 
 impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
@@ -33,10 +25,21 @@ impl Plugin for WorldRenderPlugin {
     }
 }
 
-pub const ATTRIBUTE_CELL_INDEX: MeshVertexAttribute =
-    MeshVertexAttribute::new("Vertex_Cell_Index", 10, VertexFormat::Uint32);
-pub const ATTRIBUTE_LAYER: MeshVertexAttribute =
-    MeshVertexAttribute::new("Vertex_Layer", 11, VertexFormat::Uint32);
+// ---------------------------------------------------------------------------
+// Resources
+// ---------------------------------------------------------------------------
+
+/// Tracks the cell dimensions of the last-built procedural mesh so we only
+/// rebuild it when the grid is actually resized (not on every chunk load).
+#[derive(Resource, Default)]
+struct GridMeshSize {
+    width: i32,
+    height: i32,
+}
+
+// ---------------------------------------------------------------------------
+// Material
+// ---------------------------------------------------------------------------
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct WorldMaterial {
@@ -61,10 +64,8 @@ impl Material for WorldMaterial {
         AlphaMode::Opaque
     }
 
-    // The custom vertex shader displaces geometry in ways the standard prepass
-    // shaders cannot replicate — disabling prevents the pipeline validator from
-    // matching our sparse VertexOutput against the default prepass fragment
-    // interface which expects a full UV output at @location(2).
+    // Disable prepasses: the custom vertex shader is incompatible with Bevy's
+    // standard prepass fragment interface (no UVs, non-standard clip-space math).
     fn enable_prepass() -> bool {
         false
     }
@@ -78,31 +79,45 @@ impl Material for WorldMaterial {
         layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        // Declare exactly the four attributes the shader reads. Without this,
-        // Bevy's default layout omits the custom attributes and the pipeline
-        // validator rejects Location[10] / Location[11] as unsatisfied inputs.
-        let vertex_layout = layout.0.get_layout(&[
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-            ATTRIBUTE_CELL_INDEX.at_shader_location(10),
-            ATTRIBUTE_LAYER.at_shader_location(11),
-        ])?;
+        // The procedural shader derives all geometry from @builtin(vertex_index).
+        // No custom vertex attributes are needed. We only bind POSITION so Bevy's
+        // pipeline validator sees a non-empty layout — the values are never read.
+        let vertex_layout = layout
+            .0
+            .get_layout(&[Mesh::ATTRIBUTE_POSITION.at_shader_location(0)])?;
         descriptor.vertex.buffers = vec![vertex_layout];
         Ok(())
     }
 }
 
+// ---------------------------------------------------------------------------
+// Uniform
+// ---------------------------------------------------------------------------
+
 #[derive(Clone, Default, ShaderType, Debug)]
 pub struct WorldWindowUniform {
+    /// Bottom-left world coordinate of the active window.
     pub origin: Vec2,
+    /// Width and height of the active window in cells.
     pub size: Vec2,
+    /// Toroidal buffer head offset (in cells).
     pub head: Vec2,
+    /// Maximum terrain height in world units (maps to atmosphere.state == 0).
     pub h_max: f32,
+    /// World units of height per unit of atmosphere/fluid state.
     pub elevation_scale: f32,
 }
 
+// ---------------------------------------------------------------------------
+// Marker
+// ---------------------------------------------------------------------------
+
 #[derive(Component)]
 pub struct WorldGridMarker;
+
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
 
 fn setup_rendering(
     mut commands: Commands,
@@ -110,16 +125,18 @@ fn setup_rendering(
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    // Allocate a minimal placeholder buffer — actual data is written on the
+    // first Update tick once the grid resource is ready.
     let grid_buffer = buffers.add(ShaderStorageBuffer::new(
         &[0u8; 4],
         RenderAssetUsages::all(),
     ));
 
-    // Palette: maps MaterialId (0..255) to a linear RGBA base colour.
+    // Static colour palette: MaterialId (0-255) → linear RGBA.
     let mut palette = vec![[0.0f32; 4]; 256];
 
-    palette[0] = [0.0, 0.0, 0.0, 0.0]; // EMPTY
-    palette[255] = [0.0, 0.0, 0.0, 1.0]; // VOID
+    palette[0] = [0.00, 0.00, 0.00, 0.0]; // EMPTY   (transparent / invisible)
+    palette[255] = [0.00, 0.00, 0.00, 1.0]; // VOID
 
     // Liquids (1-31)
     palette[1] = [0.15, 0.35, 0.85, 1.0]; // LIQUID_WATER
@@ -169,68 +186,98 @@ fn setup_rendering(
         },
     });
 
+    // Spawn a single dummy mesh entity.  The mesh itself only needs to carry
+    // enough vertices for Bevy to issue the right draw-call count.  The vertex
+    // shader ignores the actual position values and reconstructs world-space
+    // geometry from @builtin(vertex_index) alone.  We start with a 1-cell
+    // placeholder; sync_grid_rendering will replace it once the grid is live.
     commands.spawn((
-        Mesh3d(meshes.add(Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::all(),
-        ))),
+        Mesh3d(meshes.add(build_procedural_dummy(1, 1))),
         MeshMaterial3d(material),
+        // Anchor at the world origin; the shader adds world-space offsets itself.
         Transform::from_translation(Vec3::ZERO),
+        // The shader places all geometry from @builtin(vertex_index) — Bevy
+        // sees only a zero-size dummy AABB and would cull this entity the
+        // moment the camera moves away from the origin.  Disable CPU-side
+        // frustum culling entirely; the GPU discards degenerate triangles.
+        NoFrustumCulling,
         WorldGridMarker,
     ));
 }
 
+// ---------------------------------------------------------------------------
+// Per-frame sync
+// ---------------------------------------------------------------------------
+
 fn sync_grid_rendering(
-    grid: Res<ActiveWorldGrid>,
+    mut grid: ResMut<ActiveWorldGrid>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_size: ResMut<GridMeshSize>,
-    mut grid_query: Query<
-        (&mut Transform, &mut Mesh3d, &MeshMaterial3d<WorldMaterial>),
-        With<WorldGridMarker>,
-    >,
+    mut grid_query: Query<(&mut Mesh3d, &MeshMaterial3d<WorldMaterial>), With<WorldGridMarker>>,
 ) {
-    if !grid.is_changed() {
-        return;
-    }
+    // Use bypass_change_detection for all reads so that merely observing the
+    // grid fields does not mark the resource as changed and re-trigger Bevy's
+    // RenderAsset extraction pipeline on frames where nothing actually mutated.
+    // We only call DerefMut (via the raw ResMut) at the very end when we
+    // explicitly clear cells_dirty — that is the one intentional mutation.
+    let grid_ref = grid.bypass_change_detection();
 
-    let Ok((mut transform, mut mesh3d, material_handle)) = grid_query.single_mut() else {
+    let Ok((mut mesh3d, material_handle)) = grid_query.single_mut() else {
         return;
     };
     let Some(material) = materials.get_mut(&material_handle.0) else {
         return;
     };
 
-    material.window.origin = Vec2::new(grid.window_origin.x as f32, grid.window_origin.y as f32);
-    material.window.size = Vec2::new(grid.width as f32, grid.height as f32);
-    material.window.head = Vec2::new(grid.buffer_head.x as f32, grid.buffer_head.y as f32);
+    // --- Cheap uniform update (always) ---
+    // buffer_head and window_origin change on every camera movement tick
+    // (toroidal shift).  Pushing them costs ~32 bytes per frame — essentially
+    // free.  We read through grid_ref so no change-detection flag is set.
+    material.window.origin = Vec2::new(
+        grid_ref.window_origin.x as f32,
+        grid_ref.window_origin.y as f32,
+    );
+    material.window.size = Vec2::new(grid_ref.width as f32, grid_ref.height as f32);
+    material.window.head = Vec2::new(grid_ref.buffer_head.x as f32, grid_ref.buffer_head.y as f32);
     // TODO: expose h_max / elevation_scale to a typed tuning Resource.
     material.window.h_max = 50.0;
     material.window.elevation_scale = 0.15;
 
-    transform.translation.x = grid.window_origin.x as f32;
-    transform.translation.z = grid.window_origin.y as f32;
+    // -----------------------------------------------------------------------
+    // Expensive path: only runs when actual cell data changed.
+    // -----------------------------------------------------------------------
+    // cells_dirty is set by load_chunk(), set_cell(), and resize_in_place().
+    // It is NOT set by shift_window() — moving the camera never triggers this.
+    if !grid_ref.cells_dirty {
+        return;
+    }
 
-    // Rebuild the static geometry when the grid dimensions change or the mesh
-    // is missing / empty (e.g. first frame or after a resize event).
-    let dims_changed = mesh_size.width != grid.width || mesh_size.height != grid.height;
+    // --- Rebuild the procedural dummy mesh when grid dimensions change ---
+    // The dummy mesh only carries vertex count information (POSITION attribute
+    // with the right number of entries).  The shader ignores the values.
+    let dims_changed = mesh_size.width != grid_ref.width || mesh_size.height != grid_ref.height;
     if dims_changed
         || mesh3d.0.id() == Handle::<Mesh>::default().id()
         || meshes
             .get(&mesh3d.0)
             .map_or(true, |m| m.count_vertices() == 0)
     {
-        mesh3d.0 = meshes.add(build_voxel_grid(grid.width as u32, grid.height as u32));
-        mesh_size.width = grid.width;
-        mesh_size.height = grid.height;
+        mesh3d.0 = meshes.add(build_procedural_dummy(
+            grid_ref.width as u32,
+            grid_ref.height as u32,
+        ));
+        mesh_size.width = grid_ref.width;
+        mesh_size.height = grid_ref.height;
     }
 
-    // Update cell data in-place by writing directly into the buffer's byte vec.
-    // This avoids allocating a new GPU buffer object every frame, which was the
-    // dominant cause of per-frame lag.
+    // --- Upload cell buffer in-place ---
+    // Write directly into buffer.data to reuse the existing GPU allocation.
+    // This avoids creating a new ShaderStorageBuffer asset (and thus a new
+    // wgpu buffer object) on every update — only the bytes are transferred.
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
-        let src: &[u8] = bytemuck::cast_slice(&grid.cells);
+        let src: &[u8] = bytemuck::cast_slice(&grid_ref.cells);
         match &mut buffer.data {
             Some(dst) => {
                 dst.resize(src.len(), 0);
@@ -239,99 +286,43 @@ fn sync_grid_rendering(
             slot => *slot = Some(src.to_vec()),
         }
     }
+
+    // Acknowledge the upload: clear the dirty flag.
+    // This is the only place we take a true &mut — it goes through DerefMut
+    // and intentionally marks the resource changed so Bevy knows the flag
+    // write happened, but by this point the expensive work is already done.
+    grid.cells_dirty = false;
 }
 
-/// Builds a static mesh of `width × height` cells, each with 3 layer-slabs
-/// (terrain, fluid, surface). Every slab is a unit cube; the vertex shader
-/// stretches and culls them at runtime from storage-buffer data.
+// ---------------------------------------------------------------------------
+// Procedural dummy mesh
+// ---------------------------------------------------------------------------
+
+/// Builds a minimal mesh whose only purpose is to tell Bevy's draw-call
+/// machinery how many vertices to emit.  The vertex shader ignores all
+/// attribute values and reconstructs world-space geometry purely from
+/// `@builtin(vertex_index)`.
 ///
-/// Z is flipped relative to the grid row index so that row 0 (the engine's
-/// southern / minimum-Y edge) maps to the largest Z offset. This matches
-/// Bevy's right-hand Y-up convention where a camera positioned at positive Z
-/// looking toward the origin sees the southern edge at the bottom of the screen.
-fn build_voxel_grid(width: u32, height: u32) -> Mesh {
-    let cell_count = (width * height) as usize;
-    let verts_per_face = 4usize;
-    let faces_per_cube = 6usize;
-    let layers = 3usize;
-    let total_verts = cell_count * faces_per_cube * verts_per_face * layers;
-    let total_indices = cell_count * faces_per_cube * 6 * layers;
+/// Layout driven by the shader — 7 face-slots × 6 verts per cell:
+///   • Slot 0   — Terrain top cap        (1 face  × 6 verts)
+///   • Slots 1-4 — Terrain side walls    (4 faces × 6 verts)
+///   • Slot 5   — Fluid top cap          (1 face  × 6 verts, degenerate if no fluid)
+///   • Slot 6   — Surface top cap        (1 face  × 6 verts, degenerate if no surface)
+///
+/// Total vertices = width × height × 7 × 6 = width × height × 42
+///
+/// We store a dummy POSITION attribute (all zeros) because Bevy requires at
+/// least one vertex attribute to build a valid pipeline layout.  The shader
+/// reads `@location(0) position` but immediately discards it.
+fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
+    // 7 face-slots × 6 verts (non-indexed triangles)
+    let vertex_count = (width * height * 7 * 6) as usize;
 
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
-    let mut indices: Vec<u32> = Vec::with_capacity(total_indices);
-    let mut cell_indices: Vec<u32> = Vec::with_capacity(total_verts);
-    let mut layer_ids: Vec<u32> = Vec::with_capacity(total_verts);
-
-    let mut index_offset: u32 = 0;
-
-    // Unit-cube corner positions, indexed 0..7.
-    let v_pos: [[f32; 3]; 8] = [
-        [0., 0., 0.], // 0 front-bottom-left
-        [1., 0., 0.], // 1 front-bottom-right
-        [1., 1., 0.], // 2 front-top-right
-        [0., 1., 0.], // 3 front-top-left
-        [0., 0., 1.], // 4 back-bottom-left
-        [1., 0., 1.], // 5 back-bottom-right
-        [1., 1., 1.], // 6 back-top-right
-        [0., 1., 1.], // 7 back-top-left
-    ];
-
-    // Each face: corner indices in CCW winding order + outward normal.
-    let face_defs: [(usize, usize, usize, usize, [f32; 3]); 6] = [
-        (0, 1, 2, 3, [0., 0., -1.]), // Front  (-Z)
-        (5, 4, 7, 6, [0., 0., 1.]),  // Back   (+Z)
-        (3, 2, 6, 7, [0., 1., 0.]),  // Top    (+Y)
-        (4, 5, 1, 0, [0., -1., 0.]), // Bottom (-Y)
-        (1, 5, 6, 2, [1., 0., 0.]),  // Right  (+X)
-        (4, 0, 3, 7, [-1., 0., 0.]), // Left   (-X)
-    ];
-
-    for layer in 0..3u32 {
-        for y in 0..height {
-            for x in 0..width {
-                // cell_index encodes the logical (x, y) grid position for the shader.
-                let cell_idx: u32 = y * width + x;
-                let offset_x = x as f32;
-                // Flip Z: engine row 0 is the southern (minimum-Y) edge.
-                // The camera sits at positive Z looking toward -Z, so row 0
-                // must occupy the largest Z to appear at the screen bottom.
-                let offset_z = (height - 1 - y) as f32;
-
-                for (a, b, c, d, n) in face_defs {
-                    positions.push([v_pos[a][0] + offset_x, v_pos[a][1], v_pos[a][2] + offset_z]);
-                    positions.push([v_pos[b][0] + offset_x, v_pos[b][1], v_pos[b][2] + offset_z]);
-                    positions.push([v_pos[c][0] + offset_x, v_pos[c][1], v_pos[c][2] + offset_z]);
-                    positions.push([v_pos[d][0] + offset_x, v_pos[d][1], v_pos[d][2] + offset_z]);
-
-                    for _ in 0..4 {
-                        normals.push(n);
-                        cell_indices.push(cell_idx);
-                        layer_ids.push(layer);
-                    }
-
-                    // CCW winding from outside the cube (Bevy/wgpu default: CCW = front face).
-                    // Previous order (0,1,2, 0,2,3) was CW from outside, causing all faces to
-                    // be back-facing and culled, producing the "open cube" pyramid artifact.
-                    indices.extend_from_slice(&[
-                        index_offset,
-                        index_offset + 2,
-                        index_offset + 1,
-                        index_offset,
-                        index_offset + 3,
-                        index_offset + 2,
-                    ]);
-                    index_offset += 4;
-                }
-            }
-        }
-    }
+    // All-zero positions: the shader never reads these values.
+    let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(ATTRIBUTE_CELL_INDEX, cell_indices);
-    mesh.insert_attribute(ATTRIBUTE_LAYER, layer_ids);
-    mesh.insert_indices(Indices::U32(indices));
+    // No index buffer — vertices are emitted in order, shader uses vertex_index.
     mesh
 }
