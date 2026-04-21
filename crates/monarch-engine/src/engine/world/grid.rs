@@ -12,13 +12,9 @@ pub struct ActiveWorldGrid {
     pub width: i32,
     pub height: i32,
     pub cells: Vec<WorldCell>,
-    /// The world coordinates of the bottom-left corner of the current active window.
-    pub window_origin: IVec2,
+    pub back_buffer: Vec<WorldCell>,
+    pub window_origin: IVec2, // bottom-left corner of the ActiveWorldGrid
     pub buffer_head: IVec2,
-    /// Set to `true` whenever actual cell data changes (chunk loaded, cell written,
-    /// grid resized). Cleared by the render system after it uploads the buffer to the
-    /// GPU. Window shifts do NOT set this flag — they only update `window_origin` and
-    /// `buffer_head`, which are cheap uniform values pushed every frame regardless.
     pub cells_dirty: bool,
 }
 
@@ -49,11 +45,21 @@ impl ActiveWorldGrid {
             width,
             height,
             cells: vec![WorldCell::default(); size],
+            back_buffer: vec![WorldCell::default(); size],
             window_origin: origin,
             buffer_head: IVec2::ZERO,
             // Mark dirty on construction so the first render frame uploads initial data.
             cells_dirty: true,
         }
+    }
+
+    /// Prepares the buffers for a simulation tick with zero allocation.
+    #[inline(always)]
+    pub fn swap_buffers(&mut self) {
+        // Pointer swap: The front buffer becomes the new historical back buffer.
+        std::mem::swap(&mut self.cells, &mut self.back_buffer);
+        // Duplicates the state.
+        self.cells.copy_from_slice(&self.back_buffer);
     }
 
     #[inline(always)]
@@ -149,6 +155,9 @@ impl ActiveWorldGrid {
         // It does not drop the underlying allocation.
         self.cells.clear();
         self.cells.resize(new_size, WorldCell::default());
+
+        self.back_buffer.clear();
+        self.back_buffer.resize(new_size, WorldCell::default());
 
         self.width = new_width;
         self.height = new_height;

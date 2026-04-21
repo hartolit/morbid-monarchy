@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { workspace = true }
-monarch-engine = { workspace = true }
-bitcode = { workspace = true }
-bytemuck = { workspace = true }
-redb = { workspace = true }
+bevy.workspace = true
+monarch-engine.workspace = true
+bitcode.workspace = true
+bytemuck.workspace = true
+redb.workspace = true
 
 [lib]
 name = "morbid_app"

@@ -248,8 +248,8 @@ fn sync_grid_rendering(
 
     // INCREASE FOR STEEPER TERRAIN
     // TODO: expose h_max / elevation_scale to a typed tuning Resource.
-    material.window.h_max = 150.0;
-    material.window.elevation_scale = 0.45;
+    material.window.h_max = 256.0;
+    material.window.elevation_scale = 1.0;
 
     // -----------------------------------------------------------------------
     // Expensive path: only runs when actual cell data changed.

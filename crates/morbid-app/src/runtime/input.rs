@@ -208,22 +208,22 @@ pub fn handle_resize_input(
     let mut changed = false;
 
     if keyboard.just_pressed(KeyCode::ArrowLeft) {
-        new_radius_x += 1;
+        new_radius_x += 4;
         changed = true;
     }
 
     if keyboard.just_pressed(KeyCode::ArrowRight) && new_radius_x > 0 {
-        new_radius_x -= 1;
+        new_radius_x -= 4;
         changed = true;
     }
 
     if keyboard.just_pressed(KeyCode::ArrowUp) {
-        new_radius_y += 1;
+        new_radius_y += 4;
         changed = true;
     }
 
     if keyboard.just_pressed(KeyCode::ArrowDown) && new_radius_y > 0 {
-        new_radius_y -= 1;
+        new_radius_y -= 4;
         changed = true;
     }
 
