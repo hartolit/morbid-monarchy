@@ -20,6 +20,7 @@ impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .init_resource::<GridMeshSize>()
+            .init_resource::<WorldTuningConfig>()
             .add_systems(Startup, setup_rendering)
             .add_systems(Update, sync_grid_rendering);
     }
@@ -35,6 +36,21 @@ impl Plugin for WorldRenderPlugin {
 struct GridMeshSize {
     width: i32,
     height: i32,
+}
+
+#[derive(Resource)]
+pub struct WorldTuningConfig {
+    pub h_max: f32,
+    pub elevation_scale: f32,
+}
+
+impl Default for WorldTuningConfig {
+    fn default() -> Self {
+        Self {
+            h_max: 128.0,
+            elevation_scale: 0.5,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +231,7 @@ fn sync_grid_rendering(
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_size: ResMut<GridMeshSize>,
+    tuning: Res<WorldTuningConfig>,
     mut grid_query: Query<
         (&mut Transform, &mut Mesh3d, &MeshMaterial3d<WorldMaterial>),
         With<WorldGridMarker>,
@@ -245,11 +262,8 @@ fn sync_grid_rendering(
     );
     material.window.size = Vec2::new(grid_ref.width as f32, grid_ref.height as f32);
     material.window.head = Vec2::new(grid_ref.buffer_head.x as f32, grid_ref.buffer_head.y as f32);
-
-    // INCREASE FOR STEEPER TERRAIN
-    // TODO: expose h_max / elevation_scale to a typed tuning Resource.
-    material.window.h_max = 256.0;
-    material.window.elevation_scale = 1.0;
+    material.window.h_max = tuning.h_max;
+    material.window.elevation_scale = tuning.elevation_scale;
 
     // -----------------------------------------------------------------------
     // Expensive path: only runs when actual cell data changed.

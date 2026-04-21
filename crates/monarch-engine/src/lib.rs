@@ -33,7 +33,7 @@ impl Plugin for MonarchEnginePlugin {
                     handle_chunk_loaded,
                 )
                     .chain(),
-            );
-        //.add_systems(Update, (simulate_world,));
+            )
+            .add_systems(Update, (simulate_world,));
     }
 }

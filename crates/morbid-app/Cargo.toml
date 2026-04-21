@@ -9,6 +9,7 @@ monarch-engine.workspace = true
 bitcode.workspace = true
 bytemuck.workspace = true
 redb.workspace = true
+bevy_egui.workspace = true
 
 [lib]
 name = "morbid_app"

@@ -195,52 +195,6 @@ pub fn apply_camera_transform(mut query: Query<(&FocalPoint, &mut Transform)>) {
 }
 
 // ---------------------------------------------------------------------------
-// Resize input
-// ---------------------------------------------------------------------------
-
-pub fn handle_resize_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    manager: Res<ChunkManager>,
-    mut writer: MessageWriter<ResizeSimulationEvent>,
-) {
-    let mut new_radius_x = manager.active_radius_x;
-    let mut new_radius_y = manager.active_radius_y;
-    let mut changed = false;
-
-    if keyboard.just_pressed(KeyCode::ArrowLeft) {
-        new_radius_x += 4;
-        changed = true;
-    }
-
-    if keyboard.just_pressed(KeyCode::ArrowRight) && new_radius_x > 0 {
-        new_radius_x -= 4;
-        changed = true;
-    }
-
-    if keyboard.just_pressed(KeyCode::ArrowUp) {
-        new_radius_y += 4;
-        changed = true;
-    }
-
-    if keyboard.just_pressed(KeyCode::ArrowDown) && new_radius_y > 0 {
-        new_radius_y -= 4;
-        changed = true;
-    }
-
-    if changed {
-        info!(
-            "Resizing Simulation: radius_x {} radius_y {}",
-            new_radius_x, new_radius_y
-        );
-
-        writer.write(ResizeSimulationEvent {
-            new_active_radius_x: new_radius_x,
-            new_active_radius_y: new_radius_y,
-        });
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Engine sync
 // ---------------------------------------------------------------------------
 

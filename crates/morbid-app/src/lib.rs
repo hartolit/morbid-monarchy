@@ -2,9 +2,10 @@ use bevy::prelude::*;
 use monarch_engine::prelude::*;
 
 use crate::runtime::{
+    dev_tools::DevToolsPlugin,
     input::{
-        apply_camera_transform, center_camera_on_grid, handle_resize_input, orbit_camera,
-        player_movement, setup_focal_point, sync_world_focus, zoom_camera,
+        apply_camera_transform, center_camera_on_grid, orbit_camera, player_movement,
+        setup_focal_point, sync_world_focus, zoom_camera,
     },
     persistence,
     render::WorldRenderPlugin,
@@ -30,6 +31,7 @@ pub fn run() {
         )
         .add_plugins(MonarchEnginePlugin)
         .add_plugins(WorldRenderPlugin)
+        .add_plugins(DevToolsPlugin)
         .insert_resource(world_db)
         .insert_resource(persistence::WorldSeed(startup_seed))
         .init_resource::<persistence::ChunkSaveQueue>()
@@ -51,10 +53,7 @@ pub fn run() {
                 .chain(),
         )
         // Engine sync: runs after the camera group has settled.
-        .add_systems(
-            Update,
-            (sync_world_focus, handle_resize_input).after(apply_camera_transform),
-        )
+        .add_systems(Update, (sync_world_focus).after(apply_camera_transform))
         // Persistence: independent of camera, runs every frame.
         .add_systems(
             Update,
