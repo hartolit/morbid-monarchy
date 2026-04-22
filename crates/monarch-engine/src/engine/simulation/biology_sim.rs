@@ -1,7 +1,6 @@
 use bevy::math::IVec2;
 use flume::Sender;
-use rand::RngExt;
-use rand::rngs::ThreadRng;
+use rand::{Rng, RngExt}; // Required for random_ratio
 
 use crate::engine::{
     simulation::GridEvent,
@@ -9,17 +8,16 @@ use crate::engine::{
 };
 
 #[inline(always)]
-pub fn step_biology(
+pub fn step_biology<R: Rng + ?Sized>(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    rng: &mut ThreadRng,
+    rng: &mut R,
     tx: &mut Sender<GridEvent>,
     pos: IVec2,
 ) {
-    // --- Terrain Biology ---
     if old_cell.fluid.material != MaterialId::EMPTY
         || old_cell.surface.material != MaterialId::EMPTY
     {
@@ -65,7 +63,6 @@ pub fn step_biology(
             cell.terrain.material = MaterialId::LOOSE_SAND;
             cell.terrain.state = 0;
 
-            // Example of external trigger: Emit a dead plant particle!
             let _ = tx.send(GridEvent::SpawnParticle {
                 pos,
                 material: MaterialId::LOOSE_SAND,

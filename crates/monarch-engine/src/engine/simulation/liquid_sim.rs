@@ -1,40 +1,32 @@
 use bevy::math::IVec2;
-use rand::rngs::ThreadRng;
+use rand::Rng;
 
 use crate::engine::{
     utils::{FlowPattern, ShuffledDirs},
     world::cell::{MaterialId, PixelFlags, WorldCell},
 };
 
-/// Liquids are any materials between 1 and 31.
 #[inline(always)]
 fn is_liquid_mat(mat: MaterialId) -> bool {
     mat.0 >= 1 && mat.0 <= 31
 }
 
-/// Calculates the exact lock-free transfer amount.
-/// Guaranteed to perfectly level two cells without over-correcting (ping-ponging).
 #[inline(always)]
 fn calc_transfer_amount(s_fluid: u8, t_fluid: u8, s_atmos: u8, t_atmos: u8) -> u8 {
-    // Water ONLY flows downhill.
-    // higher atmos = lower physical elevation.
     if t_atmos <= s_atmos {
         return 0;
     }
 
     let diff = t_atmos - s_atmos;
-
     let mut amount = (diff / 2).max(1);
     amount = amount.min(s_fluid);
 
-    // Safety constraints (Physical Back-pressure)
-    amount = amount.min(255u8.saturating_sub(t_fluid)); // Target fluid capacity
-    amount = amount.min(t_atmos); // Target atmos available to displace
-    amount = amount.min(255u8.saturating_sub(s_atmos)); // Source atmos available to fill void
+    amount = amount.min(255u8.saturating_sub(t_fluid));
+    amount = amount.min(t_atmos);
+    amount = amount.min(255u8.saturating_sub(s_atmos));
     amount
 }
 
-/// Evaluates all 8 neighbors to find the steepest downhill path.
 #[inline(always)]
 fn get_source_preference(
     sx: i32,
@@ -80,7 +72,6 @@ fn get_source_preference(
     best_dest
 }
 
-/// The Lock-Free Arbitrator.
 #[inline(always)]
 fn get_highest_priority_liquid_source(
     tx: i32,
@@ -117,22 +108,26 @@ fn get_highest_priority_liquid_source(
     best_source
 }
 
-/// Main entry point. A cell can simultaneously pull from above and give to below.
 #[inline(always)]
-pub fn step_liquid(
+pub fn step_liquid<R: Rng + ?Sized>(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    rng: &mut ThreadRng,
+    rng: &mut R,
     pos: IVec2,
 ) {
     let x = pos.x;
     let y = pos.y;
 
-    // Generate the shuffled pattern once per cell execution
-    let shuffled = ShuffledDirs::new(FlowPattern::Omni, rng);
+    // Generate the path pattern based on material
+    let pattern = if old_cell.fluid.material == MaterialId::LIQUID_MAGMA {
+        FlowPattern::Cardinal
+    } else {
+        FlowPattern::Omni
+    };
+    let shuffled = ShuffledDirs::new(pattern, rng);
     let dirs = shuffled.get();
 
     let old_fluid = old_cell.fluid.state;
@@ -142,7 +137,6 @@ pub fn step_liquid(
     let mut incoming_mat = MaterialId::EMPTY;
     let mut outgoing_amt = 0;
 
-    // --- PHASE 1: PULL (Am I a Target?) ---
     if let Some(source_pos) =
         get_highest_priority_liquid_source(x, y, read_buffer, width, height, dirs)
     {
@@ -158,7 +152,6 @@ pub fn step_liquid(
         incoming_mat = s_cell.fluid.material;
     }
 
-    // --- PHASE 2: LEAVE (Am I a Source?) ---
     if is_liquid_mat(old_cell.fluid.material) {
         if let Some(dest_pos) = get_source_preference(x, y, read_buffer, width, height, dirs) {
             let winner = get_highest_priority_liquid_source(
@@ -183,20 +176,17 @@ pub fn step_liquid(
         }
     }
 
-    // --- PHASE 3: APPLY MUTATIONS ---
     if incoming_amt == 0 && outgoing_amt == 0 {
         return;
     }
 
     if incoming_amt > 0 {
-        // Overtake Material
         if old_cell.fluid.material == MaterialId::EMPTY || old_cell.fluid.material != incoming_mat {
             cell.fluid.material = incoming_mat;
-            cell.fluid.variant = 0; // Reset visual variants on overtake
+            cell.fluid.variant = 0;
         }
     }
 
-    // Apply exact mass transfers safely
     cell.fluid.state = old_fluid
         .saturating_add(incoming_amt)
         .saturating_sub(outgoing_amt);
@@ -205,7 +195,6 @@ pub fn step_liquid(
         .saturating_sub(incoming_amt)
         .saturating_add(outgoing_amt);
 
-    // Clean up if we drained completely
     if cell.fluid.state == 0 {
         cell.fluid.material = MaterialId::EMPTY;
         cell.fluid.flags = PixelFlags::NONE;

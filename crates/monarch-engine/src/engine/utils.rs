@@ -1,10 +1,10 @@
 use bevy::math::IVec2;
-use rand::{rngs::ThreadRng, seq::SliceRandom};
+use rand::{Rng, seq::SliceRandom};
 
 #[derive(Clone, Copy)]
 pub enum FlowPattern {
-    Omni,     // All 8 directions (Liquids, Gases)
-    Cardinal, // 4 directions (Slimes, slow oozes)
+    Omni,
+    Cardinal,
 }
 
 pub struct ShuffledDirs {
@@ -14,10 +14,10 @@ pub struct ShuffledDirs {
 
 impl ShuffledDirs {
     #[inline(always)]
-    pub fn new(pattern: FlowPattern, rng: &mut ThreadRng) -> Self {
-        match pattern {
-            FlowPattern::Omni => {
-                let mut dirs = [
+    pub fn new<R: Rng + ?Sized>(pattern: FlowPattern, rng: &mut R) -> Self {
+        let (mut dirs, count) = match pattern {
+            FlowPattern::Omni => (
+                [
                     IVec2::new(0, 1),
                     IVec2::new(1, 1),
                     IVec2::new(1, 0),
@@ -26,12 +26,11 @@ impl ShuffledDirs {
                     IVec2::new(-1, -1),
                     IVec2::new(-1, 0),
                     IVec2::new(-1, 1),
-                ];
-                dirs.shuffle(rng);
-                Self { dirs, count: 8 }
-            }
-            FlowPattern::Cardinal => {
-                let mut dirs = [
+                ],
+                8,
+            ),
+            FlowPattern::Cardinal => (
+                [
                     IVec2::new(0, 1),
                     IVec2::new(1, 0),
                     IVec2::new(0, -1),
@@ -40,11 +39,14 @@ impl ShuffledDirs {
                     IVec2::ZERO,
                     IVec2::ZERO,
                     IVec2::ZERO,
-                ];
-                dirs[0..4].shuffle(rng);
-                Self { dirs, count: 4 }
-            }
-        }
+                ],
+                4,
+            ),
+        };
+
+        dirs[0..count].shuffle(rng);
+
+        Self { dirs, count }
     }
 
     #[inline(always)]

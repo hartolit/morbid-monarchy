@@ -55,6 +55,11 @@ impl ActiveWorldGrid {
         }
     }
 
+    #[inline(always)]
+    pub fn index_to_pos(index: usize, width: i32) -> IVec2 {
+        IVec2::new((index as i32) % width, (index as i32) / width)
+    }
+
     /// Prepares the buffers for a simulation tick with zero allocation.
     #[inline(always)]
     pub fn swap_buffers(&mut self) {
