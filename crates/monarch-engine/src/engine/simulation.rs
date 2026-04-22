@@ -69,17 +69,7 @@ pub fn simulate_world(
             // Liquid CA MUST evaluate globally to maintain symmetric
             // lock-free consensus. Throttling is handled via modulo.
             if tick % 2 == 0 {
-                liquid_sim::step_liquid(
-                    cell,
-                    old_cell,
-                    read_buffer,
-                    width,
-                    height,
-                    &mut rng,
-                    tx,
-                    pos,
-                    tick,
-                );
+                liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, &mut rng, pos);
             }
 
             // ---------------------------------------------------------
