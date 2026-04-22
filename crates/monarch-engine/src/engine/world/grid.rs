@@ -16,6 +16,7 @@ pub struct ActiveWorldGrid {
     pub window_origin: IVec2, // bottom-left corner of the ActiveWorldGrid
     pub buffer_head: IVec2,
     pub cells_dirty: bool,
+    pub tick: u32,
 }
 
 impl Default for ActiveWorldGrid {
@@ -50,6 +51,7 @@ impl ActiveWorldGrid {
             buffer_head: IVec2::ZERO,
             // Mark dirty on construction so the first render frame uploads initial data.
             cells_dirty: true,
+            tick: 0,
         }
     }
 
@@ -58,8 +60,8 @@ impl ActiveWorldGrid {
     pub fn swap_buffers(&mut self) {
         // Pointer swap: The front buffer becomes the new historical back buffer.
         std::mem::swap(&mut self.cells, &mut self.back_buffer);
-        // Duplicates the state.
         self.cells.copy_from_slice(&self.back_buffer);
+        self.tick = self.tick.wrapping_add(1);
     }
 
     #[inline(always)]

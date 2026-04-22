@@ -1,5 +1,5 @@
 mod biology_sim;
-//mod water_sim;
+pub mod liquid_sim;
 
 use bevy::{
     ecs::{
@@ -11,7 +11,6 @@ use bevy::{
 use flume::{Receiver, Sender};
 use rand::RngExt;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
-//pub use water_sim::WaterSimulationConfig;
 
 use crate::prelude::{ActiveWorldGrid, MaterialId};
 
@@ -46,7 +45,7 @@ pub fn simulate_world(
     grid_res.swap_buffers();
     let grid_mut = grid_res.into_inner();
 
-    // Bind read-only historical buffer and the global MPSC sender
+    let tick = grid_mut.tick;
     let read_buffer = &grid_mut.back_buffer;
     let global_tx = event_queue.tx.clone();
 
@@ -58,31 +57,48 @@ pub fn simulate_world(
         .for_each_with(global_tx, |tx, (idx, cell)| {
             let mut rng = rand::rng();
 
-            // Random Monte-Carlo selection
-            if !rng.random_ratio(1, 10) {
-                return;
-            }
-
             let x = (idx as i32) % width;
             let y = (idx as i32) / width;
             let pos = bevy::math::IVec2::new(x, y);
 
             let old_cell = &read_buffer[idx];
 
-            // Biology & Atmosphere
-            biology_sim::step_biology(
-                cell,
-                old_cell,
-                read_buffer,
-                width,
-                height,
-                &mut rng,
-                tx,
-                pos,
-            );
+            // ---------------------------------------------------------
+            // DETERMINISTIC PHYSICS (Mass Transfer)
+            // ---------------------------------------------------------
+            // Liquid CA MUST evaluate globally to maintain symmetric
+            // lock-free consensus. Throttling is handled via modulo.
+            if tick % 2 == 0 {
+                liquid_sim::step_liquid(
+                    cell,
+                    old_cell,
+                    read_buffer,
+                    width,
+                    height,
+                    &mut rng,
+                    tx,
+                    pos,
+                    tick,
+                );
+            }
 
-            // TODO: Water / Fluids (to be implemented)
-            // water_sim::step_water(...)
+            // ---------------------------------------------------------
+            // SPARSE BIOLOGY (In-Place Mutation)
+            // ---------------------------------------------------------
+            // Random Monte-Carlo selection is safe here because biology
+            // only mutates its own local state (e.g. aging).
+            if rng.random_ratio(1, 10) {
+                biology_sim::step_biology(
+                    cell,
+                    old_cell,
+                    read_buffer,
+                    width,
+                    height,
+                    &mut rng,
+                    tx,
+                    pos,
+                );
+            }
         });
 
     grid_mut.cells_dirty = true;
