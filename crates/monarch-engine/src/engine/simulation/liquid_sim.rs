@@ -1,5 +1,4 @@
 use bevy::math::IVec2;
-use rand::Rng;
 
 use crate::engine::{
     utils::{FlowPattern, ShuffledDirs},
@@ -34,14 +33,24 @@ fn get_source_preference(
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    dirs: &[IVec2],
+    tick: u32,
 ) -> Option<IVec2> {
     let my_idx = (sy * width + sx) as usize;
     let s_cell = &read_buffer[my_idx];
+    let s_mat = s_cell.fluid.material;
 
-    if !is_liquid_mat(s_cell.fluid.material) {
+    if !is_liquid_mat(s_mat) {
         return None;
     }
+
+    // Generate pattern locally using the TARGET'S exact coordinates (sx, sy)
+    let pattern = if s_mat == MaterialId::LIQUID_MAGMA {
+        FlowPattern::Cardinal
+    } else {
+        FlowPattern::Omni
+    };
+    let shuffled = ShuffledDirs::new_deterministic(pattern, IVec2::new(sx, sy), tick, s_mat, 0);
+    let dirs = shuffled.get();
 
     let mut best_dest = None;
     let mut best_atmos = s_cell.atmosphere.state;
@@ -57,7 +66,7 @@ fn get_source_preference(
 
             if n_atmos > s_cell.atmosphere.state {
                 let is_empty = n_cell.fluid.material == MaterialId::EMPTY;
-                let is_same = n_cell.fluid.material == s_cell.fluid.material;
+                let is_same = n_cell.fluid.material == s_mat;
                 let can_overtake = !is_empty && !is_same && s_cell.fluid.state > n_cell.fluid.state;
 
                 if is_empty || is_same || can_overtake {
@@ -79,8 +88,26 @@ fn get_highest_priority_liquid_source(
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    dirs: &[IVec2],
+    tick: u32,
 ) -> Option<IVec2> {
+    let t_idx = (ty * width + tx) as usize;
+    let t_cell = &read_buffer[t_idx];
+
+    // Generate pattern using T's coords to break ties fairly
+    let pattern = if t_cell.fluid.material == MaterialId::LIQUID_MAGMA {
+        FlowPattern::Cardinal
+    } else {
+        FlowPattern::Omni
+    };
+    let shuffled = ShuffledDirs::new_deterministic(
+        pattern,
+        IVec2::new(tx, ty),
+        tick,
+        t_cell.fluid.material,
+        0,
+    );
+    let dirs = shuffled.get();
+
     let mut best_source = None;
     let mut best_fluid = 0;
 
@@ -93,7 +120,8 @@ fn get_highest_priority_liquid_source(
             let s_cell = &read_buffer[s_idx];
 
             if is_liquid_mat(s_cell.fluid.material) {
-                if let Some(pref) = get_source_preference(sx, sy, read_buffer, width, height, dirs)
+                // Symmetrical Check: Cell T asks Cell S what Cell S wants to do
+                if let Some(pref) = get_source_preference(sx, sy, read_buffer, width, height, tick)
                 {
                     if pref.x == tx && pref.y == ty {
                         if s_cell.fluid.state > best_fluid {
@@ -109,26 +137,17 @@ fn get_highest_priority_liquid_source(
 }
 
 #[inline(always)]
-pub fn step_liquid<R: Rng + ?Sized>(
+pub fn step_liquid(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    rng: &mut R,
     pos: IVec2,
+    tick: u32,
 ) {
     let x = pos.x;
     let y = pos.y;
-
-    // Generate the path pattern based on material
-    let pattern = if old_cell.fluid.material == MaterialId::LIQUID_MAGMA {
-        FlowPattern::Cardinal
-    } else {
-        FlowPattern::Omni
-    };
-    let shuffled = ShuffledDirs::new(pattern, rng);
-    let dirs = shuffled.get();
 
     let old_fluid = old_cell.fluid.state;
     let old_atmos = old_cell.atmosphere.state;
@@ -138,7 +157,7 @@ pub fn step_liquid<R: Rng + ?Sized>(
     let mut outgoing_amt = 0;
 
     if let Some(source_pos) =
-        get_highest_priority_liquid_source(x, y, read_buffer, width, height, dirs)
+        get_highest_priority_liquid_source(x, y, read_buffer, width, height, tick)
     {
         let s_idx = (source_pos.y * width + source_pos.x) as usize;
         let s_cell = &read_buffer[s_idx];
@@ -153,14 +172,14 @@ pub fn step_liquid<R: Rng + ?Sized>(
     }
 
     if is_liquid_mat(old_cell.fluid.material) {
-        if let Some(dest_pos) = get_source_preference(x, y, read_buffer, width, height, dirs) {
+        if let Some(dest_pos) = get_source_preference(x, y, read_buffer, width, height, tick) {
             let winner = get_highest_priority_liquid_source(
                 dest_pos.x,
                 dest_pos.y,
                 read_buffer,
                 width,
                 height,
-                dirs,
+                tick,
             );
             if winner == Some(pos) {
                 let d_idx = (dest_pos.y * width + dest_pos.x) as usize;

@@ -12,6 +12,7 @@ use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
+use crate::engine::utils;
 use crate::prelude::{ActiveWorldGrid, MaterialId};
 
 pub enum GridEvent {
@@ -53,16 +54,12 @@ pub fn simulate_world(
             let pos = ActiveWorldGrid::index_to_pos(idx, width);
             let old_cell = &read_buffer[idx];
 
-            // ---------------------------------------------------------
-            // DETERMINISTIC PHYSICS
-            // ---------------------------------------------------------
+            // Deterministic simulation step
             if tick % 2 == 0 {
-                liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, rng, pos);
+                liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
             }
 
-            // ---------------------------------------------------------
-            // SPARSE BIOLOGY
-            // ---------------------------------------------------------
+            // Non-deterministic simulation step
             if rng.random_ratio(1, 10) {
                 biology_sim::step_biology(cell, old_cell, read_buffer, width, height, rng, tx, pos);
             }

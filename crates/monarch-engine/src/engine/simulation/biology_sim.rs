@@ -1,6 +1,6 @@
 use bevy::math::IVec2;
 use flume::Sender;
-use rand::{Rng, RngExt}; // Required for random_ratio
+use rand::{Rng, RngExt};
 
 use crate::engine::{
     simulation::GridEvent,
@@ -52,7 +52,7 @@ pub fn step_biology<R: Rng + ?Sized>(
         if wave_front_neighbors > 0 {
             cell.terrain.material = MaterialId::ORGANIC_FOLIAGE;
             cell.terrain.state = 0;
-        } else if rng.random_ratio(1, 10_000) {
+        } else if rng.random_ratio(1, 1000) {
             cell.terrain.material = MaterialId::ORGANIC_FOLIAGE;
             cell.terrain.state = 0;
         }

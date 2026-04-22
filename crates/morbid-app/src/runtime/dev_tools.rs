@@ -1,5 +1,6 @@
-use bevy::ecs::message::MessageWriter;
+use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
+use bevy::{diagnostic::FrameTimeDiagnosticsPlugin, ecs::message::MessageWriter};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use monarch_engine::prelude::{ChunkManager, ResizeSimulationEvent};
 
@@ -10,6 +11,7 @@ pub struct DevToolsPlugin;
 impl Plugin for DevToolsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_systems(EguiPrimaryContextPass, dev_tuning_ui);
     }
 }
@@ -22,6 +24,7 @@ fn dev_tuning_ui(
     mut pending_resize: Local<Option<[u32; 2]>>,
     mut show_menu: Local<Option<bool>>,
     keys: Res<ButtonInput<KeyCode>>,
+    diagnostics: Res<DiagnosticsStore>,
 ) {
     // Toggle
     let is_visible = show_menu.get_or_insert(true);
@@ -42,6 +45,25 @@ fn dev_tuning_ui(
 
     egui::TopBottomPanel::top("dev_navbar").show(ctx, |ui| {
         ui.horizontal_centered(|ui| {
+            // --- FPS COUNTER ---
+            if let Some(fps) = diagnostics
+                .get(&FrameTimeDiagnosticsPlugin::FPS)
+                .and_then(|fps| fps.smoothed())
+            {
+                ui.label(
+                    egui::RichText::new(format!("FPS: {:.0}", fps))
+                        .strong()
+                        .color(if fps > 55.0 {
+                            egui::Color32::GREEN
+                        } else {
+                            egui::Color32::RED
+                        }),
+                );
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(16.0);
+            }
+
             ui.label(egui::RichText::new("Tools").strong().size(15.0));
             ui.add_space(16.0);
             ui.separator();

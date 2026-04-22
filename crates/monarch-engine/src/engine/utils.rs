@@ -1,10 +1,11 @@
+use crate::engine::world::cell::MaterialId;
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
 
 #[derive(Clone, Copy)]
 pub enum FlowPattern {
-    Omni,
-    Cardinal,
+    Omni,     // All 8 directions (Liquids, Gases)
+    Cardinal, // 4 directions (Magma, Slimes)
 }
 
 pub struct ShuffledDirs {
@@ -13,9 +14,42 @@ pub struct ShuffledDirs {
 }
 
 impl ShuffledDirs {
+    /// STRICT CONSENSUS: Generates a perfectly symmetric, stateless chaotic pattern.
+    /// Use this when multiple cells need to evaluate the exact same boundary outcome.
     #[inline(always)]
-    pub fn new<R: Rng + ?Sized>(pattern: FlowPattern, rng: &mut R) -> Self {
-        let (mut dirs, count) = match pattern {
+    pub fn new_deterministic(
+        pattern: FlowPattern,
+        pos: IVec2,
+        tick: u32,
+        material: MaterialId,
+        cadence: u32,
+    ) -> Self {
+        let mut h = spatial_hash_extended(pos, tick, material, cadence);
+        let (mut dirs, count) = Self::get_base_pattern(pattern);
+
+        // Deterministic Fisher-Yates shuffle
+        for i in (1..count).rev() {
+            let j = (h % (i as u32 + 1)) as usize;
+            dirs.swap(i, j);
+            // Strong avalanche mutation to guarantee true isotropic shuffling
+            h = h.wrapping_mul(0x9E37_79B1).wrapping_add(1);
+        }
+
+        Self { dirs, count }
+    }
+
+    /// MAXIMUM PERFORMANCE: Uses a fast thread-local RNG.
+    /// Use this for biology, falling powders, or gas diffusion where consensus doesn't matter.
+    #[inline(always)]
+    pub fn new_random<R: Rng + ?Sized>(pattern: FlowPattern, rng: &mut R) -> Self {
+        let (mut dirs, count) = Self::get_base_pattern(pattern);
+        dirs[0..count].shuffle(rng);
+        Self { dirs, count }
+    }
+
+    #[inline(always)]
+    fn get_base_pattern(pattern: FlowPattern) -> ([IVec2; 8], usize) {
+        match pattern {
             FlowPattern::Omni => (
                 [
                     IVec2::new(0, 1),
@@ -42,15 +76,36 @@ impl ShuffledDirs {
                 ],
                 4,
             ),
-        };
-
-        dirs[0..count].shuffle(rng);
-
-        Self { dirs, count }
+        }
     }
 
     #[inline(always)]
     pub fn get(&self) -> &[IVec2] {
         &self.dirs[0..self.count]
     }
+}
+
+/// Robust PCG-like spatial hash.
+#[inline(always)]
+pub fn spatial_hash(pos: IVec2, tick: u32) -> u32 {
+    let mut h = (pos.x as u32).wrapping_mul(0x736A_153D)
+        ^ (pos.y as u32).wrapping_mul(0x9E37_79B1)
+        ^ tick.wrapping_mul(0x11C6_4E6D);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 16;
+    h
+}
+
+#[inline(always)]
+pub fn spatial_hash_extended(pos: IVec2, tick: u32, material: MaterialId, cadence: u32) -> u32 {
+    let mut h = spatial_hash(pos, tick)
+        .wrapping_add((material.0 as u32).wrapping_mul(0x27D4_EB2F))
+        .wrapping_add(cadence.wrapping_mul(0x1656_67B1));
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 16;
+    h
 }
