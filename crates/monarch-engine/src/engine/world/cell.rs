@@ -18,40 +18,40 @@ impl MaterialId {
     pub const LIQUID_WATER: Self = Self(1);
     pub const LIQUID_MAGMA: Self = Self(2);
     pub const LIQUID_BLOOD: Self = Self(3);
-    pub const LIQUID_ACID:  Self = Self(4);
-    pub const LIQUID_OIL:   Self = Self(5);
+    pub const LIQUID_ACID: Self = Self(4);
+    pub const LIQUID_OIL: Self = Self(5);
 
     // ==========================================
     // GASES & PLASMAS (32 - 63)
     // ==========================================
-    pub const GAS_STEAM:  Self = Self(32);
-    pub const GAS_SMOKE:  Self = Self(33);
+    pub const GAS_STEAM: Self = Self(32);
+    pub const GAS_SMOKE: Self = Self(33);
     pub const GAS_POISON: Self = Self(34);
-    pub const FIRE:       Self = Self(35);
+    pub const FIRE: Self = Self(35);
 
     // ==========================================
     // ORGANICS (64 - 127)
     // ==========================================
-    pub const ORGANIC_WOOD:    Self = Self(64);
+    pub const ORGANIC_WOOD: Self = Self(64);
     pub const ORGANIC_FOLIAGE: Self = Self(65); // Variants: 0=Grass, 1=Flower, 2=Vine
-    pub const ORGANIC_FLESH:   Self = Self(66); // Variants: 0=Human, 1=Goblin, 2=Animal
-    pub const ORGANIC_BONE:    Self = Self(67); // High acid resistance
-    pub const ORGANIC_ROT:     Self = Self(68); // Decayed flesh/plants
+    pub const ORGANIC_FLESH: Self = Self(66); // Variants: 0=Human, 1=Goblin, 2=Animal
+    pub const ORGANIC_BONE: Self = Self(67); // High acid resistance
+    pub const ORGANIC_ROT: Self = Self(68); // Decayed flesh/plants
 
     // ==========================================
     // POWDERS & LOOSE SOLIDS (128 - 191)
     // ==========================================
     pub const LOOSE_SAND: Self = Self(128);
     pub const LOOSE_DIRT: Self = Self(129);
-    pub const LOOSE_ASH:  Self = Self(130);
+    pub const LOOSE_ASH: Self = Self(130);
     pub const LOOSE_SNOW: Self = Self(131);
 
     // ==========================================
     // SOLIDS (192 - 254)
     // ==========================================
     pub const SOLID_STONE: Self = Self(192);
-    pub const SOLID_CLAY:  Self = Self(193);
-    pub const SOLID_ICE:   Self = Self(194);
+    pub const SOLID_CLAY: Self = Self(193);
+    pub const SOLID_ICE: Self = Self(194);
     pub const SOLID_METAL: Self = Self(195);
     pub const SOLID_GLASS: Self = Self(196);
 }
@@ -61,9 +61,10 @@ impl MaterialId {
 pub struct PixelFlags(pub u8);
 
 impl PixelFlags {
-    pub const NONE: Self = Self(0);
-    pub const IS_SOLID: Self = Self(1 << 0);
-    pub const WAKES_AWAKE: Self = Self(1 << 1);
+    pub const NONE: Self = Self(0); // Used to indicate no flags are set
+    pub const WAKES_AWAKE: Self = Self(1 << 0);
+    pub const NORTH_SOUTH: Self = Self(1 << 1); // Facing direction
+    pub const EAST_WEST: Self = Self(1 << 2); // Facing direction
 
     #[inline(always)]
     pub fn contains(&self, other: Self) -> bool {

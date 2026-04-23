@@ -12,13 +12,27 @@ use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::engine::utils;
 use crate::prelude::{ActiveWorldGrid, MaterialId};
 
 pub enum GridEvent {
     SpawnParticle { pos: IVec2, material: MaterialId },
     ApplyDamage { pos: IVec2, amount: u32 },
     PlaySound { pos: IVec2, sound_id: u8 },
+}
+
+#[derive(Resource)]
+pub struct SimulationConfig {
+    pub run_liquid: bool,
+    pub run_biology: bool,
+}
+
+impl Default for SimulationConfig {
+    fn default() -> Self {
+        Self {
+            run_liquid: true,
+            run_biology: true,
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -37,6 +51,7 @@ impl Default for SimulationEventQueue {
 pub fn simulate_world(
     mut grid_res: ResMut<ActiveWorldGrid>,
     event_queue: Res<SimulationEventQueue>,
+    config: Res<SimulationConfig>,
 ) {
     let width = grid_res.width;
     let height = grid_res.height;
@@ -48,6 +63,9 @@ pub fn simulate_world(
     let read_buffer = &grid_mut.back_buffer;
     let global_tx = event_queue.tx.clone();
 
+    let run_liquid = config.run_liquid;
+    let run_biology = config.run_biology;
+
     grid_mut.cells.par_iter_mut().enumerate().for_each_init(
         || (global_tx.clone(), SmallRng::from_rng(&mut rand::rng())),
         |(tx, rng), (idx, cell)| {
@@ -55,12 +73,12 @@ pub fn simulate_world(
             let old_cell = &read_buffer[idx];
 
             // Deterministic simulation step
-            if tick % 2 == 0 {
+            if run_liquid && tick % 2 == 0 {
                 liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
             }
 
             // Non-deterministic simulation step
-            if rng.random_ratio(1, 10) {
+            if run_biology && rng.random_ratio(1, 10) {
                 biology_sim::step_biology(cell, old_cell, read_buffer, width, height, rng, tx, pos);
             }
         },

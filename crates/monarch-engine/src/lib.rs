@@ -1,12 +1,15 @@
 use bevy::prelude::*;
 
-use crate::engine::{
-    events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::{SimulationEventQueue, simulate_world},
-    world::{
-        ChunkManager, WorldFocus, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
-        handle_simulation_resize, manage_chunk_window,
+use crate::{
+    engine::{
+        events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
+        simulation::{SimulationEventQueue, simulate_world},
+        world::{
+            ChunkManager, WorldFocus, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
+            handle_simulation_resize, manage_chunk_window,
+        },
     },
+    prelude::SimulationConfig,
 };
 
 pub mod engine;
@@ -20,6 +23,7 @@ impl Plugin for MonarchEnginePlugin {
             .init_resource::<ChunkManager>()
             .init_resource::<WorldStore>()
             .init_resource::<SimulationEventQueue>()
+            .init_resource::<SimulationConfig>()
             .insert_resource(ActiveWorldGrid::default())
             .add_message::<ChunkLoadRequest>()
             .add_message::<ChunkLoadedEvent>()

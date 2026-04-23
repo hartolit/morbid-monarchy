@@ -219,3 +219,70 @@ pub fn step_liquid(
         cell.fluid.flags = PixelFlags::NONE;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::world::cell::{MaterialId, WorldCell};
+    use bevy::math::IVec2;
+    use rayon::prelude::*;
+
+    fn create_cell(atmos: u8, fluid_mat: MaterialId, fluid_state: u8) -> WorldCell {
+        let mut cell = WorldCell::default();
+        cell.atmosphere.state = atmos;
+        cell.fluid.material = fluid_mat;
+        cell.fluid.state = fluid_state;
+        cell
+    }
+
+    #[test]
+    fn test_parallel_mass_conservation() {
+        let width = 20;
+        let height = 20;
+        let size = (width * height) as usize;
+
+        let mut cells = vec![create_cell(255, MaterialId::EMPTY, 0); size];
+        let mut back_buffer = vec![create_cell(255, MaterialId::EMPTY, 0); size];
+
+        // Create a flat ground (atmosphere = 100)
+        for c in cells.iter_mut() {
+            c.atmosphere.state = 100;
+        }
+
+        // Drop a massive 4x4 block of dense liquid to force massive parallel collisions
+        for y in 8..12 {
+            for x in 8..12 {
+                let idx = (y * width + x) as usize;
+                cells[idx] = create_cell(0, MaterialId::LIQUID_WATER, 200);
+            }
+        }
+
+        let initial_mass: u64 = cells.iter().map(|c| c.fluid.state as u64).sum();
+
+        // Simulate 100 ticks using REAL parallel Rayon iteration
+        for tick in 0..100 {
+            // Swap buffers (mimicking the engine)
+            std::mem::swap(&mut cells, &mut back_buffer);
+            cells.copy_from_slice(&back_buffer);
+
+            let read_buffer = &back_buffer;
+
+            // Parallel lock-free execution (The Danger Zone)
+            cells.par_iter_mut().enumerate().for_each(|(idx, cell)| {
+                let pos = IVec2::new((idx as i32) % width, (idx as i32) / width);
+                let old_cell = &read_buffer[idx];
+
+                step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
+            });
+
+            // Verify exact mass conservation after parallel collisions
+            let current_mass: u64 = cells.iter().map(|c| c.fluid.state as u64).sum();
+
+            assert_eq!(
+                initial_mass, current_mass,
+                "PARALLEL MASS LEAK at tick {}! Started with {}, now {}",
+                tick, initial_mass, current_mass
+            );
+        }
+    }
+}
