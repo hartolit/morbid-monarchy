@@ -68,7 +68,7 @@ impl WorldGenerator {
             material: MaterialId::SOLID_STONE,
             state: 0,
             variant,
-            flags: PixelFlags::IS_SOLID,
+            flags: PixelFlags::NONE,
         };
 
         let mut final_atmos = gas_pressure;
