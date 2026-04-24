@@ -17,8 +17,8 @@ const BRUSH_OPTIONS: [(GridBrush, &str); 5] = [
     (GridBrush::None, "None"),
     (GridBrush::Water, "Spawn Water"),
     (GridBrush::Sand, "Spawn Sand"),
-    (GridBrush::IncreasePressure, "Inc Pressure (Hole)"),
-    (GridBrush::DecreasePressure, "Dec Pressure (Mountain)"),
+    (GridBrush::IncreasePressure, "Increase Pressure"),
+    (GridBrush::DecreasePressure, "Decrease Pressure"),
 ];
 
 pub fn dev_tuning_ui(
