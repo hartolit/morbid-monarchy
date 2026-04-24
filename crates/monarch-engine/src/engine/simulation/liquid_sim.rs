@@ -7,7 +7,7 @@ use crate::engine::{
 
 // MUST be a 2^n - 1 value!
 // Examples: 127 (1/128), 255 (1/256), 511 (1/512), 1023 (1/1024), 2047 (1/2048)
-pub const EROSION_MASK: u32 = 127;
+pub const EROSION_MASK: u32 = 511;
 
 #[inline(always)]
 fn is_liquid_mat(mat: MaterialId) -> bool {
