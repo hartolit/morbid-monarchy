@@ -12,9 +12,7 @@ pub enum MetaDataKind {
     ForestFire,
 }
 
-pub enum MetaData {
-    NearbyWaterPool(Neighbor),
-    NearbyLand(Neighbor),
-    InfestedArea(Neighbor),
-    ForestFire(Neighbor),
+pub struct MetaData {
+    pub kind: MetaDataKind, // maybe small array here?
+    pub neighbor: Neighbor,
 }
