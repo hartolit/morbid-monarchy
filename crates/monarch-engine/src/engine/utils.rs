@@ -1,4 +1,4 @@
-use crate::engine::world::cell::MaterialId;
+use crate::{engine::world::cell::MaterialId, prelude::PixelFlags};
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
 
@@ -14,6 +14,44 @@ pub struct ShuffledDirs {
 }
 
 impl ShuffledDirs {
+    /// Biases the shuffle to prioritize the cell's current facing/momentum flags.
+    #[inline(always)]
+    pub fn new_with_momentum<R: Rng + ?Sized>(
+        pattern: FlowPattern,
+        flags: PixelFlags,
+        rng: &mut R,
+    ) -> Self {
+        let (mut dirs, count) = Self::get_base_pattern(pattern);
+
+        // Do a standard shuffle
+        dirs[0..count].shuffle(rng);
+
+        // Extract preferred forward vector
+        let mut forward = IVec2::ZERO;
+        if flags.contains(PixelFlags::FACING_N) {
+            forward.y += 1;
+        }
+        if flags.contains(PixelFlags::FACING_S) {
+            forward.y -= 1;
+        }
+        if flags.contains(PixelFlags::FACING_E) {
+            forward.x += 1;
+        }
+        if flags.contains(PixelFlags::FACING_W) {
+            forward.x -= 1;
+        }
+
+        if forward != IVec2::ZERO {
+            // Find our preferred forward vector in the shuffled list and swap it to index 0
+            // This guarantees the cell will check its momentum path first.
+            if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
+                dirs.swap(0, idx);
+            }
+        }
+
+        Self { dirs, count }
+    }
+
     /// STRICT CONSENSUS: Generates a perfectly symmetric, stateless chaotic pattern.
     /// Use this when multiple cells need to evaluate the exact same boundary outcome.
     #[inline(always)]

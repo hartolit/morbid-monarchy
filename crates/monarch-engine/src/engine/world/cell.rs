@@ -61,10 +61,14 @@ impl MaterialId {
 pub struct PixelFlags(pub u8);
 
 impl PixelFlags {
-    pub const NONE: Self = Self(0); // Used to indicate no flags are set
+    pub const NONE: Self = Self(0);
     pub const WAKES_AWAKE: Self = Self(1 << 0);
-    pub const NORTH_SOUTH: Self = Self(1 << 1); // Facing direction
-    pub const EAST_WEST: Self = Self(1 << 2); // Facing direction
+
+    // Momentum/Facing flags
+    pub const FACING_N: Self = Self(1 << 1);
+    pub const FACING_S: Self = Self(1 << 2);
+    pub const FACING_E: Self = Self(1 << 3);
+    pub const FACING_W: Self = Self(1 << 4);
 
     #[inline(always)]
     pub fn contains(&self, other: Self) -> bool {
@@ -116,4 +120,33 @@ pub struct WorldCell {
     /// Layer 3: The surface layer floats on top of terrain and fluid layers.
     /// Note: Can represent things like a boat, bridge, fire, blood splatters, pots, flowers.
     pub surface: Pixel,
+}
+
+impl WorldCell {
+    /// Checks if any layer in this cell is awake and requires simulation
+    #[inline(always)]
+    pub fn is_awake(&self) -> bool {
+        self.terrain.flags.contains(PixelFlags::WAKES_AWAKE)
+            || self.fluid.flags.contains(PixelFlags::WAKES_AWAKE)
+            || self.atmosphere.flags.contains(PixelFlags::WAKES_AWAKE)
+            || self.surface.flags.contains(PixelFlags::WAKES_AWAKE)
+    }
+
+    /// Puts all layers of this cell to sleep
+    #[inline(always)]
+    pub fn sleep(&mut self) {
+        self.terrain.flags.remove(PixelFlags::WAKES_AWAKE);
+        self.fluid.flags.remove(PixelFlags::WAKES_AWAKE);
+        self.atmosphere.flags.remove(PixelFlags::WAKES_AWAKE);
+        self.surface.flags.remove(PixelFlags::WAKES_AWAKE);
+    }
+
+    /// Wakes up the active layers of this cell so it simulates next tick
+    #[inline(always)]
+    pub fn wake(&mut self) {
+        // Broad phase wake - if the cell changed, we just flag the terrain/fluid layers
+        // as awake so the cell won't be skipped.
+        self.fluid.flags.insert(PixelFlags::WAKES_AWAKE);
+        self.terrain.flags.insert(PixelFlags::WAKES_AWAKE);
+    }
 }

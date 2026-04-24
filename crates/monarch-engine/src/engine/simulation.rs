@@ -72,6 +72,41 @@ pub fn simulate_world(
             let pos = ActiveWorldGrid::index_to_pos(idx, width);
             let old_cell = &read_buffer[idx];
 
+            // Lock-Free Wake Propagation Check
+            let mut should_simulate = old_cell.is_awake();
+
+            // If we are asleep, check if any 8 neighbors are awake. If they are,
+            // they might flow into us or interact with us, so we MUST wake up to receive them.
+            if !should_simulate {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let nx = (pos.x + dx).rem_euclid(width);
+                        let ny = (pos.y + dy).rem_euclid(height);
+                        let n_idx = (ny * width + nx) as usize;
+
+                        if read_buffer[n_idx].is_awake() {
+                            should_simulate = true;
+                            break;
+                        }
+                    }
+                    if should_simulate {
+                        break;
+                    }
+                }
+            }
+
+            // If absolute dead space, branch predictor skips everything.
+            // The `cell` is already an exact copy of `old_cell` due to swap_buffers().
+            if !should_simulate {
+                return;
+            }
+
+            // Default to sleeping next frame unless a system mutates us
+            cell.sleep();
+
             // Deterministic simulation step
             if run_liquid && tick % 2 == 0 {
                 liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
@@ -80,6 +115,17 @@ pub fn simulate_world(
             // Non-deterministic simulation step
             if run_biology && rng.random_ratio(1, 10) {
                 biology_sim::step_biology(cell, old_cell, read_buffer, width, height, rng, tx, pos);
+            }
+
+            // If the cell's memory footprint changed AT ALL during the step, it wakes up.
+            if cell != old_cell {
+                cell.wake();
+            } else if cell.terrain.material == MaterialId::ORGANIC_FOLIAGE
+                && cell.terrain.state < 10
+            {
+                // Special case: Stochastic processes (like plant growth) that failed
+                // their RNG roll this frame must stay awake to try again next frame.
+                cell.wake();
             }
         },
     );
