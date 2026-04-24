@@ -1,13 +1,13 @@
 use bevy::math::IVec2;
 
 use crate::engine::{
-    utils::{FlowPattern, ShuffledDirs, spatial_hash},
+    utils::{FlowPattern, ShuffledDirs},
     world::cell::{MaterialId, PixelFlags, WorldCell},
 };
 
-pub const EROSION_CHANCE: u32 = 1;
-pub const EROSION_ACTIVATION_PRESSURE: u8 = 250;
-pub const EROSION_ATMOSPHERE_INCREASE: u8 = 1;
+// MUST be a 2^n - 1 value!
+// Examples: 127 (1/128), 255 (1/256), 511 (1/512), 1023 (1/1024), 2047 (1/2048)
+pub const EROSION_MASK: u32 = 127;
 
 #[inline(always)]
 fn is_liquid_mat(mat: MaterialId) -> bool {
@@ -47,13 +47,21 @@ fn get_source_preference(
         return None;
     }
 
-    // Generate pattern locally using the TARGET'S exact coordinates (sx, sy)
     let pattern = if s_mat == MaterialId::LIQUID_MAGMA {
         FlowPattern::Cardinal
     } else {
         FlowPattern::Omni
     };
-    let shuffled = ShuffledDirs::new_deterministic(pattern, IVec2::new(sx, sy), tick, s_mat, 0);
+
+    // Use the cell's own flags to drive its momentum bias
+    let shuffled = ShuffledDirs::new_deterministic_with_momentum(
+        pattern,
+        IVec2::new(sx, sy),
+        tick,
+        s_mat,
+        0,
+        s_cell.fluid.flags,
+    );
     let dirs = shuffled.get();
 
     let mut best_dest = None;
@@ -97,18 +105,20 @@ fn get_highest_priority_liquid_source(
     let t_idx = (ty * width + tx) as usize;
     let t_cell = &read_buffer[t_idx];
 
-    // Generate pattern using T's coords to break ties fairly
     let pattern = if t_cell.fluid.material == MaterialId::LIQUID_MAGMA {
         FlowPattern::Cardinal
     } else {
         FlowPattern::Omni
     };
-    let shuffled = ShuffledDirs::new_deterministic(
+
+    // Use the target cell's fluid flags to break ties with momentum
+    let shuffled = ShuffledDirs::new_deterministic_with_momentum(
         pattern,
         IVec2::new(tx, ty),
         tick,
         t_cell.fluid.material,
         0,
+        t_cell.fluid.flags,
     );
     let dirs = shuffled.get();
 
@@ -140,6 +150,7 @@ fn get_highest_priority_liquid_source(
     best_source
 }
 
+// Inject momentum flags and erosion into step_liquid:
 #[inline(always)]
 pub fn step_liquid(
     cell: &mut WorldCell,
@@ -154,15 +165,17 @@ pub fn step_liquid(
     let y = pos.y;
 
     let old_fluid = old_cell.fluid.state;
-    let old_atmos = old_cell.atmosphere.state;
+    let mut old_atmos = old_cell.atmosphere.state;
 
     let mut incoming_amt = 0;
     let mut incoming_mat = MaterialId::EMPTY;
     let mut outgoing_amt = 0;
+    let mut source_pos_cache = None;
 
     if let Some(source_pos) =
         get_highest_priority_liquid_source(x, y, read_buffer, width, height, tick)
     {
+        source_pos_cache = Some(source_pos);
         let s_idx = (source_pos.y * width + source_pos.x) as usize;
         let s_cell = &read_buffer[s_idx];
 
@@ -208,6 +221,32 @@ pub fn step_liquid(
             cell.fluid.material = incoming_mat;
             cell.fluid.variant = 0;
         }
+
+        // --- HYDRAULIC MOMENTUM ---
+        if let Some(sp) = source_pos_cache {
+            let flow_dir = pos - sp;
+            let mut new_flags = PixelFlags::WAKES_AWAKE;
+            if flow_dir.y > 0 {
+                new_flags.insert(PixelFlags::FACING_N);
+            }
+            if flow_dir.y < 0 {
+                new_flags.insert(PixelFlags::FACING_S);
+            }
+            if flow_dir.x > 0 {
+                new_flags.insert(PixelFlags::FACING_E);
+            }
+            if flow_dir.x < 0 {
+                new_flags.insert(PixelFlags::FACING_W);
+            }
+            cell.fluid.flags = new_flags;
+        }
+
+        // --- EMERGENT EROSION ---
+        // Fast deterministic bitwise check
+        // By increasing the baseline atmosphere, we permanently deepen the terrain crater.
+        if crate::engine::utils::spatial_hash(pos, tick) & EROSION_MASK == 0 {
+            old_atmos = old_atmos.saturating_add(1);
+        }
     }
 
     cell.fluid.state = old_fluid
@@ -221,22 +260,6 @@ pub fn step_liquid(
     if cell.fluid.state == 0 {
         cell.fluid.material = MaterialId::EMPTY;
         cell.fluid.flags = PixelFlags::NONE;
-    }
-
-    // ---EROSION MECHANIC---
-    // If liquid successfully flowed into this cell, it has a chance to carve the terrain.
-    // TODO: Make this it's own function and a core mechanic for acid materials.
-    if incoming_amt > 0 {
-        if spatial_hash(pos, tick) % EROSION_CHANCE == 0 {
-            if cell.atmosphere.state < EROSION_ACTIVATION_PRESSURE {
-                cell.atmosphere.state = cell
-                    .atmosphere
-                    .state
-                    .saturating_add(EROSION_ATMOSPHERE_INCREASE);
-                // Wake up the terrain layer so it registers the change.
-                cell.terrain.flags.insert(PixelFlags::WAKES_AWAKE);
-            }
-        }
     }
 }
 
