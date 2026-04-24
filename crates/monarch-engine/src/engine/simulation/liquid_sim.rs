@@ -1,9 +1,13 @@
 use bevy::math::IVec2;
 
 use crate::engine::{
-    utils::{FlowPattern, ShuffledDirs},
+    utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::cell::{MaterialId, PixelFlags, WorldCell},
 };
+
+pub const EROSION_CHANCE: u32 = 1;
+pub const EROSION_ACTIVATION_PRESSURE: u8 = 250;
+pub const EROSION_ATMOSPHERE_INCREASE: u8 = 1;
 
 #[inline(always)]
 fn is_liquid_mat(mat: MaterialId) -> bool {
@@ -217,6 +221,22 @@ pub fn step_liquid(
     if cell.fluid.state == 0 {
         cell.fluid.material = MaterialId::EMPTY;
         cell.fluid.flags = PixelFlags::NONE;
+    }
+
+    // ---EROSION MECHANIC---
+    // If liquid successfully flowed into this cell, it has a chance to carve the terrain.
+    // TODO: Make this it's own function and a core mechanic for acid materials.
+    if incoming_amt > 0 {
+        if spatial_hash(pos, tick) % EROSION_CHANCE == 0 {
+            if cell.atmosphere.state < EROSION_ACTIVATION_PRESSURE {
+                cell.atmosphere.state = cell
+                    .atmosphere
+                    .state
+                    .saturating_add(EROSION_ATMOSPHERE_INCREASE);
+                // Wake up the terrain layer so it registers the change.
+                cell.terrain.flags.insert(PixelFlags::WAKES_AWAKE);
+            }
+        }
     }
 }
 
