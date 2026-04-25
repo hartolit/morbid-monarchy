@@ -6,6 +6,46 @@ use crate::engine::world::{
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkKey},
 };
 
+/// Disjoint Field Borrowing to provide a read-only view without modification.
+#[derive(Clone, Copy)]
+pub struct GridReadView<'a> {
+    pub cells: &'a [WorldCell],
+    pub width: i32,
+    pub height: i32,
+    pub window_origin: IVec2,
+    pub buffer_head: IVec2,
+}
+
+impl<'a> GridReadView<'a> {
+    /// Zero-cost Toroidal lookup. Maps an absolute world coordinate to a
+    /// physical memory buffer index WITHOUT using division/modulo math.
+    #[inline(always)]
+    pub fn get_cell(&self, world_pos: IVec2) -> Option<(usize, &'a WorldCell)> {
+        let lx = world_pos.x - self.window_origin.x;
+        let ly = world_pos.y - self.window_origin.y;
+
+        // Bounds check eliminates outer Toroidal wrap requirements.
+        if lx >= 0 && lx < self.width && ly >= 0 && ly < self.height {
+            // lx and buffer_head are both strictly [0, width - 1].
+            // A single subtraction replaces the rem_euclid() division instruction.
+            let mut bx = lx + self.buffer_head.x;
+            if bx >= self.width {
+                bx -= self.width;
+            }
+
+            let mut by = ly + self.buffer_head.y;
+            if by >= self.height {
+                by -= self.height;
+            }
+
+            let idx = (by * self.width + bx) as usize;
+            Some((idx, &self.cells[idx]))
+        } else {
+            None
+        }
+    }
+}
+
 /// Toroidal (wrapping) grid where cellular automata runs.
 #[derive(Resource)]
 pub struct ActiveWorldGrid {
@@ -60,10 +100,21 @@ impl ActiveWorldGrid {
         IVec2::new((index as i32) % width, (index as i32) / width)
     }
 
+    /// Generates a zero-cost, Copy-able view of the back buffer for parallel physics evaluation.
+    #[inline(always)]
+    pub fn back_buffer_view(&self) -> GridReadView<'_> {
+        GridReadView {
+            cells: &self.back_buffer,
+            width: self.width,
+            height: self.height,
+            window_origin: self.window_origin,
+            buffer_head: self.buffer_head,
+        }
+    }
+
     /// Prepares the buffers for a simulation tick with zero allocation.
     #[inline(always)]
     pub fn swap_buffers(&mut self) {
-        // Pointer swap: The front buffer becomes the new historical back buffer.
         std::mem::swap(&mut self.cells, &mut self.back_buffer);
         self.cells.copy_from_slice(&self.back_buffer);
         self.tick = self.tick.wrapping_add(1);

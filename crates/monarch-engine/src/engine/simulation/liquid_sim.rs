@@ -2,11 +2,12 @@ use bevy::math::IVec2;
 
 use crate::engine::{
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
-    world::cell::{MaterialId, PixelFlags, WorldCell},
+    world::{
+        cell::{MaterialId, PixelFlags, WorldCell},
+        grid::GridReadView,
+    },
 };
 
-// MUST be a 2^n - 1 value!
-// Examples: 127 (1/128), 255 (1/256), 511 (1/512), 1023 (1/1024), 2047 (1/2048)
 pub const EROSION_MASK: u32 = 511;
 
 #[inline(always)]
@@ -30,42 +31,13 @@ fn calc_transfer_amount(s_fluid: u8, t_fluid: u8, s_atmos: u8, t_atmos: u8) -> u
     amount
 }
 
-/// Safely attempts to map an absolute world coordinate to a memory buffer index.
-/// Returns None if the coordinate falls outside the currently loaded Active Window.
-#[inline(always)]
-fn get_buffer_idx(
-    world_x: i32,
-    world_y: i32,
-    window_origin: IVec2,
-    buffer_head: IVec2,
-    width: i32,
-    height: i32,
-) -> Option<usize> {
-    let lx = world_x - window_origin.x;
-    let ly = world_y - window_origin.y;
-
-    if lx >= 0 && lx < width && ly >= 0 && ly < height {
-        let bx = (lx + buffer_head.x).rem_euclid(width);
-        let by = (ly + buffer_head.y).rem_euclid(height);
-        Some((by * width + bx) as usize)
-    } else {
-        None
-    }
-}
-
 #[inline(always)]
 fn get_source_preference(
-    sx: i32,
-    sy: i32,
-    read_buffer: &[WorldCell],
-    width: i32,
-    height: i32,
-    window_origin: IVec2,
-    buffer_head: IVec2,
+    world_pos: IVec2,
+    view: GridReadView,
     tick: u32,
-) -> Option<IVec2> {
-    let my_idx = get_buffer_idx(sx, sy, window_origin, buffer_head, width, height).unwrap();
-    let s_cell = &read_buffer[my_idx];
+) -> Option<(usize, IVec2)> {
+    let (_, s_cell) = view.get_cell(world_pos)?;
     let s_mat = s_cell.fluid.material;
 
     if !is_liquid_mat(s_mat) {
@@ -80,23 +52,21 @@ fn get_source_preference(
 
     let shuffled = ShuffledDirs::new_deterministic_with_momentum(
         pattern,
-        IVec2::new(sx, sy),
+        world_pos,
         tick,
         s_mat,
         0,
         s_cell.fluid.flags,
     );
-    let dirs = shuffled.get();
 
     let mut best_dest = None;
     let mut best_atmos = s_cell.atmosphere.state;
 
-    for &dir in dirs.iter() {
-        let nx = sx + dir.x;
-        let ny = sy + dir.y;
+    for &dir in shuffled.get().iter() {
+        let n_pos = world_pos + dir;
 
-        if let Some(n_idx) = get_buffer_idx(nx, ny, window_origin, buffer_head, width, height) {
-            let n_cell = &read_buffer[n_idx];
+        // Zero-cost bounds check and torodial mapping via the view
+        if let Some((n_idx, n_cell)) = view.get_cell(n_pos) {
             let n_atmos = n_cell.atmosphere.state;
 
             if n_atmos > s_cell.atmosphere.state {
@@ -107,7 +77,7 @@ fn get_source_preference(
                 if is_empty || is_same || can_overtake {
                     if n_atmos > best_atmos {
                         best_atmos = n_atmos;
-                        best_dest = Some(IVec2::new(nx, ny));
+                        best_dest = Some((n_idx, n_pos)); // Cache both the raw index and pos
                     }
                 }
             }
@@ -118,17 +88,11 @@ fn get_source_preference(
 
 #[inline(always)]
 fn get_highest_priority_liquid_source(
-    tx: i32,
-    ty: i32,
-    read_buffer: &[WorldCell],
-    width: i32,
-    height: i32,
-    window_origin: IVec2,
-    buffer_head: IVec2,
+    world_pos: IVec2,
+    view: GridReadView,
     tick: u32,
-) -> Option<IVec2> {
-    let t_idx = get_buffer_idx(tx, ty, window_origin, buffer_head, width, height).unwrap();
-    let t_cell = &read_buffer[t_idx];
+) -> Option<(usize, IVec2)> {
+    let (_, t_cell) = view.get_cell(world_pos)?;
 
     let pattern = if t_cell.fluid.material == MaterialId::LIQUID_MAGMA {
         FlowPattern::Cardinal
@@ -136,43 +100,29 @@ fn get_highest_priority_liquid_source(
         FlowPattern::Omni
     };
 
-    // Use the target cell's fluid flags to break ties with momentum
     let shuffled = ShuffledDirs::new_deterministic_with_momentum(
         pattern,
-        IVec2::new(tx, ty),
+        world_pos,
         tick,
         t_cell.fluid.material,
         0,
         t_cell.fluid.flags,
     );
-    let dirs = shuffled.get();
 
     let mut best_source = None;
     let mut best_fluid = 0;
 
-    for &dir in dirs.iter() {
-        let sx = tx + dir.x;
-        let sy = ty + dir.y;
+    for &dir in shuffled.get().iter() {
+        let s_pos = world_pos + dir;
 
-        if let Some(s_idx) = get_buffer_idx(sx, sy, window_origin, buffer_head, width, height) {
-            let s_cell = &read_buffer[s_idx];
-
+        if let Some((s_idx, s_cell)) = view.get_cell(s_pos) {
             if is_liquid_mat(s_cell.fluid.material) {
-                // Symmetrical Check: Cell T asks Cell S what Cell S wants to do
-                if let Some(pref) = get_source_preference(
-                    sx,
-                    sy,
-                    read_buffer,
-                    width,
-                    height,
-                    window_origin,
-                    buffer_head,
-                    tick,
-                ) {
-                    if pref.x == tx && pref.y == ty {
+                // Symmetrical Check
+                if let Some((_, pref_pos)) = get_source_preference(s_pos, view, tick) {
+                    if pref_pos == world_pos {
                         if s_cell.fluid.state > best_fluid {
                             best_fluid = s_cell.fluid.state;
-                            best_source = Some(IVec2::new(sx, sy));
+                            best_source = Some((s_idx, s_pos));
                         }
                     }
                 }
@@ -182,22 +132,14 @@ fn get_highest_priority_liquid_source(
     best_source
 }
 
-// Inject momentum flags and erosion into step_liquid:
 #[inline(always)]
 pub fn step_liquid(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
-    read_buffer: &[WorldCell],
-    width: i32,
-    height: i32,
+    view: GridReadView,
     world_pos: IVec2,
-    window_origin: IVec2,
-    buffer_head: IVec2,
     tick: u32,
 ) {
-    let x = world_pos.x;
-    let y = world_pos.y;
-
     let old_fluid = old_cell.fluid.state;
     let mut old_atmos = old_cell.atmosphere.state;
 
@@ -206,27 +148,10 @@ pub fn step_liquid(
     let mut outgoing_amt = 0;
     let mut source_pos_cache = None;
 
-    if let Some(source_pos) = get_highest_priority_liquid_source(
-        x,
-        y,
-        read_buffer,
-        width,
-        height,
-        window_origin,
-        buffer_head,
-        tick,
-    ) {
+    // Destructures the raw index directly without division operations.
+    if let Some((s_idx, source_pos)) = get_highest_priority_liquid_source(world_pos, view, tick) {
         source_pos_cache = Some(source_pos);
-        let s_idx = get_buffer_idx(
-            source_pos.x,
-            source_pos.y,
-            window_origin,
-            buffer_head,
-            width,
-            height,
-        )
-        .unwrap();
-        let s_cell = &read_buffer[s_idx];
+        let s_cell = &view.cells[s_idx];
 
         incoming_amt = calc_transfer_amount(
             s_cell.fluid.state,
@@ -238,44 +163,21 @@ pub fn step_liquid(
     }
 
     if is_liquid_mat(old_cell.fluid.material) {
-        if let Some(dest_pos) = get_source_preference(
-            x,
-            y,
-            read_buffer,
-            width,
-            height,
-            window_origin,
-            buffer_head,
-            tick,
-        ) {
-            let winner = get_highest_priority_liquid_source(
-                dest_pos.x,
-                dest_pos.y,
-                read_buffer,
-                width,
-                height,
-                window_origin,
-                buffer_head,
-                tick,
-            );
-            if winner == Some(world_pos) {
-                let d_idx = get_buffer_idx(
-                    dest_pos.x,
-                    dest_pos.y,
-                    window_origin,
-                    buffer_head,
-                    width,
-                    height,
-                )
-                .unwrap();
-                let d_cell = &read_buffer[d_idx];
+        if let Some((_, dest_pos)) = get_source_preference(world_pos, view, tick) {
+            if let Some((_, winner_pos)) = get_highest_priority_liquid_source(dest_pos, view, tick)
+            {
+                if winner_pos == world_pos {
+                    if let Some((d_idx, _)) = view.get_cell(dest_pos) {
+                        let d_cell = &view.cells[d_idx];
 
-                outgoing_amt = calc_transfer_amount(
-                    old_fluid,
-                    d_cell.fluid.state,
-                    old_atmos,
-                    d_cell.atmosphere.state,
-                );
+                        outgoing_amt = calc_transfer_amount(
+                            old_fluid,
+                            d_cell.fluid.state,
+                            old_atmos,
+                            d_cell.atmosphere.state,
+                        );
+                    }
+                }
             }
         }
     }
@@ -335,7 +237,10 @@ pub fn step_liquid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::world::cell::{MaterialId, WorldCell};
+    use crate::engine::world::{
+        cell::{MaterialId, WorldCell},
+        grid::GridReadView,
+    };
     use bevy::math::IVec2;
     use rayon::prelude::*;
 
@@ -379,21 +284,23 @@ mod tests {
 
             let read_buffer = &back_buffer;
 
+            // Construct the zero-cost view inline
+            let view = GridReadView {
+                cells: read_buffer,
+                width,
+                height,
+                window_origin: IVec2::ZERO,
+                buffer_head: IVec2::ZERO,
+            };
+
             // Parallel lock-free execution (The Danger Zone)
             cells.par_iter_mut().enumerate().for_each(|(idx, cell)| {
                 let pos = IVec2::new((idx as i32) % width, (idx as i32) / width);
                 let old_cell = &read_buffer[idx];
 
                 step_liquid(
-                    cell,
-                    old_cell,
-                    read_buffer,
-                    width,
-                    height,
-                    pos,
-                    IVec2::ZERO,
-                    IVec2::ZERO,
-                    tick,
+                    cell, old_cell, view, // Safely copied into the Rayon closure
+                    pos, tick,
                 );
             });
 

@@ -12,7 +12,7 @@ use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::prelude::{ActiveWorldGrid, MaterialId};
+use crate::prelude::{ActiveWorldGrid, GridReadView, MaterialId};
 
 pub enum GridEvent {
     SpawnParticle { pos: IVec2, material: MaterialId },
@@ -53,20 +53,24 @@ pub fn simulate_world(
     event_queue: Res<SimulationEventQueue>,
     config: Res<SimulationConfig>,
 ) {
-    let width = grid_res.width;
-    let height = grid_res.height;
-    let buffer_head = grid_res.buffer_head;
-    let window_origin = grid_res.window_origin;
-
     grid_res.swap_buffers();
     let grid_mut = grid_res.into_inner();
 
+    let width = grid_mut.width;
+    let height = grid_mut.height;
     let tick = grid_mut.tick;
-    let read_buffer = &grid_mut.back_buffer;
     let global_tx = event_queue.tx.clone();
 
     let run_liquid = config.run_liquid;
     let run_biology = config.run_biology;
+
+    let view = GridReadView {
+        cells: &grid_mut.back_buffer,
+        width,
+        height,
+        window_origin: grid_mut.window_origin,
+        buffer_head: grid_mut.buffer_head,
+    };
 
     grid_mut.cells.par_iter_mut().enumerate().for_each_init(
         || (global_tx.clone(), SmallRng::from_rng(&mut rand::rng())),
@@ -75,35 +79,28 @@ pub fn simulate_world(
 
             // Map the physical memory buffer coordinate to the logical screen coordinate
             let local_pos = IVec2::new(
-                (buffer_pos.x - buffer_head.x).rem_euclid(width),
-                (buffer_pos.y - buffer_head.y).rem_euclid(height),
+                (buffer_pos.x - view.buffer_head.x).rem_euclid(width),
+                (buffer_pos.y - view.buffer_head.y).rem_euclid(height),
             );
 
             // Map the screen coordinate to absolute global world space
-            let world_pos = local_pos + window_origin;
-
-            let old_cell = &read_buffer[idx];
+            let world_pos = local_pos + view.window_origin;
+            let old_cell = &view.cells[idx];
 
             // Lock-Free Wake Propagation Check
             let mut should_simulate = old_cell.is_awake();
 
             // If we are asleep, check if any 8 neighbors are awake.
-            // We MUST respect the Active Window bounds here, not wrap the Toroidal array.
             if !should_simulate {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         if dx == 0 && dy == 0 {
                             continue;
                         }
-                        let lx = local_pos.x + dx;
-                        let ly = local_pos.y + dy;
 
-                        if lx >= 0 && lx < width && ly >= 0 && ly < height {
-                            let bx = (lx + buffer_head.x).rem_euclid(width);
-                            let by = (ly + buffer_head.y).rem_euclid(height);
-                            let n_idx = (by * width + bx) as usize;
-
-                            if read_buffer[n_idx].is_awake() {
+                        let n_pos = world_pos + IVec2::new(dx, dy);
+                        if let Some((_, n_cell)) = view.get_cell(n_pos) {
+                            if n_cell.is_awake() {
                                 should_simulate = true;
                                 break;
                             }
@@ -122,32 +119,11 @@ pub fn simulate_world(
             cell.sleep();
 
             if run_liquid && tick % 2 == 0 {
-                liquid_sim::step_liquid(
-                    cell,
-                    old_cell,
-                    read_buffer,
-                    width,
-                    height,
-                    world_pos,
-                    window_origin,
-                    buffer_head,
-                    tick,
-                );
+                liquid_sim::step_liquid(cell, old_cell, view, world_pos, tick);
             }
 
             if run_biology && rng.random_ratio(1, 10) {
-                biology_sim::step_biology(
-                    cell,
-                    old_cell,
-                    read_buffer,
-                    width,
-                    height,
-                    world_pos,
-                    window_origin,
-                    buffer_head,
-                    rng,
-                    tx,
-                );
+                biology_sim::step_biology(cell, old_cell, view, world_pos, rng, tx);
             }
 
             if cell != old_cell {
