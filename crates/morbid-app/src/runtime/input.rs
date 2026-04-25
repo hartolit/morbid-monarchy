@@ -13,8 +13,8 @@ const ZOOM_SENSITIVITY: f32 = 15.0; // world-units per scroll line
 const ZOOM_SENSITIVITY_PIXELS: f32 = 0.5; // world-units per pixel (trackpad)
 const MIN_DIST: f32 = 20.0;
 const MAX_DIST: f32 = 800.0;
-const MIN_PITCH: f32 = 0.1745; // ~10 degrees
-const MAX_PITCH: f32 = 1.5533; // ~89 degrees
+const MIN_PITCH: f32 = 0.18; // ~10 degrees
+const MAX_PITCH: f32 = 1.6; // ~89 degrees
 
 // ---------------------------------------------------------------------------
 // Component

@@ -47,7 +47,7 @@ pub struct WorldTuningConfig {
 impl Default for WorldTuningConfig {
     fn default() -> Self {
         Self {
-            h_max: 128.0,
+            h_max: 256.0,
             elevation_scale: 0.5,
         }
     }
@@ -323,31 +323,17 @@ fn sync_grid_rendering(
 // Procedural dummy mesh
 // ---------------------------------------------------------------------------
 
-/// Builds a minimal mesh whose only purpose is to tell Bevy's draw-call
-/// machinery how many vertices to emit.  The vertex shader ignores all
-/// attribute values and reconstructs world-space geometry purely from
-/// `@builtin(vertex_index)`.
-///
-/// Layout driven by the shader — 7 face-slots × 6 verts per cell:
-///   • Slot 0   — Terrain top cap        (1 face  × 6 verts)
-///   • Slots 1-4 — Terrain side walls    (4 faces × 6 verts)
-///   • Slot 5   — Fluid top cap          (1 face  × 6 verts, degenerate if no fluid)
-///   • Slot 6   — Surface top cap        (1 face  × 6 verts, degenerate if no surface)
-///
-/// Total vertices = width × height × 7 × 6 = width × height × 42
-///
+/// Builds a minimal mesh whose only purpose is to tell Bevy how many vertices to emit.
 /// We store a dummy POSITION attribute (all zeros) because Bevy requires at
-/// least one vertex attribute to build a valid pipeline layout.  The shader
-/// reads `@location(0) position` but immediately discards it.
+/// least one vertex attribute to build a valid pipeline layout.
+/// The shader reads `@location(0) position` but immediately discards it.
 fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
-    // 7 face-slots × 6 verts (non-indexed triangles)
-    let vertex_count = (width * height * 7 * 6) as usize;
+    // 11 face-slots × 6 verts (non-indexed triangles)
+    let vertex_count = (width * height * 11 * 6) as usize;
 
-    // All-zero positions: the shader never reads these values.
     let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    // No index buffer — vertices are emitted in order, shader uses vertex_index.
     mesh
 }
