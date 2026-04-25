@@ -55,6 +55,8 @@ pub fn simulate_world(
 ) {
     let width = grid_res.width;
     let height = grid_res.height;
+    let buffer_head = grid_res.buffer_head;
+    let window_origin = grid_res.window_origin;
 
     grid_res.swap_buffers();
     let grid_mut = grid_res.into_inner();
@@ -69,27 +71,42 @@ pub fn simulate_world(
     grid_mut.cells.par_iter_mut().enumerate().for_each_init(
         || (global_tx.clone(), SmallRng::from_rng(&mut rand::rng())),
         |(tx, rng), (idx, cell)| {
-            let pos = ActiveWorldGrid::index_to_pos(idx, width);
+            let buffer_pos = ActiveWorldGrid::index_to_pos(idx, width);
+
+            // Map the physical memory buffer coordinate to the logical screen coordinate
+            let local_pos = IVec2::new(
+                (buffer_pos.x - buffer_head.x).rem_euclid(width),
+                (buffer_pos.y - buffer_head.y).rem_euclid(height),
+            );
+
+            // Map the screen coordinate to absolute global world space
+            let world_pos = local_pos + window_origin;
+
             let old_cell = &read_buffer[idx];
 
             // Lock-Free Wake Propagation Check
             let mut should_simulate = old_cell.is_awake();
 
-            // If we are asleep, check if any 8 neighbors are awake. If they are,
-            // they might flow into us or interact with us, so we MUST wake up to receive them.
+            // If we are asleep, check if any 8 neighbors are awake.
+            // We MUST respect the Active Window bounds here, not wrap the Toroidal array.
             if !should_simulate {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
                         if dx == 0 && dy == 0 {
                             continue;
                         }
-                        let nx = (pos.x + dx).rem_euclid(width);
-                        let ny = (pos.y + dy).rem_euclid(height);
-                        let n_idx = (ny * width + nx) as usize;
+                        let lx = local_pos.x + dx;
+                        let ly = local_pos.y + dy;
 
-                        if read_buffer[n_idx].is_awake() {
-                            should_simulate = true;
-                            break;
+                        if lx >= 0 && lx < width && ly >= 0 && ly < height {
+                            let bx = (lx + buffer_head.x).rem_euclid(width);
+                            let by = (ly + buffer_head.y).rem_euclid(height);
+                            let n_idx = (by * width + bx) as usize;
+
+                            if read_buffer[n_idx].is_awake() {
+                                should_simulate = true;
+                                break;
+                            }
                         }
                     }
                     if should_simulate {
@@ -98,33 +115,46 @@ pub fn simulate_world(
                 }
             }
 
-            // If absolute dead space, branch predictor skips everything.
-            // The `cell` is already an exact copy of `old_cell` due to swap_buffers().
             if !should_simulate {
                 return;
             }
 
-            // Default to sleeping next frame unless a system mutates us
             cell.sleep();
 
-            // Deterministic simulation step
             if run_liquid && tick % 2 == 0 {
-                liquid_sim::step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
+                liquid_sim::step_liquid(
+                    cell,
+                    old_cell,
+                    read_buffer,
+                    width,
+                    height,
+                    world_pos,
+                    window_origin,
+                    buffer_head,
+                    tick,
+                );
             }
 
-            // Non-deterministic simulation step
             if run_biology && rng.random_ratio(1, 10) {
-                biology_sim::step_biology(cell, old_cell, read_buffer, width, height, rng, tx, pos);
+                biology_sim::step_biology(
+                    cell,
+                    old_cell,
+                    read_buffer,
+                    width,
+                    height,
+                    world_pos,
+                    window_origin,
+                    buffer_head,
+                    rng,
+                    tx,
+                );
             }
 
-            // If the cell's memory footprint changed AT ALL during the step, it wakes up.
             if cell != old_cell {
                 cell.wake();
             } else if cell.terrain.material == MaterialId::ORGANIC_FOLIAGE
                 && cell.terrain.state < 10
             {
-                // Special case: Stochastic processes (like plant growth) that failed
-                // their RNG roll this frame must stay awake to try again next frame.
                 cell.wake();
             }
         },

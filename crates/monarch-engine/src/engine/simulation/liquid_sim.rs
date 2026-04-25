@@ -30,6 +30,29 @@ fn calc_transfer_amount(s_fluid: u8, t_fluid: u8, s_atmos: u8, t_atmos: u8) -> u
     amount
 }
 
+/// Safely attempts to map an absolute world coordinate to a memory buffer index.
+/// Returns None if the coordinate falls outside the currently loaded Active Window.
+#[inline(always)]
+fn get_buffer_idx(
+    world_x: i32,
+    world_y: i32,
+    window_origin: IVec2,
+    buffer_head: IVec2,
+    width: i32,
+    height: i32,
+) -> Option<usize> {
+    let lx = world_x - window_origin.x;
+    let ly = world_y - window_origin.y;
+
+    if lx >= 0 && lx < width && ly >= 0 && ly < height {
+        let bx = (lx + buffer_head.x).rem_euclid(width);
+        let by = (ly + buffer_head.y).rem_euclid(height);
+        Some((by * width + bx) as usize)
+    } else {
+        None
+    }
+}
+
 #[inline(always)]
 fn get_source_preference(
     sx: i32,
@@ -37,9 +60,11 @@ fn get_source_preference(
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
+    window_origin: IVec2,
+    buffer_head: IVec2,
     tick: u32,
 ) -> Option<IVec2> {
-    let my_idx = (sy * width + sx) as usize;
+    let my_idx = get_buffer_idx(sx, sy, window_origin, buffer_head, width, height).unwrap();
     let s_cell = &read_buffer[my_idx];
     let s_mat = s_cell.fluid.material;
 
@@ -53,7 +78,6 @@ fn get_source_preference(
         FlowPattern::Omni
     };
 
-    // Use the cell's own flags to drive its momentum bias
     let shuffled = ShuffledDirs::new_deterministic_with_momentum(
         pattern,
         IVec2::new(sx, sy),
@@ -71,8 +95,7 @@ fn get_source_preference(
         let nx = sx + dir.x;
         let ny = sy + dir.y;
 
-        if nx >= 0 && nx < width && ny >= 0 && ny < height {
-            let n_idx = (ny * width + nx) as usize;
+        if let Some(n_idx) = get_buffer_idx(nx, ny, window_origin, buffer_head, width, height) {
             let n_cell = &read_buffer[n_idx];
             let n_atmos = n_cell.atmosphere.state;
 
@@ -100,9 +123,11 @@ fn get_highest_priority_liquid_source(
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
+    window_origin: IVec2,
+    buffer_head: IVec2,
     tick: u32,
 ) -> Option<IVec2> {
-    let t_idx = (ty * width + tx) as usize;
+    let t_idx = get_buffer_idx(tx, ty, window_origin, buffer_head, width, height).unwrap();
     let t_cell = &read_buffer[t_idx];
 
     let pattern = if t_cell.fluid.material == MaterialId::LIQUID_MAGMA {
@@ -129,14 +154,21 @@ fn get_highest_priority_liquid_source(
         let sx = tx + dir.x;
         let sy = ty + dir.y;
 
-        if sx >= 0 && sx < width && sy >= 0 && sy < height {
-            let s_idx = (sy * width + sx) as usize;
+        if let Some(s_idx) = get_buffer_idx(sx, sy, window_origin, buffer_head, width, height) {
             let s_cell = &read_buffer[s_idx];
 
             if is_liquid_mat(s_cell.fluid.material) {
                 // Symmetrical Check: Cell T asks Cell S what Cell S wants to do
-                if let Some(pref) = get_source_preference(sx, sy, read_buffer, width, height, tick)
-                {
+                if let Some(pref) = get_source_preference(
+                    sx,
+                    sy,
+                    read_buffer,
+                    width,
+                    height,
+                    window_origin,
+                    buffer_head,
+                    tick,
+                ) {
                     if pref.x == tx && pref.y == ty {
                         if s_cell.fluid.state > best_fluid {
                             best_fluid = s_cell.fluid.state;
@@ -158,11 +190,13 @@ pub fn step_liquid(
     read_buffer: &[WorldCell],
     width: i32,
     height: i32,
-    pos: IVec2,
+    world_pos: IVec2,
+    window_origin: IVec2,
+    buffer_head: IVec2,
     tick: u32,
 ) {
-    let x = pos.x;
-    let y = pos.y;
+    let x = world_pos.x;
+    let y = world_pos.y;
 
     let old_fluid = old_cell.fluid.state;
     let mut old_atmos = old_cell.atmosphere.state;
@@ -172,11 +206,26 @@ pub fn step_liquid(
     let mut outgoing_amt = 0;
     let mut source_pos_cache = None;
 
-    if let Some(source_pos) =
-        get_highest_priority_liquid_source(x, y, read_buffer, width, height, tick)
-    {
+    if let Some(source_pos) = get_highest_priority_liquid_source(
+        x,
+        y,
+        read_buffer,
+        width,
+        height,
+        window_origin,
+        buffer_head,
+        tick,
+    ) {
         source_pos_cache = Some(source_pos);
-        let s_idx = (source_pos.y * width + source_pos.x) as usize;
+        let s_idx = get_buffer_idx(
+            source_pos.x,
+            source_pos.y,
+            window_origin,
+            buffer_head,
+            width,
+            height,
+        )
+        .unwrap();
         let s_cell = &read_buffer[s_idx];
 
         incoming_amt = calc_transfer_amount(
@@ -189,17 +238,36 @@ pub fn step_liquid(
     }
 
     if is_liquid_mat(old_cell.fluid.material) {
-        if let Some(dest_pos) = get_source_preference(x, y, read_buffer, width, height, tick) {
+        if let Some(dest_pos) = get_source_preference(
+            x,
+            y,
+            read_buffer,
+            width,
+            height,
+            window_origin,
+            buffer_head,
+            tick,
+        ) {
             let winner = get_highest_priority_liquid_source(
                 dest_pos.x,
                 dest_pos.y,
                 read_buffer,
                 width,
                 height,
+                window_origin,
+                buffer_head,
                 tick,
             );
-            if winner == Some(pos) {
-                let d_idx = (dest_pos.y * width + dest_pos.x) as usize;
+            if winner == Some(world_pos) {
+                let d_idx = get_buffer_idx(
+                    dest_pos.x,
+                    dest_pos.y,
+                    window_origin,
+                    buffer_head,
+                    width,
+                    height,
+                )
+                .unwrap();
                 let d_cell = &read_buffer[d_idx];
 
                 outgoing_amt = calc_transfer_amount(
@@ -222,9 +290,9 @@ pub fn step_liquid(
             cell.fluid.variant = 0;
         }
 
-        // --- HYDRAULIC MOMENTUM ---
+        // --- Hydraulic Momentum ---
         if let Some(sp) = source_pos_cache {
-            let flow_dir = pos - sp;
+            let flow_dir = world_pos - sp;
             let mut new_flags = PixelFlags::WAKES_AWAKE;
             if flow_dir.y > 0 {
                 new_flags.insert(PixelFlags::FACING_N);
@@ -241,10 +309,8 @@ pub fn step_liquid(
             cell.fluid.flags = new_flags;
         }
 
-        // --- EMERGENT EROSION ---
-        // Fast deterministic bitwise check
-        // By increasing the baseline atmosphere, we permanently deepen the terrain crater.
-        if spatial_hash(pos, tick) & EROSION_MASK == 0 {
+        // Use world_pos for spatial hash so the noise grid doesn't slide around during camera panning
+        if spatial_hash(world_pos, tick) & EROSION_MASK == 0 {
             old_atmos = old_atmos.saturating_add(1);
         }
     }
@@ -257,6 +323,9 @@ pub fn step_liquid(
         .saturating_sub(incoming_amt)
         .saturating_add(outgoing_amt);
 
+    // --- Emergent Erosion ---
+    // Fast deterministic bitwise check...
+    // Increases atmosphere to permanently deepen terrain crater.
     if cell.fluid.state == 0 {
         cell.fluid.material = MaterialId::EMPTY;
         cell.fluid.flags = PixelFlags::NONE;
@@ -315,7 +384,17 @@ mod tests {
                 let pos = IVec2::new((idx as i32) % width, (idx as i32) / width);
                 let old_cell = &read_buffer[idx];
 
-                step_liquid(cell, old_cell, read_buffer, width, height, pos, tick);
+                step_liquid(
+                    cell,
+                    old_cell,
+                    read_buffer,
+                    width,
+                    height,
+                    pos,
+                    IVec2::ZERO,
+                    IVec2::ZERO,
+                    tick,
+                );
             });
 
             // Verify exact mass conservation after parallel collisions
