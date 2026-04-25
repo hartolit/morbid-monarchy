@@ -1,7 +1,7 @@
 use bevy::math::IVec2;
 
 use crate::engine::{
-    utils::{FlowPattern, ShuffledDirs},
+    utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::cell::{MaterialId, PixelFlags, WorldCell},
 };
 
@@ -244,7 +244,7 @@ pub fn step_liquid(
         // --- EMERGENT EROSION ---
         // Fast deterministic bitwise check
         // By increasing the baseline atmosphere, we permanently deepen the terrain crater.
-        if crate::engine::utils::spatial_hash(pos, tick) & EROSION_MASK == 0 {
+        if spatial_hash(pos, tick) & EROSION_MASK == 0 {
             old_atmos = old_atmos.saturating_add(1);
         }
     }
