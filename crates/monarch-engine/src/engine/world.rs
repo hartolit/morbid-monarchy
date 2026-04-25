@@ -298,11 +298,11 @@ pub fn handle_chunk_loaded(
 
         let mut chunk_data = event.data.clone();
         let current_time = time.elapsed_secs_f64();
-        let delta_secs = current_time - event.data.last_simulated;
 
-        if delta_secs > 1.0 {
-            fast_forward_chunk(&mut chunk_data, delta_secs);
-        }
+        //let delta_secs = current_time - event.data.last_simulated;
+        // if delta_secs > 1.0 {
+        //     fast_forward_chunk(&mut chunk_data, delta_secs);
+        // }
 
         chunk_data.last_simulated = current_time;
 
@@ -325,11 +325,4 @@ pub fn handle_chunk_loaded(
             }
         }
     }
-}
-
-/// Dummy implementation for fast-forwarding chunk physics (e.g., settling water/sand)
-/// Fast-forwards chunk physics (e.g., settling water/blood) to catch up with missed time.
-/// Note: This is a single pass calculation to catch up with missed time and not a 1:1 simulation.
-fn fast_forward_chunk(_chunk_data: &mut ChunkData, _delta_secs: f64) {
-    //todo!("Implement fast-forward physics")
 }

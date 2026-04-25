@@ -18,8 +18,10 @@ pub fn handle_brush_input(
     }
 
     // Do not paint if the user is clicking on an Egui window/dropdown
-    let ctx = egui_contexts.ctx_mut();
-    if ctx.is_err() || ctx.unwrap().wants_pointer_input() {
+    let Ok(ctx) = egui_contexts.ctx_mut() else {
+        return;
+    };
+    if ctx.wants_pointer_input() {
         return;
     }
 
