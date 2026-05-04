@@ -12,12 +12,26 @@ use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::prelude::{ActiveWorldGrid, GridReadView, MaterialId};
+use crate::engine::world::cell::TerrainMat;
+use crate::prelude::{ActiveWorldGrid, GridReadView};
 
 pub enum GridEvent {
-    SpawnParticle { pos: IVec2, material: MaterialId },
-    ApplyDamage { pos: IVec2, amount: u32 },
-    PlaySound { pos: IVec2, sound_id: u8 },
+    SpawnTerrainParticle {
+        pos: IVec2,
+        material: crate::engine::world::cell::TerrainMat,
+    },
+    SpawnFluidParticle {
+        pos: IVec2,
+        material: crate::engine::world::cell::FluidMat,
+    },
+    ApplyDamage {
+        pos: IVec2,
+        amount: u32,
+    },
+    PlaySound {
+        pos: IVec2,
+        sound_id: u8,
+    },
 }
 
 #[derive(Resource)]
@@ -77,20 +91,16 @@ pub fn simulate_world(
         |(tx, rng), (idx, cell)| {
             let buffer_pos = ActiveWorldGrid::index_to_pos(idx, width);
 
-            // Map the physical memory buffer coordinate to the logical screen coordinate
             let local_pos = IVec2::new(
                 (buffer_pos.x - view.buffer_head.x).rem_euclid(width),
                 (buffer_pos.y - view.buffer_head.y).rem_euclid(height),
             );
 
-            // Map the screen coordinate to absolute global world space
             let world_pos = local_pos + view.window_origin;
             let old_cell = &view.cells[idx];
 
-            // Lock-Free Wake Propagation Check
             let mut should_simulate = old_cell.is_awake();
 
-            // If we are asleep, check if any 8 neighbors are awake.
             if !should_simulate {
                 for dy in -1..=1 {
                     for dx in -1..=1 {
@@ -126,11 +136,9 @@ pub fn simulate_world(
                 biology_sim::step_biology(cell, old_cell, view, world_pos, rng, tx);
             }
 
-            if cell != old_cell {
+            if cell.0 != old_cell.0 {
                 cell.wake();
-            } else if cell.terrain.material == MaterialId::ORGANIC_FOLIAGE
-                && cell.terrain.state < 10
-            {
+            } else if cell.terrain_mat() == TerrainMat::FOLIAGE && cell.terrain_state() < 10 {
                 cell.wake();
             }
         },

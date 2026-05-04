@@ -1,4 +1,4 @@
-use crate::{engine::world::cell::MaterialId, prelude::PixelFlags};
+use crate::engine::world::cell::MomentumFlags;
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
 
@@ -18,32 +18,28 @@ impl ShuffledDirs {
     #[inline(always)]
     pub fn new_with_momentum<R: Rng + ?Sized>(
         pattern: FlowPattern,
-        flags: PixelFlags,
+        flags: u8,
         rng: &mut R,
     ) -> Self {
         let (mut dirs, count) = Self::get_base_pattern(pattern);
 
-        // Do a standard shuffle
         dirs[0..count].shuffle(rng);
 
-        // Extract preferred forward vector
         let mut forward = IVec2::ZERO;
-        if flags.contains(PixelFlags::FACING_N) {
+        if (flags & MomentumFlags::FACING_N) != 0 {
             forward.y += 1;
         }
-        if flags.contains(PixelFlags::FACING_S) {
+        if (flags & MomentumFlags::FACING_S) != 0 {
             forward.y -= 1;
         }
-        if flags.contains(PixelFlags::FACING_E) {
+        if (flags & MomentumFlags::FACING_E) != 0 {
             forward.x += 1;
         }
-        if flags.contains(PixelFlags::FACING_W) {
+        if (flags & MomentumFlags::FACING_W) != 0 {
             forward.x -= 1;
         }
 
         if forward != IVec2::ZERO {
-            // Find our preferred forward vector in the shuffled list and swap it to index 0
-            // This guarantees the cell will check its momentum path first.
             if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
                 dirs.swap(0, idx);
             }
@@ -52,68 +48,59 @@ impl ShuffledDirs {
         Self { dirs, count }
     }
 
-    /// STRICT CONSENSUS: Generates a perfectly symmetric, stateless chaotic pattern.
-    /// Use this when multiple cells need to evaluate the exact same boundary outcome.
     #[inline(always)]
     pub fn new_deterministic(
         pattern: FlowPattern,
         pos: IVec2,
         tick: u32,
-        material: MaterialId,
+        material: u8,
         cadence: u32,
     ) -> Self {
         let mut h = spatial_hash_extended(pos, tick, material, cadence);
         let (mut dirs, count) = Self::get_base_pattern(pattern);
 
-        // Deterministic Fisher-Yates shuffle
         for i in (1..count).rev() {
             let j = (h % (i as u32 + 1)) as usize;
             dirs.swap(i, j);
-            // Strong avalanche mutation to guarantee true isotropic shuffling
             h = h.wrapping_mul(0x9E37_79B1).wrapping_add(1);
         }
 
         Self { dirs, count }
     }
 
-    /// STRICT CONSENSUS WITH MOMENTUM: Maintains parallel safety while biasing
-    /// the first evaluated direction based on the pixel's momentum flags.
     #[inline(always)]
     pub fn new_deterministic_with_momentum(
         pattern: FlowPattern,
         pos: IVec2,
         tick: u32,
-        material: MaterialId,
+        material: u8,
         cadence: u32,
-        flags: PixelFlags,
+        flags: u8,
     ) -> Self {
         let mut h = spatial_hash_extended(pos, tick, material, cadence);
         let (mut dirs, count) = Self::get_base_pattern(pattern);
 
-        // Deterministic Fisher-Yates shuffle
         for i in (1..count).rev() {
             let j = (h % (i as u32 + 1)) as usize;
             dirs.swap(i, j);
             h = h.wrapping_mul(0x9E37_79B1).wrapping_add(1);
         }
 
-        // Apply momentum bias safely without breaking parallel consensus
         let mut forward = IVec2::ZERO;
-        if flags.contains(PixelFlags::FACING_N) {
+        if (flags & MomentumFlags::FACING_N) != 0 {
             forward.y += 1;
         }
-        if flags.contains(PixelFlags::FACING_S) {
+        if (flags & MomentumFlags::FACING_S) != 0 {
             forward.y -= 1;
         }
-        if flags.contains(PixelFlags::FACING_E) {
+        if (flags & MomentumFlags::FACING_E) != 0 {
             forward.x += 1;
         }
-        if flags.contains(PixelFlags::FACING_W) {
+        if (flags & MomentumFlags::FACING_W) != 0 {
             forward.x -= 1;
         }
 
         if forward != IVec2::ZERO {
-            // Find our preferred forward vector in the shuffled list and swap it to index 0
             if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
                 dirs.swap(0, idx);
             }
@@ -122,8 +109,6 @@ impl ShuffledDirs {
         Self { dirs, count }
     }
 
-    /// MAXIMUM PERFORMANCE: Uses a fast thread-local RNG.
-    /// Use this for biology, falling powders, or gas diffusion where consensus doesn't matter.
     #[inline(always)]
     pub fn new_random<R: Rng + ?Sized>(pattern: FlowPattern, rng: &mut R) -> Self {
         let (mut dirs, count) = Self::get_base_pattern(pattern);
@@ -169,7 +154,6 @@ impl ShuffledDirs {
     }
 }
 
-/// Robust PCG-like spatial hash.
 #[inline(always)]
 pub fn spatial_hash(pos: IVec2, tick: u32) -> u32 {
     let mut h = (pos.x as u32).wrapping_mul(0x736A_153D)
@@ -184,9 +168,9 @@ pub fn spatial_hash(pos: IVec2, tick: u32) -> u32 {
 }
 
 #[inline(always)]
-pub fn spatial_hash_extended(pos: IVec2, tick: u32, material: MaterialId, cadence: u32) -> u32 {
+pub fn spatial_hash_extended(pos: IVec2, tick: u32, material: u8, cadence: u32) -> u32 {
     let mut h = spatial_hash(pos, tick)
-        .wrapping_add((material.0 as u32).wrapping_mul(0x27D4_EB2F))
+        .wrapping_add((material as u32).wrapping_mul(0x27D4_EB2F))
         .wrapping_add(cadence.wrapping_mul(0x1656_67B1));
     h ^= h >> 13;
     h = h.wrapping_mul(0x85EB_CA6B);

@@ -2,7 +2,7 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::{diagnostic::DiagnosticsStore, ecs::message::MessageWriter, prelude::*};
 use bevy_egui::{EguiContexts, egui};
 use monarch_engine::prelude::{
-    ActiveWorldGrid, ChunkManager, ResizeSimulationEvent, SimulationConfig,
+    ActiveWorldGrid, ChunkManager, FluidMat, ResizeSimulationEvent, SimulationConfig,
 };
 
 use crate::runtime::{
@@ -17,8 +17,8 @@ const BRUSH_OPTIONS: [(GridBrush, &str); 5] = [
     (GridBrush::None, "None"),
     (GridBrush::Water, "Spawn Water"),
     (GridBrush::Sand, "Spawn Sand"),
-    (GridBrush::IncreasePressure, "Increase Pressure"),
-    (GridBrush::DecreasePressure, "Decrease Pressure"),
+    (GridBrush::RaiseTerrain, "Raise Terrain"),
+    (GridBrush::LowerTerrain, "Lower Terrain"),
 ];
 
 pub fn dev_tuning_ui(
@@ -54,44 +54,30 @@ pub fn dev_tuning_ui(
 
     egui::TopBottomPanel::top("dev_navbar").show(ctx, |ui| {
         ui.horizontal_centered(|ui| {
-            // Helper to clean up repetitive spacing/separators
             let add_separator = |ui: &mut egui::Ui| {
                 ui.add_space(16.0);
                 ui.separator();
                 ui.add_space(16.0);
             };
 
-            // --- Left Aligned Tools ---
             ui.label(egui::RichText::new("Tools").strong().size(15.0));
             ui.add_space(16.0);
 
             ui.checkbox(&mut *show_stats, "Statistics");
             add_separator(ui);
 
-            // --- SIMULATION TOGGLES ---
             ui.checkbox(&mut sim_config.run_liquid, "Run Liquid");
             ui.checkbox(&mut sim_config.run_biology, "Run Biology");
             add_separator(ui);
 
-            // --- Physics Tuning ---
-            ui.label(egui::RichText::new("Terrain H-Max:").color(egui::Color32::LIGHT_GRAY));
-            ui.add(
-                egui::DragValue::new(&mut world_config.h_max)
-                    .range(50.0..=500.0)
-                    .speed(8.0),
-            );
-
-            ui.add_space(16.0);
-
             ui.label(egui::RichText::new("Elevation Scale:").color(egui::Color32::LIGHT_GRAY));
             ui.add(
                 egui::DragValue::new(&mut world_config.elevation_scale)
-                    .range(0.1..=5.0)
-                    .speed(0.1),
+                    .range(0.01..=5.0)
+                    .speed(0.05),
             );
             add_separator(ui);
 
-            // --- Grid Resizing ---
             ui.label(egui::RichText::new("Active Radius (X/Y):").color(egui::Color32::LIGHT_GRAY));
             ui.add(egui::DragValue::new(&mut current_size[0]).range(1..=32));
             ui.label("x");
@@ -115,10 +101,8 @@ pub fn dev_tuning_ui(
             }
             add_separator(ui);
 
-            // --- Brush Tools ---
             ui.label(egui::RichText::new("Brush:").strong());
 
-            // Look up the selected text from our options array to avoid a match statement
             let selected_text = BRUSH_OPTIONS
                 .iter()
                 .find(|(b, _)| b == &*brush)
@@ -143,7 +127,6 @@ pub fn dev_tuning_ui(
                 );
             }
 
-            // --- Right Aligned FPS Counter ---
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(fps) = diagnostics
                     .get(&FrameTimeDiagnosticsPlugin::FPS)
@@ -163,7 +146,6 @@ pub fn dev_tuning_ui(
         });
     });
 
-    // --- Floating Statistics Panel ---
     if *show_stats {
         egui::Window::new("World Statistics")
             .anchor(egui::Align2::RIGHT_TOP, [-10.0, 40.0])
@@ -173,11 +155,11 @@ pub fn dev_tuning_ui(
                 let total_mass: u64 = grid
                     .cells
                     .iter()
-                    .filter(|c| c.fluid.material.0 >= 1 && c.fluid.material.0 <= 31)
-                    .map(|c| c.fluid.state as u64)
+                    .filter(|c| c.fluid_mat() != FluidMat::EMPTY)
+                    .map(|c| c.fluid_vol() as u64)
                     .sum();
 
-                let total_atmos: u64 = grid.cells.iter().map(|c| c.atmosphere.state as u64).sum();
+                let total_elev: u64 = grid.cells.iter().map(|c| c.elevation() as u64).sum();
 
                 egui::Grid::new("stats_grid").striped(true).show(ui, |ui| {
                     ui.label(egui::RichText::new("Total Liquid Vol:").strong());
@@ -186,9 +168,9 @@ pub fn dev_tuning_ui(
                     );
                     ui.end_row();
 
-                    ui.label(egui::RichText::new("Total Atmos Pressure:").strong());
+                    ui.label(egui::RichText::new("Total Elevation:").strong());
                     ui.label(
-                        egui::RichText::new(total_atmos.to_string())
+                        egui::RichText::new(total_elev.to_string())
                             .color(egui::Color32::LIGHT_GRAY),
                     );
                     ui.end_row();

@@ -11,8 +11,8 @@ pub enum GridBrush {
     None,
     Water,
     Sand,
-    IncreasePressure,
-    DecreasePressure,
+    RaiseTerrain,
+    LowerTerrain,
 }
 
 #[derive(Resource)]
