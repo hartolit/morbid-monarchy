@@ -1,3 +1,77 @@
+# [CURRENT] vision:
+
+# World Physics Vision: The 64-Bit Packed Universe
+
+## Overview
+
+This document captures the architectural and creative intent behind the world physics system in Morbid Monarchy. The engine is ruthlessly optimized for parallel Cellular Automata (CA) execution, treating memory bandwidth and CPU cache-line efficiency as the supreme constraints. 
+
+---
+
+## The Core Idea: The 8-Byte Cache-Line Miracle
+
+Cellular Automata is bottlenecked by RAM fetches, not ALU math. To maximize simulation speed, the entire universe is compressed into an aggressively bit-packed 64-bit integer (`u64`) for every `WorldCell`. 
+
+At exactly **8 bytes per cell**, a standard modern CPU fetches **8 cells per 64-byte L1 cache line**. The CPU Rayon threads iterate across a flat 2D grid of these `u64` integers, manipulating them with zero-cost bitwise shifts.
+
+The CPU never sees a 3D world. It sees a 2D topographical map. The WGSL GPU shader extrapolates the 3D heights entirely on-the-fly from the bit-packed integers.
+
+### The Boundary-Aligned Layout
+
+Because WGSL reads storage buffers as 32-bit arrays (`array<u32>`), our 64 bits are strictly designed so that no variable crosses a 32-bit boundary. This prevents ALU-stalling bit-straddle extractions on the GPU.
+
+**Word 0 (Bits 0-31): The Geometry Word**
+Read by the GPU to construct the physical vertices of the terrain slab, fluid slab, and surface slab.
+- **Bits 0-4 (5 bits):** `terrain_mat` (Rock, Sand, Dirt, Foliage)
+- **Bits 5-9 (5 bits):** `fluid_mat` (Water, Magma, Blood)
+- **Bits 10-14 (5 bits):** `surface_mat` (Fire, Steam, Smoke)
+- **Bits 15-31 (17 bits):** `elevation` (Absolute base terrain height, 0 to 131,071)
+
+**Word 1 (Bits 32-63): The Physics/State Word**
+Read by the CPU and GPU to simulate movement, depth, and biology.
+- **Bits 32-41 (10 bits):** `fluid_vol` (Depth of the liquid slab, max 1,023)
+- **Bits 42-49 (8 bits):** `terrain_state` (Plant growth cycles, biological decay, free variable)
+- **Bits 50-55 (6 bits):** `variants` (Visual noise for the shader palette)
+- **Bits 56-59 (4 bits):** `momentum` (Hydraulic flow vectors: N, S, E, W)
+- **Bits 60-63 (4 bits):** `awake` (CA active-cell tracking flags)
+
+---
+
+## The Physics Rules
+
+### 1. Gravity and Elevation
+The world's verticality is absolute. `elevation` defines the solid floor of the cell. 
+Fluids stack on top of the terrain. The total visual height of a cell is always `elevation + fluid_vol`. 
+- **Liquid Flow:** Water evaluates its 8 neighbors and flows toward the lowest total elevation gradient (`neighbor.elevation + neighbor.fluid_vol`).
+
+### 2. Biology is Decoupled from Shape
+The `terrain_state` bits are strictly reserved for biological lifecycles (e.g., how old a flower is, how decayed a corpse is). It does not affect the physical shape of the cell.
+
+### 3. Falling Sand
+Because the GPU topologies are rigidly ordered (`Terrain -> Fluid -> Surface`), loose sand cannot graphically exist in the terrain slot while simultaneously sinking "through" a liquid.
+Instead, gravity in a rigid CA system is handled via **Material Swapping**. If a cell has `terrain_mat == SAND` and the cell below it has `fluid_mat == WATER`, the cellular automata rules evaluate the density and physically swap their material IDs and volumes in a single lock-free tick.
+
+---
+
+## Why This Is Not "Slop"
+
+The bit-packing uses manual `const` shifts and masks in `crates/monarch-engine/src/engine/world/cell.rs`.
+We do **not** use macro crates like `modular-bitfield`. Macros arbitrarily reorder bits and rely on host endianness, which would cause immediate corruption when the GPU shader reads the raw memory buffer. 
+
+By writing explicit deterministic bit-math, we guarantee the layout is identical on ARM CPUs, x86 CPUs, disk saves (via `bitcode`), and the GPU shader. The raw `u64` is encapsulated behind safe getter/setter methods so the simulation logic (`liquid_sim.rs`, `biology_sim.rs`) never touches a bitwise operator.
+
+---
+
+## Entities Live Outside the Grid
+
+Entities (creatures, players, projectiles) are **not** stored in `WorldCell`. They live in a separate Bevy ECS layer and have their own position, state, and physics. The grid is purely the environmental substrate. This keeps `WorldCell` strictly at 8 bytes and the CA simulation completely deterministic.
+
+
+
+
+---
+# [OLD OBSOLETE] vision:
+
 # World Physics Vision: The Algebraic Membrane Universe
 
 ## Overview
