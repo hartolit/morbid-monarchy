@@ -1,5 +1,4 @@
 use bevy::math::IVec2;
-use flume::Sender;
 use rand::{Rng, RngExt};
 
 use crate::engine::{
@@ -17,7 +16,7 @@ pub fn step_biology<R: Rng + ?Sized>(
     view: GridReadView,
     world_pos: IVec2,
     rng: &mut R,
-    tx: &mut Sender<GridEvent>,
+    local_events: &mut Vec<GridEvent>,
 ) {
     if old_cell.fluid_mat() != FluidMat::EMPTY || old_cell.surface_mat() != SurfaceMat::EMPTY {
         return;
@@ -57,7 +56,7 @@ pub fn step_biology<R: Rng + ?Sized>(
             cell.set_terrain_mat(TerrainMat::SAND);
             cell.set_terrain_state(0);
 
-            let _ = tx.send(GridEvent::SpawnTerrainParticle {
+            local_events.push(GridEvent::SpawnTerrainParticle {
                 pos: world_pos,
                 material: TerrainMat::SAND,
             });

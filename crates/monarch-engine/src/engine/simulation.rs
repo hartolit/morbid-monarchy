@@ -11,8 +11,9 @@ use bevy::{
 use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::TerrainMat;
+use crate::engine::world::cell::{FluidMat, TerrainMat};
 use crate::prelude::{ActiveWorldGrid, GridReadView};
 
 pub enum GridEvent {
@@ -86,63 +87,90 @@ pub fn simulate_world(
         buffer_head: grid_mut.buffer_head,
     };
 
-    grid_mut.cells.par_iter_mut().enumerate().for_each_init(
-        || (global_tx.clone(), SmallRng::from_rng(&mut rand::rng())),
-        |(tx, rng), (idx, cell)| {
-            let buffer_pos = ActiveWorldGrid::index_to_pos(idx, width);
+    let wake_buf = &grid_mut.wake_buffer;
+    let next_wake_buf = &grid_mut.next_wake_buffer;
 
-            let local_pos = IVec2::new(
-                (buffer_pos.x - view.buffer_head.x).rem_euclid(width),
-                (buffer_pos.y - view.buffer_head.y).rem_euclid(height),
-            );
+    // Rayon fold creates thread-local variables. Zero lock contention on the global channel.
+    let events: Vec<GridEvent> = grid_mut
+        .cells
+        .par_iter_mut()
+        .enumerate()
+        .fold(
+            || (Vec::new(), SmallRng::from_rng(&mut rand::rng())),
+            |(mut local_events, mut rng), (idx, cell)| {
+                // Lock-Free O(1) Asleep Elimination
+                if wake_buf[idx].load(Ordering::Relaxed) == 0 {
+                    return (local_events, rng);
+                }
 
-            let world_pos = local_pos + view.window_origin;
-            let old_cell = &view.cells[idx];
+                let buffer_pos = ActiveWorldGrid::index_to_pos(idx, width);
+                let local_pos = IVec2::new(
+                    (buffer_pos.x - view.buffer_head.x).rem_euclid(width),
+                    (buffer_pos.y - view.buffer_head.y).rem_euclid(height),
+                );
 
-            let mut should_simulate = old_cell.is_awake();
+                let world_pos = local_pos + view.window_origin;
+                let old_cell = &view.cells[idx];
 
-            if !should_simulate {
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
+                if run_liquid && tick % 2 == 0 {
+                    liquid_sim::step_liquid(cell, old_cell, view, world_pos, tick);
+                }
 
-                        let n_pos = world_pos + IVec2::new(dx, dy);
-                        if let Some((_, n_cell)) = view.get_cell(n_pos) {
-                            if n_cell.is_awake() {
-                                should_simulate = true;
-                                break;
+                if run_biology && rng.random_ratio(1, 10) {
+                    biology_sim::step_biology(
+                        cell,
+                        old_cell,
+                        view,
+                        world_pos,
+                        &mut rng,
+                        &mut local_events,
+                    );
+                }
+
+                let mut changed = cell.0 != old_cell.0;
+
+                if !changed
+                    && cell.terrain_mat() == TerrainMat::FOLIAGE
+                    && cell.terrain_state() < 10
+                {
+                    changed = true;
+                }
+
+                if changed {
+                    // The cell changed, wake it and its neighbors for the next frame
+                    next_wake_buf[idx].store(1, Ordering::Relaxed);
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+
+                            if let Some(n_idx) = view.get_index(world_pos + IVec2::new(dx, dy)) {
+                                next_wake_buf[n_idx].store(1, Ordering::Relaxed);
                             }
                         }
                     }
-                    if should_simulate {
-                        break;
-                    }
+                } else if run_liquid && tick % 2 != 0 {
+                    // We wake the cell on odd ticks to keep it alive for the next even tick.
+                    next_wake_buf[idx].store(1, Ordering::Relaxed);
                 }
-            }
 
-            if !should_simulate {
-                return;
-            }
+                (local_events, rng)
+            },
+        )
+        .map(|(events, _)| events)
+        .reduce(
+            || Vec::new(),
+            |mut a, mut b| {
+                a.append(&mut b);
+                a
+            },
+        );
 
-            cell.sleep();
-
-            if run_liquid && tick % 2 == 0 {
-                liquid_sim::step_liquid(cell, old_cell, view, world_pos, tick);
-            }
-
-            if run_biology && rng.random_ratio(1, 10) {
-                biology_sim::step_biology(cell, old_cell, view, world_pos, rng, tx);
-            }
-
-            if cell.0 != old_cell.0 {
-                cell.wake();
-            } else if cell.terrain_mat() == TerrainMat::FOLIAGE && cell.terrain_state() < 10 {
-                cell.wake();
-            }
-        },
-    );
+    // Bulk flush the channel in the main thread
+    for ev in events {
+        let _ = global_tx.send(ev);
+    }
 
     grid_mut.cells_dirty = true;
 }

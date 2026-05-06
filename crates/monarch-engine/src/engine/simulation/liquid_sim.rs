@@ -19,7 +19,8 @@ fn calc_transfer_amount(s_fluid: u16, t_fluid: u16, s_elev: u16, t_elev: u16) ->
     }
 
     let diff = s_total - t_total;
-    let mut amount = (diff / 2).max(1);
+    let mut amount = diff / 2;
+
     amount = amount.min(s_fluid as u32);
     amount = amount.min(1023u32.saturating_sub(t_fluid as u32));
     amount as u16
@@ -92,6 +93,7 @@ fn get_highest_priority_liquid_source(
     } else {
         FlowPattern::Omni
     };
+
     let shuffled = ShuffledDirs::new_deterministic_with_momentum(
         pattern,
         world_pos,

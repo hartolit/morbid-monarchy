@@ -21,6 +21,7 @@ impl TerrainMat {
     pub const ICE: Self = Self(12);
     pub const METAL: Self = Self(13);
     pub const GLASS: Self = Self(14);
+    pub const VOID: Self = Self(31);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
@@ -80,8 +81,6 @@ impl WorldCell {
     const VARIANTS_MASK: u64 = 0x3F;
     const MOMENTUM_SHIFT: u64 = 56;
     const MOMENTUM_MASK: u64 = 0xF;
-    const AWAKE_SHIFT: u64 = 60;
-    const AWAKE_MASK: u64 = 0xF;
 
     #[inline(always)]
     pub fn terrain_mat(&self) -> TerrainMat {
@@ -161,18 +160,5 @@ impl WorldCell {
     pub fn set_momentum(&mut self, flags: u8) {
         self.0 = (self.0 & !(Self::MOMENTUM_MASK << Self::MOMENTUM_SHIFT))
             | (((flags as u64) & Self::MOMENTUM_MASK) << Self::MOMENTUM_SHIFT);
-    }
-
-    #[inline(always)]
-    pub fn is_awake(&self) -> bool {
-        ((self.0 >> Self::AWAKE_SHIFT) & Self::AWAKE_MASK) != 0
-    }
-    #[inline(always)]
-    pub fn sleep(&mut self) {
-        self.0 &= !(Self::AWAKE_MASK << Self::AWAKE_SHIFT);
-    }
-    #[inline(always)]
-    pub fn wake(&mut self) {
-        self.0 |= Self::AWAKE_MASK << Self::AWAKE_SHIFT;
     }
 }

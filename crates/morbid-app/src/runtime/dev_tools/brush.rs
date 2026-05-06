@@ -85,7 +85,6 @@ pub fn handle_brush_input(
                             {
                                 cell.set_fluid_mat(FluidMat::WATER);
                                 cell.set_fluid_vol(new_state);
-                                cell.wake();
                                 mutated = true;
                             }
                         }
@@ -93,7 +92,6 @@ pub fn handle_brush_input(
                             if cell.terrain_mat() != TerrainMat::SAND {
                                 cell.set_terrain_mat(TerrainMat::SAND);
                                 cell.set_terrain_state(0);
-                                cell.wake();
                                 mutated = true;
                             }
                         }
@@ -102,7 +100,6 @@ pub fn handle_brush_input(
                                 cell.elevation().saturating_add(settings.strength as u16);
                             if new_elev != cell.elevation() {
                                 cell.set_elevation(new_elev);
-                                cell.wake();
                                 mutated = true;
                             }
                         }
@@ -111,7 +108,6 @@ pub fn handle_brush_input(
                                 cell.elevation().saturating_sub(settings.strength as u16);
                             if new_elev != cell.elevation() {
                                 cell.set_elevation(new_elev);
-                                cell.wake();
                                 mutated = true;
                             }
                         }
@@ -120,6 +116,8 @@ pub fn handle_brush_input(
 
                     if mutated {
                         grid.set_cell(world_pos, cell);
+                        // Safely trigger external wakes to ensure physics reacts next frame
+                        grid.wake_cell(world_pos);
                     }
                 }
             }

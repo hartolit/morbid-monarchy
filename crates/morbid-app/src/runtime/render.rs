@@ -40,7 +40,7 @@ pub struct WorldTuningConfig {
 impl Default for WorldTuningConfig {
     fn default() -> Self {
         Self {
-            elevation_scale: 0.15,
+            elevation_scale: 0.50,
         }
     }
 }

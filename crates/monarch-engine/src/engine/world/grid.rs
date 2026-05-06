@@ -1,4 +1,6 @@
 use bevy::{ecs::resource::Resource, math::IVec2};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::engine::world::{
     DEFAULT_ACTIVE_RADIUS_X, DEFAULT_ACTIVE_RADIUS_Y,
@@ -6,7 +8,6 @@ use crate::engine::world::{
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkKey},
 };
 
-/// Disjoint Field Borrowing to provide a read-only view without modification.
 #[derive(Clone, Copy)]
 pub struct GridReadView<'a> {
     pub cells: &'a [WorldCell],
@@ -17,43 +18,63 @@ pub struct GridReadView<'a> {
 }
 
 impl<'a> GridReadView<'a> {
-    /// Zero-cost Toroidal lookup. Maps an absolute world coordinate to a
-    /// physical memory buffer index WITHOUT using division/modulo math.
     #[inline(always)]
     pub fn get_cell(&self, world_pos: IVec2) -> Option<(usize, &'a WorldCell)> {
-        let lx = world_pos.x - self.window_origin.x;
-        let ly = world_pos.y - self.window_origin.y;
+        // By casting to u32, negative values underflow to MAX, instantly failing the < width check.
+        // This handles both >= 0 and < bounds in a single CPU instruction.
+        let lx = (world_pos.x - self.window_origin.x) as u32;
+        let ly = (world_pos.y - self.window_origin.y) as u32;
 
-        // Bounds check eliminates outer Toroidal wrap requirements.
-        if lx >= 0 && lx < self.width && ly >= 0 && ly < self.height {
-            // lx and buffer_head are both strictly [0, width - 1].
-            // A single subtraction replaces the rem_euclid() division instruction.
-            let mut bx = lx + self.buffer_head.x;
-            if bx >= self.width {
-                bx -= self.width;
+        if lx < self.width as u32 && ly < self.height as u32 {
+            let mut bx = lx + self.buffer_head.x as u32;
+            if bx >= self.width as u32 {
+                bx -= self.width as u32;
             }
 
-            let mut by = ly + self.buffer_head.y;
-            if by >= self.height {
-                by -= self.height;
+            let mut by = ly + self.buffer_head.y as u32;
+            if by >= self.height as u32 {
+                by -= self.height as u32;
             }
 
-            let idx = (by * self.width + bx) as usize;
+            let idx = (by * (self.width as u32) + bx) as usize;
             Some((idx, &self.cells[idx]))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_index(&self, world_pos: IVec2) -> Option<usize> {
+        let lx = (world_pos.x - self.window_origin.x) as u32;
+        let ly = (world_pos.y - self.window_origin.y) as u32;
+
+        if lx < self.width as u32 && ly < self.height as u32 {
+            let mut bx = lx + self.buffer_head.x as u32;
+            if bx >= self.width as u32 {
+                bx -= self.width as u32;
+            }
+
+            let mut by = ly + self.buffer_head.y as u32;
+            if by >= self.height as u32 {
+                by -= self.height as u32;
+            }
+
+            Some((by * (self.width as u32) + bx) as usize)
         } else {
             None
         }
     }
 }
 
-/// Toroidal (wrapping) grid where cellular automata runs.
 #[derive(Resource)]
 pub struct ActiveWorldGrid {
     pub width: i32,
     pub height: i32,
     pub cells: Vec<WorldCell>,
     pub back_buffer: Vec<WorldCell>,
-    pub window_origin: IVec2, // bottom-left corner of the ActiveWorldGrid
+    pub wake_buffer: Vec<AtomicU8>,
+    pub next_wake_buffer: Vec<AtomicU8>,
+    pub window_origin: IVec2,
     pub buffer_head: IVec2,
     pub cells_dirty: bool,
     pub tick: u32,
@@ -82,14 +103,25 @@ impl Default for ActiveWorldGrid {
 impl ActiveWorldGrid {
     pub fn new(width: i32, height: i32, origin: IVec2) -> Self {
         let size = (width * height) as usize;
+
+        let mut wake_buffer = Vec::with_capacity(size);
+        let mut next_wake_buffer = Vec::with_capacity(size);
+        for _ in 0..size {
+            // Start asleep in the current buffer, but AWAKE in the next buffer.
+            // When the first frame calls swap_buffers(), this rotates perfectly.
+            wake_buffer.push(AtomicU8::new(0));
+            next_wake_buffer.push(AtomicU8::new(1));
+        }
+
         Self {
             width,
             height,
             cells: vec![WorldCell::default(); size],
             back_buffer: vec![WorldCell::default(); size],
+            wake_buffer,
+            next_wake_buffer,
             window_origin: origin,
             buffer_head: IVec2::ZERO,
-            // Mark dirty on construction so the first render frame uploads initial data.
             cells_dirty: true,
             tick: 0,
         }
@@ -100,7 +132,6 @@ impl ActiveWorldGrid {
         IVec2::new((index as i32) % width, (index as i32) / width)
     }
 
-    /// Generates a zero-cost, Copy-able view of the back buffer for parallel physics evaluation.
     #[inline(always)]
     pub fn back_buffer_view(&self) -> GridReadView<'_> {
         GridReadView {
@@ -112,11 +143,17 @@ impl ActiveWorldGrid {
         }
     }
 
-    /// Prepares the buffers for a simulation tick with zero allocation.
     #[inline(always)]
     pub fn swap_buffers(&mut self) {
         std::mem::swap(&mut self.cells, &mut self.back_buffer);
         self.cells.copy_from_slice(&self.back_buffer);
+
+        std::mem::swap(&mut self.wake_buffer, &mut self.next_wake_buffer);
+
+        self.next_wake_buffer
+            .par_iter_mut()
+            .for_each(|a| *a.get_mut() = 0);
+
         self.tick = self.tick.wrapping_add(1);
     }
 
@@ -128,10 +165,6 @@ impl ActiveWorldGrid {
         )
     }
 
-    /// Advances the toroidal window anchor to a new world-space origin.
-    /// Only `window_origin` and `buffer_head` are mutated — cell data is
-    /// untouched and `cells_dirty` is NOT set. The render system propagates
-    /// these as a cheap uniform update every frame.
     #[inline(always)]
     pub fn shift_window(&mut self, new_origin: IVec2) {
         let delta = new_origin - self.window_origin;
@@ -143,7 +176,6 @@ impl ActiveWorldGrid {
     pub fn get_index(&self, world_pos: IVec2) -> usize {
         let local_pos = world_pos - self.window_origin;
         let buffer_pos = self.wrap_offset(local_pos + self.buffer_head);
-
         (buffer_pos.y * self.width + buffer_pos.x) as usize
     }
 
@@ -152,7 +184,6 @@ impl ActiveWorldGrid {
         self.cells[self.get_index(world_pos)]
     }
 
-    /// Writes a single cell and marks the buffer dirty for re-upload.
     #[inline(always)]
     pub fn set_cell(&mut self, world_pos: IVec2, cell: WorldCell) {
         let index = self.get_index(world_pos);
@@ -160,8 +191,36 @@ impl ActiveWorldGrid {
         self.cells_dirty = true;
     }
 
-    /// Injects a chunk's data from disk/RAM into the active grid.
-    /// Marks `cells_dirty` so the render system re-uploads the buffer.
+    #[inline(always)]
+    pub fn wake_cell(&self, world_pos: IVec2) {
+        let lx = (world_pos.x - self.window_origin.x) as u32;
+        let ly = (world_pos.y - self.window_origin.y) as u32;
+        if lx < self.width as u32 && ly < self.height as u32 {
+            let buffer_pos = self.wrap_offset(world_pos - self.window_origin + self.buffer_head);
+            let idx = (buffer_pos.y * self.width + buffer_pos.x) as usize;
+
+            // Write to NEXT wake buffer so it survives the swap at the start of the frame
+            self.next_wake_buffer[idx].store(1, Ordering::Relaxed);
+
+            // Broad phase external waking triggers neighbors to evaluate changes
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let nx = (world_pos.x + dx - self.window_origin.x) as u32;
+                    let ny = (world_pos.y + dy - self.window_origin.y) as u32;
+                    if nx < self.width as u32 && ny < self.height as u32 {
+                        let n_bp = self.wrap_offset(
+                            world_pos + IVec2::new(dx, dy) - self.window_origin + self.buffer_head,
+                        );
+                        let n_idx = (n_bp.y * self.width + n_bp.x) as usize;
+
+                        // Write to NEXT wake buffer
+                        self.next_wake_buffer[n_idx].store(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+
     #[inline(always)]
     pub fn load_chunk(&mut self, chunk_key: ChunkKey, chunk_cells: &[WorldCell]) {
         debug_assert_eq!(chunk_cells.len(), CHUNK_CELL_COUNT);
@@ -176,14 +235,16 @@ impl ActiveWorldGrid {
                 let buffer_idx = self.get_index(world_pos);
 
                 self.cells[buffer_idx] = chunk_cells[chunk_idx];
+
+                // Write to NEXT wake buffer
+                *self.next_wake_buffer[buffer_idx].get_mut() = 1;
+
                 chunk_idx += 1;
             }
         }
-
         self.cells_dirty = true;
     }
 
-    /// Extracts a chunk's data directly into an existing buffer. (Zero Allocation)
     #[inline(always)]
     pub fn extract_chunk_into(&self, chunk_key: ChunkKey, dest: &mut [WorldCell]) {
         debug_assert_eq!(dest.len(), CHUNK_CELL_COUNT);
@@ -203,19 +264,22 @@ impl ActiveWorldGrid {
         }
     }
 
-    /// Resizes the grid's underlying vector in-place and updates the math variables.
-    /// WARNING: This changes the stride. Caller MUST extract data before calling this.
-    /// Marks `cells_dirty` because the entire buffer layout has changed.
     pub fn resize_in_place(&mut self, new_width: i32, new_height: i32, new_origin: IVec2) {
         let new_size = (new_width * new_height) as usize;
 
-        // This will expand capacity if needed, or simply truncate the len if shrinking.
-        // It does not drop the underlying allocation.
         self.cells.clear();
         self.cells.resize(new_size, WorldCell::default());
 
         self.back_buffer.clear();
         self.back_buffer.resize(new_size, WorldCell::default());
+
+        self.wake_buffer.clear();
+        self.wake_buffer.resize_with(new_size, || AtomicU8::new(0));
+
+        // Start newly resized grids entirely awake
+        self.next_wake_buffer.clear();
+        self.next_wake_buffer
+            .resize_with(new_size, || AtomicU8::new(1));
 
         self.width = new_width;
         self.height = new_height;
