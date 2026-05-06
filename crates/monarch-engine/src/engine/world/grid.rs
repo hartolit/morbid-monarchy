@@ -110,7 +110,7 @@ impl ActiveWorldGrid {
             // Start asleep in the current buffer, but AWAKE in the next buffer.
             // When the first frame calls swap_buffers(), this rotates perfectly.
             wake_buffer.push(AtomicU8::new(0));
-            next_wake_buffer.push(AtomicU8::new(1));
+            next_wake_buffer.push(AtomicU8::new(2));
         }
 
         Self {
@@ -199,10 +199,8 @@ impl ActiveWorldGrid {
             let buffer_pos = self.wrap_offset(world_pos - self.window_origin + self.buffer_head);
             let idx = (buffer_pos.y * self.width + buffer_pos.x) as usize;
 
-            // Write to NEXT wake buffer so it survives the swap at the start of the frame
-            self.next_wake_buffer[idx].store(1, Ordering::Relaxed);
+            self.next_wake_buffer[idx].fetch_max(2, Ordering::Relaxed);
 
-            // Broad phase external waking triggers neighbors to evaluate changes
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let nx = (world_pos.x + dx - self.window_origin.x) as u32;
@@ -213,8 +211,7 @@ impl ActiveWorldGrid {
                         );
                         let n_idx = (n_bp.y * self.width + n_bp.x) as usize;
 
-                        // Write to NEXT wake buffer
-                        self.next_wake_buffer[n_idx].store(1, Ordering::Relaxed);
+                        self.next_wake_buffer[n_idx].fetch_max(2, Ordering::Relaxed);
                     }
                 }
             }
@@ -237,7 +234,7 @@ impl ActiveWorldGrid {
                 self.cells[buffer_idx] = chunk_cells[chunk_idx];
 
                 // Write to NEXT wake buffer
-                *self.next_wake_buffer[buffer_idx].get_mut() = 1;
+                *self.next_wake_buffer[buffer_idx].get_mut() = 2;
 
                 chunk_idx += 1;
             }
@@ -279,7 +276,7 @@ impl ActiveWorldGrid {
         // Start newly resized grids entirely awake
         self.next_wake_buffer.clear();
         self.next_wake_buffer
-            .resize_with(new_size, || AtomicU8::new(1));
+            .resize_with(new_size, || AtomicU8::new(2));
 
         self.width = new_width;
         self.height = new_height;

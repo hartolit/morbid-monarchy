@@ -103,7 +103,8 @@ pub fn simulate_world(
             || (Vec::new(), SmallRng::from_rng(&mut rand::rng())),
             |(mut local_events, mut rng), (idx, cell)| {
                 // Lock-Free O(1) Asleep Elimination
-                if wake_buf[idx].load(Ordering::Relaxed) == 0 {
+                let wake_val = wake_buf[idx].load(Ordering::Relaxed);
+                if wake_val == 0 {
                     return (local_events, rng);
                 }
 
@@ -116,7 +117,7 @@ pub fn simulate_world(
                 let world_pos = local_pos + view.window_origin;
                 let old_cell = &view.cells[idx];
 
-                // Interleave granular step on odd ticks to avoid excessive CA wave contention
+                // Interleave CA passes: Granular on Odd ticks, Liquid on Even ticks.
                 if run_granular && tick % 2 != 0 {
                     granular_sim::step_granular(cell, old_cell, view, world_pos, tick);
                 }
@@ -146,8 +147,8 @@ pub fn simulate_world(
                 }
 
                 if changed {
-                    // The cell changed, wake it and its neighbors for the next frame
-                    next_wake_buf[idx].store(1, Ordering::Relaxed);
+                    // The cell changed. Apply a TTL of 2 to survive the interleaved passes.
+                    next_wake_buf[idx].fetch_max(2, Ordering::Relaxed);
                     for dy in -1..=1 {
                         for dx in -1..=1 {
                             if dx == 0 && dy == 0 {
@@ -155,13 +156,13 @@ pub fn simulate_world(
                             }
 
                             if let Some(n_idx) = view.get_index(world_pos + IVec2::new(dx, dy)) {
-                                next_wake_buf[n_idx].store(1, Ordering::Relaxed);
+                                next_wake_buf[n_idx].fetch_max(2, Ordering::Relaxed);
                             }
                         }
                     }
-                } else if run_liquid && tick % 2 != 0 {
-                    // We wake the cell on odd ticks to keep it alive for the next even tick.
-                    next_wake_buf[idx].store(1, Ordering::Relaxed);
+                } else if wake_val > 1 {
+                    // No change this tick, but it has remaining TTL. Decrement it.
+                    next_wake_buf[idx].fetch_max(wake_val - 1, Ordering::Relaxed);
                 }
 
                 (local_events, rng)
