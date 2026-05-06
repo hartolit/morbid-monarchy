@@ -68,6 +68,7 @@ pub fn dev_tuning_ui(
 
             ui.checkbox(&mut sim_config.run_liquid, "Run Liquid");
             ui.checkbox(&mut sim_config.run_biology, "Run Biology");
+            ui.checkbox(&mut sim_config.run_granular, "Run Granular");
             add_separator(ui);
 
             ui.label(egui::RichText::new("Elevation Scale:").color(egui::Color32::LIGHT_GRAY));

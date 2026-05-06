@@ -1,5 +1,6 @@
 mod biology_sim;
-pub mod liquid_sim;
+mod granular_sim;
+mod liquid_sim;
 
 use bevy::{
     ecs::{
@@ -13,7 +14,7 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::{FluidMat, TerrainMat};
+use crate::engine::world::cell::TerrainMat;
 use crate::prelude::{ActiveWorldGrid, GridReadView};
 
 pub enum GridEvent {
@@ -39,6 +40,7 @@ pub enum GridEvent {
 pub struct SimulationConfig {
     pub run_liquid: bool,
     pub run_biology: bool,
+    pub run_granular: bool,
 }
 
 impl Default for SimulationConfig {
@@ -46,6 +48,7 @@ impl Default for SimulationConfig {
         Self {
             run_liquid: true,
             run_biology: true,
+            run_granular: true,
         }
     }
 }
@@ -78,6 +81,7 @@ pub fn simulate_world(
 
     let run_liquid = config.run_liquid;
     let run_biology = config.run_biology;
+    let run_granular = config.run_granular;
 
     let view = GridReadView {
         cells: &grid_mut.back_buffer,
@@ -111,6 +115,11 @@ pub fn simulate_world(
 
                 let world_pos = local_pos + view.window_origin;
                 let old_cell = &view.cells[idx];
+
+                // Interleave granular step on odd ticks to avoid excessive CA wave contention
+                if run_granular && tick % 2 != 0 {
+                    granular_sim::step_granular(cell, old_cell, view, world_pos, tick);
+                }
 
                 if run_liquid && tick % 2 == 0 {
                     liquid_sim::step_liquid(cell, old_cell, view, world_pos, tick);

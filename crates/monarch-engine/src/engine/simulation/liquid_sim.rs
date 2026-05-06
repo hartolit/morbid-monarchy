@@ -1,7 +1,7 @@
 use crate::engine::{
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
-        cell::{FluidMat, MomentumFlags, WorldCell},
+        cell::{CompassFlags, FluidMat, WorldCell},
         grid::GridReadView,
     },
 };
@@ -10,7 +10,14 @@ use bevy::math::IVec2;
 pub const EROSION_MASK: u32 = 511;
 
 #[inline(always)]
-fn calc_transfer_amount(s_fluid: u16, t_fluid: u16, s_elev: u16, t_elev: u16) -> u16 {
+fn calc_transfer_amount(
+    s_fluid: u16,
+    t_fluid: u16,
+    s_elev: u16,
+    t_elev: u16,
+    world_pos: IVec2,
+    tick: u32,
+) -> u16 {
     let s_total = s_elev as u32 + s_fluid as u32;
     let t_total = t_elev as u32 + t_fluid as u32;
 
@@ -21,8 +28,16 @@ fn calc_transfer_amount(s_fluid: u16, t_fluid: u16, s_elev: u16, t_elev: u16) ->
     let diff = s_total - t_total;
     let mut amount = diff / 2;
 
+    // Micro-Sloshing: If integer truncation halted the flow but a difference exists,
+    // probabilistically allow 1 unit to transfer to keep fluids self-leveling.
+    if amount == 0 && diff >= 1 {
+        if spatial_hash(world_pos, tick) % 2 == 0 {
+            amount = 1;
+        }
+    }
+
     amount = amount.min(s_fluid as u32);
-    amount = amount.min(1023u32.saturating_sub(t_fluid as u32));
+    amount = amount.min((WorldCell::MAX_FLUID_VOL as u32).saturating_sub(t_fluid as u32));
     amount as u16
 }
 
@@ -50,7 +65,7 @@ fn get_source_preference(
         tick,
         s_mat.0,
         0,
-        s_cell.momentum(),
+        s_cell.compass(),
     );
 
     let s_total = s_cell.elevation() as u32 + s_cell.fluid_vol() as u32;
@@ -100,7 +115,7 @@ fn get_highest_priority_liquid_source(
         tick,
         t_cell.fluid_mat().0,
         0,
-        t_cell.momentum(),
+        t_cell.compass(),
     );
 
     let mut best_source = None;
@@ -145,8 +160,14 @@ pub fn step_liquid(
         source_pos_cache = Some(source_pos);
         let s_cell = &view.cells[s_idx];
 
-        incoming_amt =
-            calc_transfer_amount(s_cell.fluid_vol(), old_fluid, s_cell.elevation(), old_elev);
+        incoming_amt = calc_transfer_amount(
+            s_cell.fluid_vol(),
+            old_fluid,
+            s_cell.elevation(),
+            old_elev,
+            source_pos,
+            tick,
+        );
         incoming_mat = s_cell.fluid_mat();
     }
 
@@ -162,6 +183,8 @@ pub fn step_liquid(
                             d_cell.fluid_vol(),
                             old_elev,
                             d_cell.elevation(),
+                            world_pos,
+                            tick,
                         );
                     }
                 }
@@ -182,18 +205,18 @@ pub fn step_liquid(
             let flow_dir = world_pos - sp;
             let mut new_flags = 0;
             if flow_dir.y > 0 {
-                new_flags |= MomentumFlags::FACING_N;
+                new_flags |= CompassFlags::FACING_N;
             }
             if flow_dir.y < 0 {
-                new_flags |= MomentumFlags::FACING_S;
+                new_flags |= CompassFlags::FACING_S;
             }
             if flow_dir.x > 0 {
-                new_flags |= MomentumFlags::FACING_E;
+                new_flags |= CompassFlags::FACING_E;
             }
             if flow_dir.x < 0 {
-                new_flags |= MomentumFlags::FACING_W;
+                new_flags |= CompassFlags::FACING_W;
             }
-            cell.set_momentum(new_flags);
+            cell.set_compass(new_flags);
         }
 
         if spatial_hash(world_pos, tick) & EROSION_MASK == 0 {
@@ -210,7 +233,7 @@ pub fn step_liquid(
 
     if cell.fluid_vol() == 0 {
         cell.set_fluid_mat(FluidMat::EMPTY);
-        cell.set_momentum(0);
+        cell.set_compass(0);
     }
 }
 

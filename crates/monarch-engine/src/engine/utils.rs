@@ -1,4 +1,4 @@
-use crate::engine::world::cell::MomentumFlags;
+use crate::engine::world::cell::CompassFlags;
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
 
@@ -26,16 +26,16 @@ impl ShuffledDirs {
         dirs[0..count].shuffle(rng);
 
         let mut forward = IVec2::ZERO;
-        if (flags & MomentumFlags::FACING_N) != 0 {
+        if (flags & CompassFlags::FACING_N) != 0 {
             forward.y += 1;
         }
-        if (flags & MomentumFlags::FACING_S) != 0 {
+        if (flags & CompassFlags::FACING_S) != 0 {
             forward.y -= 1;
         }
-        if (flags & MomentumFlags::FACING_E) != 0 {
+        if (flags & CompassFlags::FACING_E) != 0 {
             forward.x += 1;
         }
-        if (flags & MomentumFlags::FACING_W) != 0 {
+        if (flags & CompassFlags::FACING_W) != 0 {
             forward.x -= 1;
         }
 
@@ -87,16 +87,16 @@ impl ShuffledDirs {
         }
 
         let mut forward = IVec2::ZERO;
-        if (flags & MomentumFlags::FACING_N) != 0 {
+        if (flags & CompassFlags::FACING_N) != 0 {
             forward.y += 1;
         }
-        if (flags & MomentumFlags::FACING_S) != 0 {
+        if (flags & CompassFlags::FACING_S) != 0 {
             forward.y -= 1;
         }
-        if (flags & MomentumFlags::FACING_E) != 0 {
+        if (flags & CompassFlags::FACING_E) != 0 {
             forward.x += 1;
         }
-        if (flags & MomentumFlags::FACING_W) != 0 {
+        if (flags & CompassFlags::FACING_W) != 0 {
             forward.x -= 1;
         }
 

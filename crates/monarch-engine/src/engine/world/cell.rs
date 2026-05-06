@@ -21,6 +21,7 @@ impl TerrainMat {
     pub const ICE: Self = Self(12);
     pub const METAL: Self = Self(13);
     pub const GLASS: Self = Self(14);
+    pub const GRAVEL: Self = Self(15);
     pub const VOID: Self = Self(31);
 }
 
@@ -49,8 +50,8 @@ impl SurfaceMat {
     pub const POISON: Self = Self(4);
 }
 
-pub struct MomentumFlags;
-impl MomentumFlags {
+pub struct CompassFlags;
+impl CompassFlags {
     pub const FACING_N: u8 = 1 << 0;
     pub const FACING_S: u8 = 1 << 1;
     pub const FACING_E: u8 = 1 << 2;
@@ -62,25 +63,53 @@ impl MomentumFlags {
 pub struct WorldCell(pub u64);
 
 impl WorldCell {
-    // --- WORD 0 (Geometry) ---
+    // --- WORD 0 (Geometry: Lower 32 bits) ---
+
+    // Terrain Material: 5 bits (Bits 0-4)
     const MAT_TERRAIN_SHIFT: u64 = 0;
     const MAT_TERRAIN_MASK: u64 = 0x1F;
+
+    // Fluid Material: 5 bits (Bits 5-9)
     const MAT_FLUID_SHIFT: u64 = 5;
     const MAT_FLUID_MASK: u64 = 0x1F;
+
+    // Surface Material: 5 bits (Bits 10-14)
     const MAT_SURFACE_SHIFT: u64 = 10;
     const MAT_SURFACE_MASK: u64 = 0x1F;
+
+    // Elevation: 17 bits (Bits 15-31)
     const ELEVATION_SHIFT: u64 = 15;
     const ELEVATION_MASK: u64 = 0x1FFFF;
 
-    // --- WORD 1 (Physics) ---
+    // --- WORD 1 (Physics: Upper 32 bits) ---
+
+    // Fluid Volume: 10 bits (Bits 32-41)
     const FLUID_VOL_SHIFT: u64 = 32;
     const FLUID_VOL_MASK: u64 = 0x3FF;
+
+    // Terrain State: 8 bits (Bits 42-49)
     const TERRAIN_STATE_SHIFT: u64 = 42;
     const TERRAIN_STATE_MASK: u64 = 0xFF;
+
+    // Variants: 6 bits (Bits 50-55)
     const VARIANTS_SHIFT: u64 = 50;
     const VARIANTS_MASK: u64 = 0x3F;
-    const MOMENTUM_SHIFT: u64 = 56;
-    const MOMENTUM_MASK: u64 = 0xF;
+
+    // Compass / Momentum: 4 bits (Bits 56-59)
+    const COMPASS_SHIFT: u64 = 56;
+    const COMPASS_MASK: u64 = 0xF;
+
+    // Note: Bits 60-63 (4 bits) are currently unused and left as 0.
+
+    /// The maximum absolute elevation value derived from the 17-bit mask
+    pub const MAX_ELEVATION: u32 = Self::ELEVATION_MASK as u32;
+
+    /// The maximum fluid depth derived from the 10-bit mask
+    pub const MAX_FLUID_VOL: u16 = Self::FLUID_VOL_MASK as u16;
+
+    // ---------------------------------------------------------
+    // GETTERS & SETTERS
+    // ---------------------------------------------------------
 
     #[inline(always)]
     pub fn terrain_mat(&self) -> TerrainMat {
@@ -153,12 +182,12 @@ impl WorldCell {
     }
 
     #[inline(always)]
-    pub fn momentum(&self) -> u8 {
-        ((self.0 >> Self::MOMENTUM_SHIFT) & Self::MOMENTUM_MASK) as u8
+    pub fn compass(&self) -> u8 {
+        ((self.0 >> Self::COMPASS_SHIFT) & Self::COMPASS_MASK) as u8
     }
     #[inline(always)]
-    pub fn set_momentum(&mut self, flags: u8) {
-        self.0 = (self.0 & !(Self::MOMENTUM_MASK << Self::MOMENTUM_SHIFT))
-            | (((flags as u64) & Self::MOMENTUM_MASK) << Self::MOMENTUM_SHIFT);
+    pub fn set_compass(&mut self, flags: u8) {
+        self.0 = (self.0 & !(Self::COMPASS_MASK << Self::COMPASS_SHIFT))
+            | (((flags as u64) & Self::COMPASS_MASK) << Self::COMPASS_SHIFT);
     }
 }
