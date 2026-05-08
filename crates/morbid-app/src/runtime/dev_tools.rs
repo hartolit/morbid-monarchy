@@ -10,6 +10,7 @@ pub enum GridBrush {
     #[default]
     None,
     Water,
+    Fire,
     Sand,
     RaiseTerrain,
     LowerTerrain,

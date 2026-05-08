@@ -1,4 +1,5 @@
 mod biology_sim;
+mod fire_sim;
 mod granular_sim;
 mod liquid_sim;
 
@@ -14,7 +15,7 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::{SurfaceMat, TerrainMat};
+use crate::engine::world::cell::SurfaceMat;
 use crate::prelude::{ActiveWorldGrid, GridReadView};
 
 pub enum GridEvent {
@@ -41,6 +42,7 @@ pub struct SimulationConfig {
     pub run_liquid: bool,
     pub run_biology: bool,
     pub run_granular: bool,
+    pub run_fire: bool,
 }
 
 impl Default for SimulationConfig {
@@ -49,6 +51,7 @@ impl Default for SimulationConfig {
             run_liquid: true,
             run_biology: true,
             run_granular: true,
+            run_fire: true,
         }
     }
 }
@@ -82,6 +85,7 @@ pub fn simulate_world(
     let run_liquid = config.run_liquid;
     let run_biology = config.run_biology;
     let run_granular = config.run_granular;
+    let run_fire = config.run_fire;
 
     let view = GridReadView {
         cells: &grid_mut.back_buffer,
@@ -117,7 +121,6 @@ pub fn simulate_world(
                 let world_pos = local_pos + view.window_origin;
                 let old_cell = &view.cells[idx];
 
-                // Interleave CA passes: Granular on Odd ticks, Liquid on Even ticks.
                 if run_granular && tick % 2 != 0 {
                     granular_sim::step_granular(cell, old_cell, view, world_pos, tick);
                 }
@@ -137,6 +140,17 @@ pub fn simulate_world(
                     );
                 }
 
+                if run_fire && rng.random_ratio(1, 2) {
+                    fire_sim::step_fire(
+                        cell,
+                        old_cell,
+                        view,
+                        world_pos,
+                        &mut rng,
+                        &mut local_events,
+                    );
+                }
+
                 let mut changed = cell.0 != old_cell.0;
 
                 // Keep the cell alive artificially if it contains active foliage
@@ -145,6 +159,11 @@ pub fn simulate_world(
                     && cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE
                     && cell.surface_state() < 10
                 {
+                    changed = true;
+                }
+
+                // Keep the cell awake artificially while it is burning
+                if !changed && cell.surface_mat() == SurfaceMat::SURFACE_FIRE {
                     changed = true;
                 }
 

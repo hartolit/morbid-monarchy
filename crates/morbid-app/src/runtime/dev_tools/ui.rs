@@ -13,9 +13,10 @@ use crate::runtime::{
 const BRUSH_STRENGTH_RANGE: std::ops::RangeInclusive<u8> = 1..=255;
 const BRUSH_RADIUS_RANGE: std::ops::RangeInclusive<i32> = 0..=64;
 
-const BRUSH_OPTIONS: [(GridBrush, &str); 5] = [
+const BRUSH_OPTIONS: [(GridBrush, &str); 6] = [
     (GridBrush::None, "None"),
     (GridBrush::Water, "Spawn Water"),
+    (GridBrush::Fire, "Spawn Fire"),
     (GridBrush::Sand, "Spawn Sand"),
     (GridBrush::RaiseTerrain, "Raise Terrain"),
     (GridBrush::LowerTerrain, "Lower Terrain"),
