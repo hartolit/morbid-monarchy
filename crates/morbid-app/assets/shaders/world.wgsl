@@ -12,16 +12,16 @@ struct WorldWindow {
 @group(3) @binding(12) var<uniform> window: WorldWindow;
 
 const VERTS_PER_FACE: u32 = 6u;
-const VERTS_PER_CELL: u32 = 96u; // 16 faces * 6 verts
+const VERTS_PER_CELL: u32 = 120u; // 20 faces * 6 verts
 
-// Returns absolute heights: x=Terrain, y=Granular(Total), z=Fluid(Total)
+// Returns absolute heights: x=Terrain, y=Granular, z=Fluid, w=Surface
 fn calculate_heights_at(
     cell_x: i32, cell_y: i32,
     grid_width: i32, grid_height: i32,
     elevation_scale: f32
-) -> vec3<f32> {
+) -> vec4<f32> {
     if cell_x < 0 || cell_x >= grid_width || cell_y < 0 || cell_y >= grid_height {
-        return vec3<f32>(0.0, 0.0, 0.0);
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     let wrapped_x = ((cell_x + i32(window.head.x)) % grid_width + grid_width) % grid_width;
@@ -32,16 +32,24 @@ fn calculate_heights_at(
     let word_1 = world_buffer[buffer_index + 1u];
 
     // Extract raw units
+    let mat_surface = (word_0 >> 4u) & 0xFu;
     let elevation = f32((word_0 >> 20u) & 0xFFFu);
     let fluid_vol = f32(word_1 & 0x1FFu);
     let granular_vol = f32((word_1 >> 9u) & 0x1FFu);
+    let surface_state = f32((word_1 >> 18u) & 0x3Fu);
 
     // Compute stacked absolute heights
     let t_height = elevation * elevation_scale;
     let g_height = t_height + (granular_vol * elevation_scale);
     let f_height = g_height + (fluid_vol * elevation_scale);
 
-    return vec3<f32>(t_height, g_height, f_height);
+    var s_height = f_height;
+    if mat_surface != 0u {
+        // Enforce a minimum thickness of 1.0 so empty states still render a slim base
+        s_height = f_height + max(1.0, surface_state) * elevation_scale;
+    }
+
+    return vec4<f32>(t_height, g_height, f_height, s_height);
 }
 
 struct VertexInput {
@@ -89,11 +97,13 @@ fn vertex(in: VertexInput) -> VertexOutput {
     // Decode Word 1 (Physics)
     let fluid_vol = f32(word_1 & 0x1FFu);
     let granular_vol = f32((word_1 >> 9u) & 0x1FFu);
+    let surface_state = f32((word_1 >> 18u) & 0x3Fu);
 
     // Absolute Stacked Heights
     let t_height = elevation * scale;
     let g_height = t_height + (granular_vol * scale);
     let f_height = g_height + (fluid_vol * scale);
+    let s_height = f_height + max(1.0, surface_state) * scale;
 
     let world_offset_x = f32(cell_x);
     let world_offset_z = f32(grid_height - 1 - cell_y);
@@ -101,17 +111,17 @@ fn vertex(in: VertexInput) -> VertexOutput {
     var local_pos = vec3<f32>(0.0, 0.0, 0.0);
     var normal = vec3<f32>(0.0, 1.0, 0.0);
     var mat_lookup = mat_terrain;
-    var is_rendered = false; // Tracks valid faces safely
+    var is_rendered = false;
 
     // Offsets to neighbor cells for boundary occlusion
     var n_dx = 0;
     var n_dy = 0;
 
-    // Setup generic wall faces
-    if face_slot == 1u || face_slot == 6u || face_slot == 11u { normal = vec3<f32>(0.0, 0.0, -1.0); n_dy = 1; }
-    if face_slot == 2u || face_slot == 7u || face_slot == 12u { normal = vec3<f32>(0.0, 0.0, 1.0); n_dy = -1; }
-    if face_slot == 3u || face_slot == 8u || face_slot == 13u { normal = vec3<f32>(1.0, 0.0, 0.0); n_dx = 1; }
-    if face_slot == 4u || face_slot == 9u || face_slot == 14u { normal = vec3<f32>(-1.0, 0.0, 0.0); n_dx = -1; }
+    // Setup generic wall faces mapped to all 4 physical layers
+    if face_slot == 1u || face_slot == 6u || face_slot == 11u || face_slot == 16u { normal = vec3<f32>(0.0, 0.0, -1.0); n_dy = 1; }
+    if face_slot == 2u || face_slot == 7u || face_slot == 12u || face_slot == 17u { normal = vec3<f32>(0.0, 0.0, 1.0); n_dy = -1; }
+    if face_slot == 3u || face_slot == 8u || face_slot == 13u || face_slot == 18u { normal = vec3<f32>(1.0, 0.0, 0.0); n_dx = 1; }
+    if face_slot == 4u || face_slot == 9u || face_slot == 14u || face_slot == 19u { normal = vec3<f32>(-1.0, 0.0, 0.0); n_dx = -1; }
 
     let neighbor_h = calculate_heights_at(cell_x + n_dx, cell_y + n_dy, grid_width, grid_height, scale);
 
@@ -166,15 +176,23 @@ fn vertex(in: VertexInput) -> VertexOutput {
             }
         }
 
-        // --- SURFACE FACES (15) ---
-        default: { // Slot 15 - Cap
+        // --- SURFACE FACES (15-19) ---
+        case 15u: { // Cap
             mat_lookup = mat_surface + 96u;
             if mat_surface != 0u {
-                let s_height = f_height + 1.0;
                 local_pos = get_quad_vertex(vertex_within_face, s_height, s_height, vec3<f32>(0.0, 1.0, 0.0));
                 is_rendered = true;
             }
         }
+        case 16u, 17u, 18u, 19u: { // Walls
+            mat_lookup = mat_surface + 96u;
+            let n_floor = max(neighbor_h.w, f_height);
+            if mat_surface != 0u && s_height > n_floor {
+                local_pos = get_quad_vertex(vertex_within_face, n_floor, s_height, normal);
+                is_rendered = true;
+            }
+        }
+        default: {}
     }
 
     // Discards the triangle without triggering float-clipping explosions.

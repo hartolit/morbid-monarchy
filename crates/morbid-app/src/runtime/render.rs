@@ -243,8 +243,8 @@ fn sync_grid_rendering(
 }
 
 fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
-    // 16 faces per cell (Terrain=5, Granular=5, Fluid=5, Surface=1) * 6 vertices per face
-    let vertex_count = (width * height * 16 * 6) as usize;
+    // 20 faces per cell (Terrain=5, Granular=5, Fluid=5, Surface=5) * 6 vertices per face
+    let vertex_count = (width * height * 20 * 6) as usize;
     let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
