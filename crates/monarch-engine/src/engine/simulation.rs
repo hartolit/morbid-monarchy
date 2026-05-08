@@ -14,7 +14,7 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::TerrainMat;
+use crate::engine::world::cell::{SurfaceMat, TerrainMat};
 use crate::prelude::{ActiveWorldGrid, GridReadView};
 
 pub enum GridEvent {
@@ -139,9 +139,11 @@ pub fn simulate_world(
 
                 let mut changed = cell.0 != old_cell.0;
 
+                // Keep the cell alive artificially if it contains active foliage
+                // that hasn't reached its maximum biological lifecycle state.
                 if !changed
-                    && cell.terrain_mat() == TerrainMat::FOLIAGE
-                    && cell.terrain_state() < 10
+                    && cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE
+                    && cell.surface_state() < 10
                 {
                     changed = true;
                 }

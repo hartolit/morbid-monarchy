@@ -111,37 +111,47 @@ fn setup_rendering(
     ));
 
     let mut palette = vec![[0.0f32; 4]; 256];
-
     palette[0] = [0.00, 0.00, 0.00, 0.0];
 
-    // --- Terrain (0-31) ---
-    palette[TerrainMat::STONE.0 as usize] = [0.48, 0.46, 0.44, 1.0];
-    palette[TerrainMat::DIRT.0 as usize] = [0.40, 0.28, 0.15, 1.0];
-    palette[TerrainMat::SAND.0 as usize] = [0.82, 0.72, 0.48, 1.0];
-    palette[TerrainMat::FOLIAGE.0 as usize] = [0.18, 0.45, 0.12, 1.0];
-    palette[TerrainMat::WOOD.0 as usize] = [0.45, 0.28, 0.12, 1.0];
-    palette[TerrainMat::FLESH.0 as usize] = [0.75, 0.50, 0.45, 1.0];
-    palette[TerrainMat::BONE.0 as usize] = [0.88, 0.85, 0.75, 1.0];
-    palette[TerrainMat::ROT.0 as usize] = [0.30, 0.22, 0.10, 1.0];
-    palette[TerrainMat::ASH.0 as usize] = [0.45, 0.42, 0.40, 1.0];
-    palette[TerrainMat::SNOW.0 as usize] = [0.92, 0.94, 0.96, 1.0];
-    palette[TerrainMat::CLAY.0 as usize] = [0.68, 0.42, 0.28, 1.0];
-    palette[TerrainMat::ICE.0 as usize] = [0.70, 0.85, 0.95, 1.0];
-    palette[TerrainMat::METAL.0 as usize] = [0.60, 0.60, 0.65, 1.0];
-    palette[TerrainMat::GLASS.0 as usize] = [0.75, 0.88, 0.92, 0.8];
+    // --- Terrain (Offset 0) ---
+    palette[TerrainMat::TERRAIN_STONE.0 as usize] = [0.48, 0.46, 0.44, 1.0];
+    palette[TerrainMat::TERRAIN_DIRT.0 as usize] = [0.40, 0.28, 0.15, 1.0];
+    palette[TerrainMat::TERRAIN_SANDSTONE.0 as usize] = [0.65, 0.55, 0.35, 1.0];
+    palette[TerrainMat::TERRAIN_ICE.0 as usize] = [0.70, 0.85, 0.95, 1.0];
+    palette[TerrainMat::TERRAIN_METAL.0 as usize] = [0.60, 0.60, 0.65, 1.0];
+    palette[TerrainMat::TERRAIN_CORRUPTION.0 as usize] = [0.35, 0.15, 0.40, 1.0];
 
-    // --- Fluid (32-63) ---
-    palette[(32 + FluidMat::WATER.0) as usize] = [0.15, 0.35, 0.85, 1.0];
-    palette[(32 + FluidMat::MAGMA.0) as usize] = [0.85, 0.25, 0.05, 1.0];
-    palette[(32 + FluidMat::BLOOD.0) as usize] = [0.55, 0.02, 0.02, 1.0];
-    palette[(32 + FluidMat::ACID.0) as usize] = [0.30, 0.75, 0.10, 1.0];
-    palette[(32 + FluidMat::OIL.0) as usize] = [0.12, 0.08, 0.04, 1.0];
+    // --- Granular (Offset 32) ---
+    palette[(32 + GranularMat::GRANULAR_DIRT.0) as usize] = [0.45, 0.32, 0.18, 1.0];
+    palette[(32 + GranularMat::GRANULAR_SAND.0) as usize] = [0.82, 0.72, 0.48, 1.0];
+    palette[(32 + GranularMat::GRANULAR_MUD.0) as usize] = [0.25, 0.18, 0.10, 1.0];
+    palette[(32 + GranularMat::GRANULAR_GRAVEL.0) as usize] = [0.40, 0.40, 0.42, 1.0];
+    palette[(32 + GranularMat::GRANULAR_SNOW.0) as usize] = [0.92, 0.94, 0.96, 1.0];
+    palette[(32 + GranularMat::GRANULAR_LIQUID_METAL.0) as usize] = [0.75, 0.75, 0.80, 1.0];
+    palette[(32 + GranularMat::GRANULAR_CORRUPTION.0) as usize] = [0.45, 0.20, 0.50, 1.0];
 
-    // --- Surface (64-95) ---
-    palette[(64 + SurfaceMat::FIRE.0) as usize] = [1.00, 0.60, 0.10, 1.0];
-    palette[(64 + SurfaceMat::STEAM.0) as usize] = [0.85, 0.85, 0.90, 0.6];
-    palette[(64 + SurfaceMat::SMOKE.0) as usize] = [0.30, 0.30, 0.30, 0.7];
-    palette[(64 + SurfaceMat::POISON.0) as usize] = [0.40, 0.15, 0.50, 0.5];
+    // --- Fluid (Offset 64) ---
+    palette[(64 + FluidMat::FLUID_WATER.0) as usize] = [0.15, 0.35, 0.85, 1.0];
+    palette[(64 + FluidMat::FLUID_MAGMA.0) as usize] = [0.85, 0.25, 0.05, 1.0];
+    palette[(64 + FluidMat::FLUID_BLOOD.0) as usize] = [0.55, 0.02, 0.02, 1.0];
+    palette[(64 + FluidMat::FLUID_ACID.0) as usize] = [0.30, 0.75, 0.10, 1.0];
+    palette[(64 + FluidMat::FLUID_OIL.0) as usize] = [0.12, 0.08, 0.04, 1.0];
+    palette[(64 + FluidMat::FLUID_CORRUPTION.0) as usize] = [0.25, 0.05, 0.30, 1.0];
+
+    // --- Surface (Offset 96) ---
+    palette[(96 + SurfaceMat::SURFACE_FIRE.0) as usize] = [1.00, 0.60, 0.10, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_FOLIAGE.0) as usize] = [0.18, 0.45, 0.12, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_WOOD.0) as usize] = [0.45, 0.28, 0.12, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_FLESH.0) as usize] = [0.75, 0.50, 0.45, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_BONE.0) as usize] = [0.88, 0.85, 0.75, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_ROT.0) as usize] = [0.30, 0.22, 0.10, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_ASH.0) as usize] = [0.45, 0.42, 0.40, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_SNOW.0) as usize] = [0.95, 0.95, 0.98, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_CLAY.0) as usize] = [0.68, 0.42, 0.28, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_ICE.0) as usize] = [0.80, 0.90, 0.95, 0.8];
+    palette[(96 + SurfaceMat::SURFACE_METAL.0) as usize] = [0.55, 0.55, 0.60, 1.0];
+    palette[(96 + SurfaceMat::SURFACE_GLASS.0) as usize] = [0.75, 0.88, 0.92, 0.6];
+    palette[(96 + SurfaceMat::SURFACE_CORRUPTION.0) as usize] = [0.50, 0.10, 0.60, 1.0];
 
     let palette_buffer = buffers.add(ShaderStorageBuffer::new(
         bytemuck::cast_slice(&palette),
@@ -233,7 +243,8 @@ fn sync_grid_rendering(
 }
 
 fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
-    let vertex_count = (width * height * 11 * 6) as usize;
+    // 16 faces per cell (Terrain=5, Granular=5, Fluid=5, Surface=1) * 6 vertices per face
+    let vertex_count = (width * height * 16 * 6) as usize;
     let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());

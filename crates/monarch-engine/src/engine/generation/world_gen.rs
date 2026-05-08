@@ -1,5 +1,5 @@
 use crate::engine::world::{
-    cell::{FluidMat, TerrainMat, WorldCell},
+    cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkTheme},
 };
 
@@ -56,21 +56,30 @@ impl WorldGenerator {
             .get([world_x as f64 * global_scale, world_y as f64 * global_scale]);
         let normalized = (base_noise + 1.0) * 0.5;
 
-        // Map noise directly to elevation (0 - 255 for standard hills)
+        // Base structural elevation
         let elevation = (normalized * 255.0).clamp(0.0, 255.0) as u16;
-
         cell.set_elevation(elevation);
-        cell.set_variants(rng.random_range(0..4) as u8);
+        cell.set_variants(rng.random_range(0..WorldCell::MAX_VARIANTS));
 
         if elevation < 100 {
-            cell.set_fluid_mat(FluidMat::WATER);
+            // Deep Ocean: Stone base, sand floor, heavy water column
+            cell.set_terrain_mat(TerrainMat::TERRAIN_STONE);
+            cell.set_granular_mat(GranularMat::GRANULAR_SAND);
+            cell.set_granular_vol(2);
+            cell.set_fluid_mat(FluidMat::FLUID_WATER);
             cell.set_fluid_vol(100 - elevation);
-            cell.set_terrain_mat(TerrainMat::SAND);
         } else if elevation < 120 {
-            cell.set_terrain_mat(TerrainMat::SAND);
+            // Coastlines / Shoals: Sandstone base, heavy granular sand
+            cell.set_terrain_mat(TerrainMat::TERRAIN_SANDSTONE);
+            cell.set_granular_mat(GranularMat::GRANULAR_SAND);
+            cell.set_granular_vol(5);
         } else {
-            cell.set_terrain_mat(TerrainMat::FOLIAGE);
-            cell.set_terrain_state(rng.random_range(0..10));
+            // Highlands: Dirt base, organic surface cover
+            cell.set_terrain_mat(TerrainMat::TERRAIN_DIRT);
+            cell.set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
+
+            // Randomize starting lifecycle to prevent massive simultaneous die-offs
+            cell.set_surface_state(rng.random_range(0..10));
         }
 
         cell

@@ -72,7 +72,7 @@ pub fn handle_brush_input(
 
                     match *brush {
                         GridBrush::Water => {
-                            let old_state = if cell.fluid_mat() == FluidMat::WATER {
+                            let old_state = if cell.fluid_mat() == FluidMat::FLUID_WATER {
                                 cell.fluid_vol()
                             } else {
                                 0
@@ -81,16 +81,17 @@ pub fn handle_brush_input(
                             let new_state =
                                 old_state.saturating_add(settings.strength as u16).min(1023);
 
-                            if cell.fluid_mat() != FluidMat::WATER || cell.fluid_vol() != new_state
+                            if cell.fluid_mat() != FluidMat::FLUID_WATER
+                                || cell.fluid_vol() != new_state
                             {
-                                cell.set_fluid_mat(FluidMat::WATER);
+                                cell.set_fluid_mat(FluidMat::FLUID_WATER);
                                 cell.set_fluid_vol(new_state);
                                 mutated = true;
                             }
                         }
                         GridBrush::Sand => {
-                            if cell.terrain_mat() != TerrainMat::SAND {
-                                cell.set_terrain_mat(TerrainMat::SAND);
+                            if cell.terrain_mat() != TerrainMat::TERRAIN_SANDSTONE {
+                                cell.set_terrain_mat(TerrainMat::TERRAIN_SANDSTONE);
                                 cell.set_terrain_state(0);
                                 mutated = true;
                             }

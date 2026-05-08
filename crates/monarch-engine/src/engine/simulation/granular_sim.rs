@@ -1,81 +1,149 @@
 use bevy::math::IVec2;
 
 use crate::engine::{
-    utils::{FlowPattern, ShuffledDirs},
+    utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
-        cell::{TerrainMat, WorldCell},
+        cell::{GranularMat, WorldCell},
         grid::GridReadView,
     },
 };
 
+/// Returns the angle of repose for a given granular material.
+/// A lower value means the material spreads flatter (e.g., liquids/mud).
+/// A higher value means the material forms steeper piles (e.g., gravel/dirt).
 #[inline(always)]
-fn get_angle_of_repose(mat: TerrainMat) -> u16 {
+fn get_angle_of_repose(mat: GranularMat) -> u16 {
     match mat {
-        TerrainMat::SAND => 2,
-        TerrainMat::SNOW => 3,
-        TerrainMat::GRAVEL => 4,
-        _ => u16::MAX, // Non-granular, will not flow
+        GranularMat::GRANULAR_SAND => 2,
+        GranularMat::GRANULAR_SNOW => 3,
+        GranularMat::GRANULAR_GRAVEL => 4,
+        GranularMat::GRANULAR_DIRT => 4,
+        GranularMat::GRANULAR_MUD => 1,
+        GranularMat::GRANULAR_LIQUID_METAL => 0,
+        GranularMat::GRANULAR_CORRUPTION => 2,
+        _ => u16::MAX, // Non-granular or empty; will not flow
     }
 }
 
+/// Calculates the exact volume of granular material to transfer between two cells.
 #[inline(always)]
-fn get_granular_dest(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
-    let (_, s_cell) = view.get_cell(world_pos)?;
-    let s_mat = s_cell.terrain_mat();
-    let repose = get_angle_of_repose(s_mat);
+fn calc_granular_transfer(
+    source_cell: &WorldCell,
+    dest_cell: &WorldCell,
+    world_pos: IVec2,
+    tick: u32,
+) -> u16 {
+    let source_total = source_cell.elevation() as u32 + source_cell.granular_vol() as u32;
+    let dest_total = dest_cell.elevation() as u32 + dest_cell.granular_vol() as u32;
 
-    if repose == u16::MAX || s_cell.elevation() == 0 {
+    if dest_total >= source_total {
+        return 0;
+    }
+
+    let diff = source_total - dest_total;
+    let mut amount = diff / 2;
+
+    // Micro-sloshing: Prevents perfect pyramids by probabilistically
+    // transferring remainder units when integer division halts flow.
+    if amount == 0 && diff >= 1 {
+        if spatial_hash(world_pos, tick) % 2 == 0 {
+            amount = 1;
+        }
+    }
+
+    let source_vol = source_cell.granular_vol() as u32;
+    let dest_vol = dest_cell.granular_vol() as u32;
+
+    amount = amount.min(source_vol);
+    amount = amount.min((WorldCell::MAX_GRANULAR_VOL as u32).saturating_sub(dest_vol));
+
+    amount as u16
+}
+
+/// Determines the best neighboring destination for granular material to fall into.
+#[inline(always)]
+fn get_preferred_destination(
+    world_pos: IVec2,
+    view: GridReadView,
+    tick: u32,
+) -> Option<(usize, IVec2)> {
+    let (_, source_cell) = view.get_cell(world_pos)?;
+    let source_mat = source_cell.granular_mat();
+    let repose = get_angle_of_repose(source_mat);
+
+    if repose == u16::MAX || source_cell.granular_vol() == 0 {
         return None;
     }
 
-    // Sand/Gravel flows mostly omni-directionally
-    let shuffled = ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, s_mat.0, 0);
+    let shuffled =
+        ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, source_mat.0, 0);
+    let source_total = source_cell.elevation() as u32 + source_cell.granular_vol() as u32;
 
     let mut best_dest = None;
-    let mut best_elev = s_cell.elevation();
+    let mut best_diff = 0;
 
     for &dir in shuffled.get().iter() {
-        let n_pos = world_pos + dir;
+        let neighbor_pos = world_pos + dir;
 
-        if let Some((n_idx, n_cell)) = view.get_cell(n_pos) {
-            // Angle of repose condition based purely on solid terrain elevation
-            if s_cell.elevation().saturating_sub(n_cell.elevation()) > repose {
-                if n_cell.elevation() < best_elev {
-                    best_elev = n_cell.elevation();
-                    best_dest = Some((n_idx, n_pos));
+        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos) {
+            let neighbor_total =
+                neighbor_cell.elevation() as u32 + neighbor_cell.granular_vol() as u32;
+
+            // Validate the angle of repose is exceeded
+            if source_total.saturating_sub(neighbor_total) > repose as u32 {
+                let diff = source_total - neighbor_total;
+
+                // Only flow into identical materials or empty granular slots
+                let is_empty = neighbor_cell.granular_mat() == GranularMat::EMPTY;
+                let is_same = neighbor_cell.granular_mat() == source_mat;
+
+                if (is_empty || is_same) && diff > best_diff {
+                    best_diff = diff;
+                    best_dest = Some((neighbor_idx, neighbor_pos));
                 }
             }
         }
     }
+
     best_dest
 }
 
+/// Determines the best neighboring source that wishes to drop granular material here.
 #[inline(always)]
-fn get_granular_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
+fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
     let shuffled = ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, 0, 0);
 
     let mut best_source = None;
-    let mut best_elev = 0;
+    let mut best_diff = 0;
 
     for &dir in shuffled.get().iter() {
-        let s_pos = world_pos + dir;
+        let neighbor_pos = world_pos + dir;
 
-        if let Some((s_idx, s_cell)) = view.get_cell(s_pos) {
-            if get_angle_of_repose(s_cell.terrain_mat()) != u16::MAX {
-                if let Some((_, dest_pos)) = get_granular_dest(s_pos, view, tick) {
+        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos) {
+            if get_angle_of_repose(neighbor_cell.granular_mat()) != u16::MAX {
+                if let Some((_, dest_pos)) = get_preferred_destination(neighbor_pos, view, tick) {
                     if dest_pos == world_pos {
-                        if s_cell.elevation() > best_elev {
-                            best_elev = s_cell.elevation();
-                            best_source = Some((s_idx, s_pos));
+                        let (_, dest_cell) = view.get_cell(world_pos)?;
+                        let neighbor_total =
+                            neighbor_cell.elevation() as u32 + neighbor_cell.granular_vol() as u32;
+                        let dest_total =
+                            dest_cell.elevation() as u32 + dest_cell.granular_vol() as u32;
+
+                        let diff = neighbor_total.saturating_sub(dest_total);
+                        if diff > best_diff {
+                            best_diff = diff;
+                            best_source = Some((neighbor_idx, neighbor_pos));
                         }
                     }
                 }
             }
         }
     }
+
     best_source
 }
 
+/// Executes a single simulation step for granular physics.
 #[inline(always)]
 pub fn step_granular(
     cell: &mut WorldCell,
@@ -84,41 +152,51 @@ pub fn step_granular(
     world_pos: IVec2,
     tick: u32,
 ) {
-    let mut old_elev = old_cell.elevation();
-    let mut incoming_mat = None;
-    let mut is_receiving = false;
-    let mut is_giving = false;
+    let old_vol = old_cell.granular_vol();
+    let mut incoming_amt = 0;
+    let mut incoming_mat = GranularMat::EMPTY;
+    let mut outgoing_amt = 0;
 
-    // Receive elevation from a steeper granular neighbor
-    if let Some((s_idx, _)) = get_granular_source(world_pos, view, tick) {
-        let s_cell = &view.cells[s_idx];
-        incoming_mat = Some(s_cell.terrain_mat());
-        is_receiving = true;
+    // Receive granular matter from a steeper neighbor
+    if let Some((source_idx, source_pos)) = get_preferred_source(world_pos, view, tick) {
+        let source_cell = &view.cells[source_idx];
+        incoming_amt = calc_granular_transfer(source_cell, old_cell, source_pos, tick);
+        incoming_mat = source_cell.granular_mat();
     }
 
-    // Give elevation to a lower neighbor
-    if get_angle_of_repose(old_cell.terrain_mat()) != u16::MAX {
-        if let Some((_, dest_pos)) = get_granular_dest(world_pos, view, tick) {
-            if let Some((_, winner_pos)) = get_granular_source(dest_pos, view, tick) {
+    // Donate granular matter to a lower neighbor
+    if old_cell.granular_mat() != GranularMat::EMPTY {
+        if let Some((_, dest_pos)) = get_preferred_destination(world_pos, view, tick) {
+            // Verify we are the destination's primary source to prevent race conditions
+            if let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, tick) {
                 if winner_pos == world_pos {
-                    is_giving = true;
+                    if let Some((dest_idx, _)) = view.get_cell(dest_pos) {
+                        let dest_cell = &view.cells[dest_idx];
+                        outgoing_amt = calc_granular_transfer(old_cell, dest_cell, world_pos, tick);
+                    }
                 }
             }
         }
     }
 
-    if is_receiving {
-        old_elev = old_elev.saturating_add(1);
-        if let Some(mat) = incoming_mat {
-            cell.set_terrain_mat(mat);
-        }
+    if incoming_amt == 0 && outgoing_amt == 0 {
+        return;
     }
 
-    if is_giving {
-        old_elev = old_elev.saturating_sub(1);
+    // Apply material transmutations if receiving into an empty cell
+    if incoming_amt > 0 && old_cell.granular_mat() == GranularMat::EMPTY {
+        cell.set_granular_mat(incoming_mat);
     }
 
-    if is_receiving || is_giving {
-        cell.set_elevation(old_elev);
+    // Apply exact volume differentials
+    cell.set_granular_vol(
+        old_vol
+            .saturating_add(incoming_amt)
+            .saturating_sub(outgoing_amt),
+    );
+
+    // Clean up completely depleted granular columns
+    if cell.granular_vol() == 0 {
+        cell.set_granular_mat(GranularMat::EMPTY);
     }
 }
