@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 use monarch_engine::{
     engine::world::cell::{GranularMat, SurfaceMat, WorldCell},
-    prelude::{ActiveWorldGrid, FluidMat, TerrainMat},
+    prelude::{ActiveWorldGrid, FluidMat},
 };
 
 use crate::runtime::dev_tools::{BrushSettings, GridBrush};
