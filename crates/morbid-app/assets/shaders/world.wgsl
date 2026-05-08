@@ -98,9 +98,10 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let world_offset_x = f32(cell_x);
     let world_offset_z = f32(grid_height - 1 - cell_y);
 
-    var local_pos = vec3<f32>(0.0, -9999.0, 0.0);
+    var local_pos = vec3<f32>(0.0, 0.0, 0.0);
     var normal = vec3<f32>(0.0, 1.0, 0.0);
-    var mat_lookup = mat_terrain; // Default to terrain offset 0
+    var mat_lookup = mat_terrain;
+    var is_rendered = false; // Tracks valid faces safely
 
     // Offsets to neighbor cells for boundary occlusion
     var n_dx = 0;
@@ -120,12 +121,14 @@ fn vertex(in: VertexInput) -> VertexOutput {
             mat_lookup = mat_terrain;
             if mat_terrain != 0u && t_height > 0.0 {
                 local_pos = get_quad_vertex(vertex_within_face, t_height, t_height, normal);
+                is_rendered = true;
             }
         }
         case 1u, 2u, 3u, 4u: { // Walls
             mat_lookup = mat_terrain;
             if mat_terrain != 0u && t_height > neighbor_h.x {
                 local_pos = get_quad_vertex(vertex_within_face, neighbor_h.x, t_height, normal);
+                is_rendered = true;
             }
         }
 
@@ -134,6 +137,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             mat_lookup = mat_granular + 32u;
             if mat_granular != 0u && granular_vol > 0.0 {
                 local_pos = get_quad_vertex(vertex_within_face, g_height, g_height, vec3<f32>(0.0, 1.0, 0.0));
+                is_rendered = true;
             }
         }
         case 6u, 7u, 8u, 9u: { // Walls
@@ -141,6 +145,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             let n_floor = max(neighbor_h.y, t_height);
             if mat_granular != 0u && g_height > n_floor {
                 local_pos = get_quad_vertex(vertex_within_face, n_floor, g_height, normal);
+                is_rendered = true;
             }
         }
 
@@ -149,6 +154,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             mat_lookup = mat_fluid + 64u;
             if mat_fluid != 0u && fluid_vol > 0.0 {
                 local_pos = get_quad_vertex(vertex_within_face, f_height, f_height, vec3<f32>(0.0, 1.0, 0.0));
+                is_rendered = true;
             }
         }
         case 11u, 12u, 13u, 14u: { // Walls
@@ -156,6 +162,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
             let n_floor = max(neighbor_h.z, g_height);
             if mat_fluid != 0u && f_height > n_floor {
                 local_pos = get_quad_vertex(vertex_within_face, n_floor, f_height, normal);
+                is_rendered = true;
             }
         }
 
@@ -165,8 +172,15 @@ fn vertex(in: VertexInput) -> VertexOutput {
             if mat_surface != 0u {
                 let s_height = f_height + 1.0;
                 local_pos = get_quad_vertex(vertex_within_face, s_height, s_height, vec3<f32>(0.0, 1.0, 0.0));
+                is_rendered = true;
             }
         }
+    }
+
+    // Discards the triangle without triggering float-clipping explosions.
+    if !is_rendered {
+        out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
     }
 
     local_pos = local_pos + vec3<f32>(world_offset_x, 0.0, world_offset_z);
@@ -175,14 +189,14 @@ fn vertex(in: VertexInput) -> VertexOutput {
     out.clip_position = mesh_position_local_to_clip(get_world_from_local(0u), vec4<f32>(local_pos, 1.0));
 
     var base_color = palette[mat_lookup];
-    let visual_shift = (f32(variants) - 16.0) / 16.0 * 0.10; // Subtler noise shift
+    let visual_shift = (f32(variants) - 16.0) / 16.0 * 0.10;
 
     base_color.r = saturate(base_color.r + visual_shift);
     base_color.g = saturate(base_color.g + visual_shift);
     base_color.b = saturate(base_color.b + visual_shift);
 
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
-    let ambient = select(0.3, 0.15, normal.y < 0.5); // Walls get darker ambient
+    let ambient = select(0.3, 0.15, normal.y < 0.5);
     let diffuse = max(dot(normal, light_dir), ambient);
 
     out.color = vec4<f32>(base_color.rgb * diffuse, base_color.a);
