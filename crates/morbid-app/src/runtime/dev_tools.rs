@@ -14,6 +14,7 @@ pub enum GridBrush {
     Sand,
     RaiseTerrain,
     LowerTerrain,
+    SpawnSphere,
 }
 
 #[derive(Resource)]

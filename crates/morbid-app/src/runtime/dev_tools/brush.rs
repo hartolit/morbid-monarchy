@@ -2,7 +2,13 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 use monarch_engine::prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell};
 
-use crate::runtime::dev_tools::{BrushSettings, GridBrush};
+use crate::runtime::{
+    dev_tools::{BrushSettings, GridBrush},
+    entities::{
+        MetalSphere, SPAWN_HEIGHT_OFFSET, SPHERE_BASE_COLOR, SPHERE_DEFAULT_RADIUS,
+        SPHERE_METALLIC_VALUE, SPHERE_ROUGHNESS_VALUE,
+    },
+};
 
 pub fn handle_brush_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -12,8 +18,21 @@ pub fn handle_brush_input(
     brush: Res<GridBrush>,
     settings: Res<BrushSettings>,
     mut egui_contexts: EguiContexts,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if *brush == GridBrush::None || !mouse.pressed(MouseButton::Left) {
+    if *brush == GridBrush::None {
+        return;
+    }
+
+    // Single-click required for spawning entities to prevent massive flooding
+    let is_spawning_entity = *brush == GridBrush::SpawnSphere;
+    if is_spawning_entity {
+        if !mouse.just_pressed(MouseButton::Left) {
+            return;
+        }
+    } else if !mouse.pressed(MouseButton::Left) {
         return;
     }
 
@@ -40,19 +59,34 @@ pub fn handle_brush_input(
             return;
         }
 
-        let t = -ray.origin.y / ray.direction.y;
-        if t < 0.0 {
+        let distance_to_plane = -ray.origin.y / ray.direction.y;
+        if distance_to_plane < 0.0 {
             return;
         }
 
-        let hit_pos = ray.origin + ray.direction * t;
+        let hit_position = ray.origin + ray.direction * distance_to_plane;
 
-        let center_x = hit_pos.x.floor() as i32;
-        let center_y = (-hit_pos.z).floor() as i32;
+        if is_spawning_entity {
+            commands.spawn((
+                Mesh3d(meshes.add(Sphere::new(SPHERE_DEFAULT_RADIUS))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: SPHERE_BASE_COLOR,
+                    metallic: SPHERE_METALLIC_VALUE,
+                    perceptual_roughness: SPHERE_ROUGHNESS_VALUE,
+                    ..default()
+                })),
+                Transform::from_translation(hit_position + Vec3::Y * SPAWN_HEIGHT_OFFSET),
+                MetalSphere::default(),
+            ));
+            return;
+        }
+
+        let center_x = hit_position.x.floor() as i32;
+        let center_y = (-hit_position.z).floor() as i32;
 
         let radius = settings.radius;
-        let bounds_min = grid.window_origin;
-        let bounds_max = grid.window_origin + IVec2::new(grid.width, grid.height);
+        let bounds_minimum = grid.window_origin;
+        let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
 
         for dy in -radius..=radius {
             for dx in -radius..=radius {
@@ -60,15 +94,15 @@ pub fn handle_brush_input(
                     continue;
                 }
 
-                let world_pos = IVec2::new(center_x + dx, center_y + dy);
+                let world_position = IVec2::new(center_x + dx, center_y + dy);
 
-                if world_pos.x >= bounds_min.x
-                    && world_pos.x < bounds_max.x
-                    && world_pos.y >= bounds_min.y
-                    && world_pos.y < bounds_max.y
+                if world_position.x >= bounds_minimum.x
+                    && world_position.x < bounds_maximum.x
+                    && world_position.y >= bounds_minimum.y
+                    && world_position.y < bounds_maximum.y
                 {
-                    let mut cell = grid.get_cell(world_pos);
-                    let mut mutated = false;
+                    let mut cell = grid.get_cell(world_position);
+                    let mut cell_was_mutated = false;
 
                     match *brush {
                         GridBrush::Water => {
@@ -77,7 +111,6 @@ pub fn handle_brush_input(
                             } else {
                                 0
                             };
-
                             let new_state =
                                 old_state.saturating_add(settings.strength as u16).min(1023);
 
@@ -86,18 +119,17 @@ pub fn handle_brush_input(
                             {
                                 cell.set_fluid_mat(FluidMat::FLUID_WATER);
                                 cell.set_fluid_vol(new_state);
-                                mutated = true;
+                                cell_was_mutated = true;
                             }
                         }
                         GridBrush::Fire => {
-                            // Only allow spawning fire if the cell is dry OR covered in oil
                             let fluid = cell.fluid_mat();
                             if cell.surface_mat() != SurfaceMat::SURFACE_FIRE
                                 && (fluid == FluidMat::EMPTY || fluid == FluidMat::FLUID_OIL)
                             {
                                 cell.set_surface_mat(SurfaceMat::SURFACE_FIRE);
                                 cell.set_surface_state(0);
-                                mutated = true;
+                                cell_was_mutated = true;
                             }
                         }
                         GridBrush::Sand => {
@@ -106,7 +138,6 @@ pub fn handle_brush_input(
                             } else {
                                 0
                             };
-
                             let new_vol = old_vol
                                 .saturating_add(settings.strength as u16)
                                 .min(WorldCell::MAX_GRANULAR_VOL);
@@ -116,32 +147,31 @@ pub fn handle_brush_input(
                             {
                                 cell.set_granular_mat(GranularMat::GRANULAR_SAND);
                                 cell.set_granular_vol(new_vol);
-                                mutated = true;
+                                cell_was_mutated = true;
                             }
                         }
                         GridBrush::RaiseTerrain => {
-                            let new_elev =
+                            let new_elevation =
                                 cell.elevation().saturating_add(settings.strength as u16);
-                            if new_elev != cell.elevation() {
-                                cell.set_elevation(new_elev);
-                                mutated = true;
+                            if new_elevation != cell.elevation() {
+                                cell.set_elevation(new_elevation);
+                                cell_was_mutated = true;
                             }
                         }
                         GridBrush::LowerTerrain => {
-                            let new_elev =
+                            let new_elevation =
                                 cell.elevation().saturating_sub(settings.strength as u16);
-                            if new_elev != cell.elevation() {
-                                cell.set_elevation(new_elev);
-                                mutated = true;
+                            if new_elevation != cell.elevation() {
+                                cell.set_elevation(new_elevation);
+                                cell_was_mutated = true;
                             }
                         }
-                        GridBrush::None => {}
+                        _ => {}
                     }
 
-                    if mutated {
-                        grid.set_cell(world_pos, cell);
-                        // Safely trigger external wakes to ensure physics reacts next frame
-                        grid.wake_cell(world_pos);
+                    if cell_was_mutated {
+                        grid.set_cell(world_position, cell);
+                        grid.wake_cell(world_position);
                     }
                 }
             }
