@@ -35,6 +35,17 @@ impl Default for DynamicRigidSphere {
     }
 }
 
+impl DynamicRigidSphere {
+    pub fn new(mass: f32, radius: f32) -> Self {
+        Self {
+            velocity: Vec3::ZERO,
+            mass,
+            radius,
+            accumulated_compaction: 0.0,
+        }
+    }
+}
+
 /// Decoupled 3D integration pass applying Newtonian physics, normal reflections, and analytic CA deformation.
 pub fn simulate_rigid_sphere_kinematics(
     mut spheres: Query<(&mut Transform, &mut DynamicRigidSphere)>,
@@ -47,7 +58,7 @@ pub fn simulate_rigid_sphere_kinematics(
     let bounds_max = grid.window_origin + IVec2::new(grid.width, grid.height);
 
     for (mut transform, mut sphere) in spheres.iter_mut() {
-        // 1. Unconstrained Ballistic Integration (Completely detached from grid limits)
+        // Unconstrained Ballistic Integration (Completely detached from grid limits)
         sphere.velocity += config.gravity * dt;
         sphere.velocity.x *= config.air_resistance;
         sphere.velocity.z *= config.air_resistance;
@@ -72,7 +83,7 @@ pub fn simulate_rigid_sphere_kinematics(
 
         let contact_y = floor_height + sphere.radius;
 
-        // 2. Sloped Surface Collision & True Reflection
+        // Sloped Surface Collision & True Reflection
         if intended_pos.y <= contact_y {
             let penetration = contact_y - intended_pos.y;
 

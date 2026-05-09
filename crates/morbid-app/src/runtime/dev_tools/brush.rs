@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
-use monarch_engine::prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell};
+use monarch_engine::{
+    engine::entities::spherical::DynamicRigidSphere,
+    prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell},
+};
 
 use crate::runtime::dev_tools::{BrushSettings, GridBrush};
 
@@ -20,7 +23,6 @@ pub fn handle_brush_input(
         return;
     }
 
-    // Single-click required for spawning entities to prevent massive flooding
     let is_spawning_entity = *brush == GridBrush::SpawnSphere;
     if is_spawning_entity {
         if !mouse.just_pressed(MouseButton::Left) {
@@ -61,16 +63,17 @@ pub fn handle_brush_input(
         let hit_position = ray.origin + ray.direction * distance_to_plane;
 
         if is_spawning_entity {
+            // Spawn the pristine engine component cleanly
             commands.spawn((
-                Mesh3d(meshes.add(Sphere::new(SPHERE_DEFAULT_RADIUS))),
+                Mesh3d(meshes.add(Sphere::new(5.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: SPHERE_BASE_COLOR,
-                    metallic: SPHERE_METALLIC_VALUE,
-                    perceptual_roughness: SPHERE_ROUGHNESS_VALUE,
+                    base_color: Color::srgb(0.6, 0.6, 0.65),
+                    metallic: 1.0,
+                    perceptual_roughness: 0.2,
                     ..default()
                 })),
-                Transform::from_translation(hit_position + Vec3::Y * SPAWN_HEIGHT_OFFSET),
-                MetalSphere::default(),
+                Transform::from_translation(hit_position + Vec3::Y * 5.0),
+                DynamicRigidSphere::new(50.0, 5.0),
             ));
             return;
         }

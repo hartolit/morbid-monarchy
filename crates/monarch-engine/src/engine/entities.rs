@@ -1,5 +1,5 @@
-mod spherical;
-mod utils;
+pub mod spherical;
+pub mod utils;
 
 use bevy::{
     ecs::resource::Resource,
@@ -95,6 +95,7 @@ impl EntityTypeId {
     pub const WIZARD: Self = Self(2);
     pub const MINION_HUMAN: Self = Self(3);
     pub const MINION_GIANT: Self = Self(4);
+    pub const RIGID_SPHERE: Self = Self(5);
 }
 
 /// Represents the flags for an entity.
