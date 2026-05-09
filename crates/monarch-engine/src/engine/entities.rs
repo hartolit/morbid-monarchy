@@ -1,8 +1,50 @@
-use bevy::math::DVec3;
+mod spherical;
+mod utils;
+
+use bevy::{
+    ecs::resource::Resource,
+    math::{DVec3, Vec3},
+};
 use bitcode::{Decode, Encode};
 use bytemuck::{Pod, Zeroable};
 
-// TODO: This should be a generic type that can be used for any entity type
+/// Centralized compile-time configuration parameters for entity physics.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct EntityPhysicsConfig {
+    pub gravity: Vec3,
+    pub air_resistance: f32,
+    pub rolling_friction: f32,
+    pub impact_restitution: f32,
+    pub min_bounce_velocity: f32,
+    pub elevation_scale: f32,
+    pub outward_sample_rings: usize,
+    pub outward_stride_step: i32,
+    pub volatile_cliff_threshold: f32,
+    pub resistance_multiplier: f32,
+    pub force_to_volume_factor: f32,
+    pub min_deformation_energy: f32,
+}
+
+impl Default for EntityPhysicsConfig {
+    fn default() -> Self {
+        Self {
+            gravity: Vec3::new(0.0, -35.0, 0.0),
+            air_resistance: 0.995,
+            rolling_friction: 0.96,
+            impact_restitution: 0.45,
+            min_bounce_velocity: 1.0,
+            elevation_scale: 0.50,
+            outward_sample_rings: 3,
+            outward_stride_step: 8, // 8 cells maps cleanly across 64-byte L1 cache-line strides
+            volatile_cliff_threshold: 12.0,
+            resistance_multiplier: 2.5,
+            force_to_volume_factor: 0.2,
+            min_deformation_energy: 10.0,
+        }
+    }
+}
+
+/// Represents a serialized entity that can be deserialized into the ECS.
 #[derive(Debug, Clone, Copy, bitcode::Encode, bitcode::Decode)]
 pub struct SerializedEntity {
     pub entity_type: EntityTypeId,
@@ -44,6 +86,7 @@ impl SerializedEntity {
     }
 }
 
+/// Represents a unique type ID for an entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct EntityTypeId(pub u32);
 
@@ -54,6 +97,7 @@ impl EntityTypeId {
     pub const MINION_GIANT: Self = Self(4);
 }
 
+/// Represents the flags for an entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct EntityFlags(pub u16);

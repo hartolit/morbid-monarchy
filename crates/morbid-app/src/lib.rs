@@ -3,7 +3,6 @@ use monarch_engine::prelude::*;
 
 use crate::runtime::{
     dev_tools::DevToolsPlugin,
-    entities::EntitiesPlugin,
     input::{
         apply_camera_transform, center_camera_on_grid, orbit_camera, player_movement,
         setup_focal_point, sync_world_focus, zoom_camera,
@@ -33,7 +32,6 @@ pub fn run() {
         .add_plugins(MonarchEnginePlugin)
         .add_plugins(WorldRenderPlugin)
         .add_plugins(DevToolsPlugin)
-        .add_plugins(EntitiesPlugin)
         .insert_resource(world_db)
         .insert_resource(persistence::WorldSeed(startup_seed))
         .init_resource::<persistence::ChunkSaveQueue>()

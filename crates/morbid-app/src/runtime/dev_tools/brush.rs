@@ -2,13 +2,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 use monarch_engine::prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell};
 
-use crate::runtime::{
-    dev_tools::{BrushSettings, GridBrush},
-    entities::{
-        MetalSphere, SPAWN_HEIGHT_OFFSET, SPHERE_BASE_COLOR, SPHERE_DEFAULT_RADIUS,
-        SPHERE_METALLIC_VALUE, SPHERE_ROUGHNESS_VALUE,
-    },
-};
+use crate::runtime::dev_tools::{BrushSettings, GridBrush};
 
 pub fn handle_brush_input(
     mouse: Res<ButtonInput<MouseButton>>,

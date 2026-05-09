@@ -1,4 +1,4 @@
-pub mod entity;
+pub mod entities;
 pub mod events;
 pub mod generation;
 pub mod simulation;
