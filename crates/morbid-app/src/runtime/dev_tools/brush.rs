@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 use monarch_engine::{
-    engine::entities::spherical::DynamicRigidSphere,
+    engine::entities::{EntityPhysicsConfig, spherical::DynamicRigidSphere},
     prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell},
 };
 
@@ -14,6 +14,7 @@ pub fn handle_brush_input(
     mut grid: ResMut<ActiveWorldGrid>,
     brush: Res<GridBrush>,
     settings: Res<BrushSettings>,
+    config: Res<EntityPhysicsConfig>,
     mut egui_contexts: EguiContexts,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -67,18 +68,18 @@ pub fn handle_brush_input(
             let bounds_minimum = grid.window_origin;
             let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
 
-            // Safely fetch the true physical surface elevation at this coordinate
+            // Safely fetch the true physical surface elevation including granular volume
             if cell_pos.x >= bounds_minimum.x
                 && cell_pos.x < bounds_maximum.x
                 && cell_pos.y >= bounds_minimum.y
                 && cell_pos.y < bounds_maximum.y
             {
                 let cell = grid.get_cell(cell_pos);
-                let floor_h = (cell.elevation() as f32 + cell.granular_vol() as f32) * 0.50;
+                let floor_h =
+                    (cell.elevation() as f32 + cell.granular_vol() as f32) * config.elevation_scale;
                 spawn_y = floor_h + 10.0;
             }
 
-            // Spawn the pristine engine component cleanly above the true terrain surface
             commands.spawn((
                 Mesh3d(meshes.add(Sphere::new(10.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
@@ -191,7 +192,6 @@ pub fn handle_brush_input(
     }
 }
 
-/// Attracts spawned spherical entities towards the raycasted hit position on the ground plane when Mouse Button 4 (Back) is pressed.
 pub fn attract_spheres_input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -240,6 +240,7 @@ pub fn attract_spheres_input(
             let to_target = hit_position - transform.translation;
             let dist_sq = to_target.length_squared();
 
+            // Safe normalization threshold
             if dist_sq > 0.0001 {
                 let direction = to_target.normalize();
                 sphere.velocity += direction * pull_strength * dt;
