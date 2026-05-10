@@ -33,3 +33,4 @@ When generating or structuring a project, you MUST enforce a modular **Rust Carg
    - **Split** into multiple modules when a domain has distinct sub-responsibilities (e.g., `simulation/` split into `movement`, `rules`, `systems`).
    - **Consolidate** into a single file when a domain is one cohesive concept (e.g., a small value object plus its impls/tests) to avoid over-fragmentation and boilerplate.
 7. **COMMENTS ONLY FOR CLARITY:** Use comments to explain why code does what it does. Never use comments as a change log or history tracker;
+8. **DONT SHORTEN VARIABLE NAMES INTO OBLIVION:** Use descriptive, meaningful variable names that convey intent and avoid cryptic abbreviations or abbreviations that are too short to convey meaning.

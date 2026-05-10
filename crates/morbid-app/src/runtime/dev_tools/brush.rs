@@ -73,7 +73,7 @@ pub fn handle_brush_input(
                     ..default()
                 })),
                 Transform::from_translation(hit_position + Vec3::Y * 10.0),
-                DynamicRigidSphere::new(1000.0, 10.0),
+                DynamicRigidSphere::new(100.0, 10.0),
             ));
             return;
         }

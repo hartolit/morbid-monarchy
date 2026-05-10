@@ -42,10 +42,10 @@ impl Default for EntityPhysicsConfig {
             outward_stride_step: 8, // 8 cells maps cleanly across 64-byte L1 cache-line strides
             volatile_cliff_threshold: 12.0,
             resistance_multiplier: 0.2,
-            force_to_volume_factor: 2.5,
+            force_to_volume_factor: 0.1,
             min_deformation_energy: 0.5,
             cost_displace_granular: 0.1,
-            cost_crush_terrain: 2.0,
+            cost_crush_terrain: 35.0,
             rim_expansion_factor: 1.5,
             max_rim_deposit_per_cell: 3,
         }
