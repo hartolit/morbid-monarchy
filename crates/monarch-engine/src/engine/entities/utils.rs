@@ -23,6 +23,63 @@ pub fn fetch_floor_height(
     }
 }
 
+/// Fetches a bilinearly interpolated, continuous floor height to eliminate discrete cell step-cliffs.
+#[inline(always)]
+pub fn fetch_interpolated_floor_height(
+    grid: &ActiveWorldGrid,
+    pos_x: f32,
+    pos_z: f32,
+    bounds_min: IVec2,
+    bounds_max: IVec2,
+    elevation_scale: f32,
+) -> Option<f32> {
+    let gx = pos_x.floor() as i32;
+    let gy = (-pos_z).floor() as i32;
+
+    // Fetch the primary cell height
+    let base_h = fetch_floor_height(
+        grid,
+        IVec2::new(gx, gy),
+        bounds_min,
+        bounds_max,
+        elevation_scale,
+    )?;
+
+    // Fetch surrounding neighbor cells, falling back to base_h if out of bounds
+    let h10 = fetch_floor_height(
+        grid,
+        IVec2::new(gx + 1, gy),
+        bounds_min,
+        bounds_max,
+        elevation_scale,
+    )
+    .unwrap_or(base_h);
+    let h01 = fetch_floor_height(
+        grid,
+        IVec2::new(gx, gy + 1),
+        bounds_min,
+        bounds_max,
+        elevation_scale,
+    )
+    .unwrap_or(base_h);
+    let h11 = fetch_floor_height(
+        grid,
+        IVec2::new(gx + 1, gy + 1),
+        bounds_min,
+        bounds_max,
+        elevation_scale,
+    )
+    .unwrap_or(base_h);
+
+    let tx = pos_x - pos_x.floor();
+    let ty = (-pos_z) - (-pos_z).floor();
+
+    let h0 = base_h * (1.0 - tx) + h10 * tx;
+    let h1 = h01 * (1.0 - tx) + h11 * tx;
+
+    Some(h0 * (1.0 - ty) + h1 * ty)
+}
+
 /// Computes surrounding terrain resistance via sparse, outward cache-line aligned sampling.
 #[inline(always)]
 pub fn compute_outward_resistance(

@@ -65,15 +65,15 @@ pub fn handle_brush_input(
         if is_spawning_entity {
             // Spawn the pristine engine component cleanly
             commands.spawn((
-                Mesh3d(meshes.add(Sphere::new(5.0))),
+                Mesh3d(meshes.add(Sphere::new(10.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: Color::srgb(0.6, 0.6, 0.65),
-                    metallic: 1.0,
+                    metallic: 0.8,
                     perceptual_roughness: 0.2,
                     ..default()
                 })),
-                Transform::from_translation(hit_position + Vec3::Y * 5.0),
-                DynamicRigidSphere::new(50.0, 5.0),
+                Transform::from_translation(hit_position + Vec3::Y * 10.0),
+                DynamicRigidSphere::new(1000.0, 10.0),
             ));
             return;
         }
