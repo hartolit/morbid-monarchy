@@ -9,7 +9,10 @@ use bevy::{
 };
 
 use crate::engine::{
-    entities::{EntityPhysicsConfig, utils::fetch_floor_height},
+    entities::{
+        EntityPhysicsConfig,
+        utils::{compute_outward_resistance, fetch_floor_height},
+    },
     utils::spatial_hash,
     world::{
         cell::{GranularMat, SurfaceMat, WorldCell},
@@ -147,21 +150,59 @@ pub fn simulate_rigid_sphere_kinematics(
         let min_grid_y = (-(current_position.z + sphere_radius)).floor() as i32;
         let max_grid_y = (-(current_position.z - sphere_radius)).floor() as i32;
 
-        // Compute continuous mechanical crushing power available this frame.
-        // Massive spheres exert an immense continuous static weight load (m * g) alongside kinetic energy,
-        // allowing them to plow embedded trenches effortlessly like a heavy brush.
-        let mut available_energy = 0.5 * sphere.mass * sphere.velocity.length_squared()
-            + sphere.mass * config.gravity.length() * config.force_to_volume_factor * 10.0;
+        // Efficient O(1) hoisted confinement evaluation.
+        let center_grid_pos = IVec2::new(
+            current_position.x.floor() as i32,
+            (-current_position.z).floor() as i32,
+        );
+        let baseline_contact_height = fetch_floor_height(
+            &grid,
+            center_grid_pos,
+            bounds_min,
+            bounds_max,
+            config.elevation_scale,
+        )
+        .unwrap_or(current_position.y - sphere_radius);
+
+        let local_outward_resistance = compute_outward_resistance(
+            &grid,
+            center_grid_pos,
+            baseline_contact_height,
+            bounds_min,
+            bounds_max,
+            &config,
+        );
+
+        let effective_crush_cost = config.cost_crush_terrain * local_outward_resistance;
+
+        // Pre-empt un-restituted gravitational drift from triggering artificial floor deformation.
+        // If vertical velocity is merely the result of this frame's gravity acceleration, treat active impact velocity as 0.0.
+        let gravity_drift = config.gravity.y * delta_time;
+        let active_vy = if (sphere.velocity.y - gravity_drift).abs() < 0.1 {
+            0.0
+        } else {
+            sphere.velocity.y
+        };
+
+        let active_velocity_sq = sphere.velocity.x * sphere.velocity.x
+            + active_vy * active_vy
+            + sphere.velocity.z * sphere.velocity.z;
+        let mut kinetic_energy = 0.5 * sphere.mass * active_velocity_sq;
+
+        // Static resting energy only contributes to loose granular displacement, NOT solid substrate fracturing.
+        let static_energy =
+            sphere.mass * config.gravity.length() * config.force_to_volume_factor * delta_time;
 
         let mut harvested_granular_volume = 0u32;
         let mut dominant_granular_material = None;
         let mut actual_crushed_terrain = 0u32;
 
+        // Track whether the sphere possesses genuine translational movement
+        let is_actively_moving = sphere.velocity.length() > 0.2;
+
         // ========================================================================
         // Continuous Embedded Bulldozer Carving Pass
         // ========================================================================
-        // Evaluated BEFORE snapping the sphere up to the resting floor. This allows the sphere's
-        // deeply embedded underside profile to forcefully clear foliage, sand, and soft rock out of its path.
         for grid_y in min_grid_y..=max_grid_y {
             for grid_x in min_grid_x..=max_grid_x {
                 let cell_pos = IVec2::new(grid_x, grid_y);
@@ -181,7 +222,6 @@ pub fn simulate_rigid_sphere_kinematics(
 
                 if distance_squared <= sphere_radius * sphere_radius {
                     let vertical_offset = (sphere_radius * sphere_radius - distance_squared).sqrt();
-                    // The exact analytical underside profile of the embedded sphere at this cell
                     let sphere_bottom = current_position.y - vertical_offset;
 
                     let mut cell = grid.get_cell(cell_pos);
@@ -208,12 +248,15 @@ pub fn simulate_rigid_sphere_kinematics(
                     let current_total_height =
                         (elevation as f32 + granular_volume as f32) * config.elevation_scale;
 
-                    // If the terrain exceeds the sphere's underside, forcefully plow it away
+                    // If the terrain exceeds the sphere's underside, process deformation
                     if current_total_height > sphere_bottom {
                         let elevation_height = elevation as f32 * config.elevation_scale;
 
-                        // Harvest loose granular sand/dirt
-                        if granular_volume > 0 && available_energy >= config.cost_displace_granular
+                        // Harvest loose granular sand/dirt ONLY if actively moving.
+                        // This eliminates the static sand-pump loop where incoming CA sand is endlessly swept back out.
+                        if is_actively_moving
+                            && granular_volume > 0
+                            && (kinetic_energy + static_energy) >= config.cost_displace_granular
                         {
                             let target_granular_volume = if sphere_bottom <= elevation_height {
                                 0
@@ -225,9 +268,10 @@ pub fn simulate_rigid_sphere_kinematics(
 
                             if granular_volume > target_granular_volume {
                                 let desired_removal = granular_volume - target_granular_volume;
-                                let max_affordable =
-                                    (available_energy / config.cost_displace_granular).floor()
-                                        as u16;
+                                let max_affordable = ((kinetic_energy + static_energy)
+                                    / config.cost_displace_granular)
+                                    .floor()
+                                    as u16;
                                 let actual_removal = desired_removal.min(max_affordable);
 
                                 if actual_removal > 0 {
@@ -241,30 +285,55 @@ pub fn simulate_rigid_sphere_kinematics(
                                         cell.set_granular_mat(GranularMat::EMPTY);
                                     }
                                     harvested_granular_volume += actual_removal as u32;
-                                    available_energy -=
+
+                                    // Deduct spent energy from kinetic pool first, then static
+                                    let energy_spent =
                                         actual_removal as f32 * config.cost_displace_granular;
+                                    if kinetic_energy >= energy_spent {
+                                        kinetic_energy -= energy_spent;
+                                    }
                                     modified = true;
                                 }
                             }
                         }
 
-                        // Crush solid substrate if it still resists the embedded sphere
-                        if cell.elevation() > 0 && available_energy >= config.cost_crush_terrain {
+                        // Crush consolidated solid substrate strictly using active kinetic impact energy.
+                        // Enforces strict momentum conservation: fracturing rock directly absorbs and depletes the sphere's velocity vector.
+                        if cell.elevation() > 0
+                            && kinetic_energy >= config.min_deformation_energy
+                            && kinetic_energy >= effective_crush_cost
+                        {
                             let current_elevation_height =
                                 cell.elevation() as f32 * config.elevation_scale;
-                            if current_elevation_height > sphere_bottom {
+
+                            // Only crush load-bearing surfaces beneath or near the sphere's bottom profile,
+                            // preventing the sphere from instantly vaporizing tall mountains from underneath.
+                            if current_elevation_height > sphere_bottom
+                                && current_elevation_height
+                                    <= current_position.y + config.elevation_scale
+                            {
                                 let excess_height = current_elevation_height - sphere_bottom;
                                 let needed_crush =
                                     (excess_height / config.elevation_scale).ceil() as u16;
                                 let max_affordable =
-                                    (available_energy / config.cost_crush_terrain).floor() as u16;
+                                    (kinetic_energy / effective_crush_cost).floor() as u16;
                                 let actual_crush =
                                     needed_crush.min(cell.elevation()).min(max_affordable);
 
                                 if actual_crush > 0 {
                                     cell.set_elevation(cell.elevation() - actual_crush);
-                                    available_energy -=
-                                        actual_crush as f32 * config.cost_crush_terrain;
+
+                                    // Exact thermodynamic energy deduction
+                                    let energy_spent = actual_crush as f32 * effective_crush_cost;
+                                    let old_kinetic = kinetic_energy;
+                                    kinetic_energy = (kinetic_energy - energy_spent).max(0.0);
+
+                                    // Decelerate the physical velocity vector strictly based on remaining kinetic energy ratio
+                                    if old_kinetic > 0.0 {
+                                        let speed_scale = (kinetic_energy / old_kinetic).sqrt();
+                                        sphere.velocity *= speed_scale;
+                                    }
+
                                     actual_crushed_terrain += actual_crush as u32;
                                     modified = true;
                                 }
@@ -286,12 +355,12 @@ pub fn simulate_rigid_sphere_kinematics(
         }
 
         // ========================================================================
-        // Authoritative Grounding Restitution Scan
+        // Authoritative Grounding & Horizontal Obstacle Resolution Scan
         // ========================================================================
-        // Now that the footprint has successfully yielded to the sphere's mass, we scan the updated
-        // terrain heights to ground the sphere perfectly stably at the bottom of the newly carved trench.
         let mut max_required_y = f32::NEG_INFINITY;
         let mut best_contact_offset = Vec3::ZERO;
+        let mut accumulated_push = Vec3::ZERO;
+        let mut wall_contact_count = 0;
 
         for grid_y in min_grid_y..=max_grid_y {
             for grid_x in min_grid_x..=max_grid_x {
@@ -313,18 +382,67 @@ pub fn simulate_rigid_sphere_kinematics(
                 let distance_squared = delta_x * delta_x + delta_z * delta_z;
 
                 if distance_squared <= sphere_radius * sphere_radius {
+                    let distance_xz = (delta_x * delta_x + delta_z * delta_z).sqrt();
                     let vertical_offset = (sphere_radius * sphere_radius - distance_squared).sqrt();
-                    let required_y = cell_height + vertical_offset;
 
-                    if required_y > max_required_y {
-                        max_required_y = required_y;
-                        best_contact_offset = Vec3::new(-delta_x, vertical_offset, -delta_z);
+                    // If the terrain cell exceeds the sphere's current underside profile, there is contact/overlap
+                    if cell_height > current_position.y - vertical_offset {
+                        // Distinguish between walkable load-bearing floors and steep walls/obstacles.
+                        // Cells below the sphere's mid-plane act as vertical load-bearing floors.
+                        if cell_height <= current_position.y + config.elevation_scale {
+                            let required_y = cell_height + vertical_offset;
+                            if required_y > max_required_y {
+                                max_required_y = required_y;
+                                best_contact_offset =
+                                    Vec3::new(-delta_x, vertical_offset, -delta_z);
+                            }
+                        } else {
+                            // Cells taller than the mid-plane act as solid walls/cliffs.
+                            // Accumulate horizontal pushback vectors to slide away safely.
+                            if distance_xz > EPSILON_DIST {
+                                let penetration_xz = sphere_radius - distance_xz;
+                                let push_dir = Vec3::new(-delta_x, 0.0, -delta_z) / distance_xz;
+                                accumulated_push += push_dir * penetration_xz;
+                                wall_contact_count += 1;
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Apply authoritative grounding restitution
+        // 1. Resolve horizontal wall collisions safely and stably to prevent clipping and explosive teleportation
+        if wall_contact_count > 0 {
+            // Average the accumulated push vectors to get a stable, non-explosive mean correction vector
+            let mut mean_push = accumulated_push / (wall_contact_count as f32);
+
+            // Capping the maximum horizontal displacement per frame guarantees absolute stability
+            let max_safe_push = sphere_radius * 0.5;
+            if mean_push.length() > max_safe_push {
+                mean_push = mean_push.normalize() * max_safe_push;
+            }
+
+            current_position += mean_push;
+            transform.translation.x = current_position.x;
+            transform.translation.z = current_position.z;
+
+            // Dampen horizontal velocity against the resolved wall normal
+            let wall_normal = if mean_push.length_squared() > EPSILON_DIST {
+                mean_push.normalize()
+            } else {
+                Vec3::ZERO
+            };
+
+            if wall_normal != Vec3::ZERO {
+                let impact_velocity = sphere.velocity.dot(wall_normal);
+                if impact_velocity < 0.0 {
+                    sphere.velocity -=
+                        (1.0 + config.impact_restitution) * impact_velocity * wall_normal;
+                }
+            }
+        }
+
+        // 2. Apply authoritative grounding restitution strictly from valid load-bearing floor contacts
         if current_position.y <= max_required_y {
             transform.translation.y = max_required_y;
             current_position.y = max_required_y;
@@ -354,8 +472,6 @@ pub fn simulate_rigid_sphere_kinematics(
         // ========================================================================
         // Immediate Tight Rim Deposition (Adjacent Pile-up)
         // ========================================================================
-        // Eliminates the "uncanny detached donut" by depositing harvested material tightly along the immediate
-        // perimeter of the carved path (0.9r to 1.2r), piling up naturally against the trench walls.
         if harvested_granular_volume > 0 {
             let deposit_material = dominant_granular_material.unwrap_or(GranularMat::GRANULAR_DIRT);
             let radius_inner = sphere_radius * 0.9;

@@ -56,14 +56,29 @@ pub fn handle_brush_input(
         }
 
         let distance_to_plane = -ray.origin.y / ray.direction.y;
-        if distance_to_plane < 0.0 {
-            return;
-        }
-
         let hit_position = ray.origin + ray.direction * distance_to_plane;
 
         if is_spawning_entity {
-            // Spawn the pristine engine component cleanly
+            let center_x = hit_position.x.floor() as i32;
+            let center_y = (-hit_position.z).floor() as i32;
+            let cell_pos = IVec2::new(center_x, center_y);
+
+            let mut spawn_y = 10.0;
+            let bounds_minimum = grid.window_origin;
+            let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
+
+            // Safely fetch the true physical surface elevation at this coordinate
+            if cell_pos.x >= bounds_minimum.x
+                && cell_pos.x < bounds_maximum.x
+                && cell_pos.y >= bounds_minimum.y
+                && cell_pos.y < bounds_maximum.y
+            {
+                let cell = grid.get_cell(cell_pos);
+                let floor_h = (cell.elevation() as f32 + cell.granular_vol() as f32) * 0.50;
+                spawn_y = floor_h + 10.0;
+            }
+
+            // Spawn the pristine engine component cleanly above the true terrain surface
             commands.spawn((
                 Mesh3d(meshes.add(Sphere::new(10.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
@@ -72,7 +87,7 @@ pub fn handle_brush_input(
                     perceptual_roughness: 0.2,
                     ..default()
                 })),
-                Transform::from_translation(hit_position + Vec3::Y * 10.0),
+                Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
                 DynamicRigidSphere::new(100.0, 10.0),
             ));
             return;
