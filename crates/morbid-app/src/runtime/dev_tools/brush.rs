@@ -175,3 +175,60 @@ pub fn handle_brush_input(
         }
     }
 }
+
+/// Attracts spawned spherical entities towards the raycasted hit position on the ground plane when Mouse Button 4 (Back) is pressed.
+pub fn attract_spheres_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
+    time: Res<Time>,
+    mut egui_contexts: EguiContexts,
+) {
+    if !mouse.pressed(MouseButton::Back) && !mouse.pressed(MouseButton::Other(4)) {
+        return;
+    }
+
+    let Ok(ctx) = egui_contexts.ctx_mut() else {
+        return;
+    };
+    if ctx.wants_pointer_input() {
+        return;
+    }
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    if let Some(cursor_pos) = window.cursor_position() {
+        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+            return;
+        };
+
+        if ray.direction.y.abs() < 0.001 {
+            return;
+        }
+
+        let distance_to_plane = -ray.origin.y / ray.direction.y;
+        if distance_to_plane < 0.0 {
+            return;
+        }
+
+        let hit_position = ray.origin + ray.direction * distance_to_plane;
+        let pull_strength = 250.0;
+        let dt = time.delta_secs();
+
+        for (transform, mut sphere) in spheres.iter_mut() {
+            let to_target = hit_position - transform.translation;
+            let dist_sq = to_target.length_squared();
+
+            if dist_sq > 0.0001 {
+                let direction = to_target.normalize();
+                sphere.velocity += direction * pull_strength * dt;
+            }
+        }
+    }
+}
