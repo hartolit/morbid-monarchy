@@ -25,8 +25,8 @@ pub mod cell;
 pub mod chunk;
 pub mod grid;
 
-pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 4; // Active simulation view
-pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 4; // Active simulation view
+pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 6; // Active simulation view
+pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 6; // Active simulation view
 pub const PRELOAD_EXT_RADIUS: u32 = 4; // Fetch boundary (outer)
 pub const PRELOAD_TRIGGER: u32 = 2; // Trigger fetch if active view gets chunks away from outer edge
 pub const CACHE_CHUNK_SIZE: usize = (((DEFAULT_ACTIVE_RADIUS_X * 2)

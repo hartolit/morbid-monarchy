@@ -23,6 +23,10 @@ pub struct EntityPhysicsConfig {
     pub resistance_multiplier: f32,
     pub force_to_volume_factor: f32,
     pub min_deformation_energy: f32,
+    pub cost_displace_granular: f32,
+    pub cost_crush_terrain: f32,
+    pub rim_expansion_factor: f32,
+    pub max_rim_deposit_per_cell: u16,
 }
 
 impl Default for EntityPhysicsConfig {
@@ -32,14 +36,18 @@ impl Default for EntityPhysicsConfig {
             air_resistance: 0.995,
             rolling_friction: 0.96,
             impact_restitution: 0.45,
-            min_bounce_velocity: 1.0,
+            min_bounce_velocity: 0.05,
             elevation_scale: 0.50,
             outward_sample_rings: 3,
             outward_stride_step: 8, // 8 cells maps cleanly across 64-byte L1 cache-line strides
             volatile_cliff_threshold: 12.0,
-            resistance_multiplier: 2.5,
-            force_to_volume_factor: 0.2,
-            min_deformation_energy: 10.0,
+            resistance_multiplier: 0.2,
+            force_to_volume_factor: 2.5,
+            min_deformation_energy: 0.5,
+            cost_displace_granular: 0.1,
+            cost_crush_terrain: 2.0,
+            rim_expansion_factor: 1.5,
+            max_rim_deposit_per_cell: 3,
         }
     }
 }
