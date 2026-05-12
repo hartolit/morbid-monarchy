@@ -25,16 +25,46 @@ use crate::engine::{
 // ============================================================================
 
 /// Minimum distance squared threshold to prevent division by zero during vector normalization.
-const EPSILON_DIST: f32 = 0.000001;
+const EPSILON_DISTANCE: f32 = 0.000001;
 
 /// Damping multiplier applied to relative velocities during elastic cluster impulse resolution.
 const CLUSTER_DAMPING: f32 = 0.99;
 
 /// Half of a single grid cell's width/height, used to locate the analytical center of a cell.
-const HALF_CELL: f32 = 0.5;
+const HALF_CELL_OFFSET: f32 = 0.5;
 
 /// Decay rate per second of accumulated terrain compaction when an entity is ungrounded or airborne.
 const COMPACTION_DECAY_RATE: f32 = 2.0;
+
+/// Minimum surface thickness enforced for rendering layers.
+const MIN_SURFACE_THICKNESS: f32 = 1.0;
+
+/// Velocity squared threshold below which the sphere is considered stable/resting.
+const SLEEP_VELOCITY_SQUARED: f32 = 0.001;
+
+/// Velocity squared threshold above which the sphere transitions from inactive to actively moving.
+const WAKE_VELOCITY_SQUARED: f32 = 0.04;
+
+/// Fraction of the sphere radius defining the vertical blade ceiling for rim material displacement.
+const BLADE_CEILING_RATIO: f32 = 0.25;
+
+/// Fraction of the sphere radius defining the core load-bearing underside for vertical grounding.
+const LOAD_BEARING_RADIUS_RATIO: f32 = 0.7;
+
+/// Fraction of the sphere radius defining the maximum allowable horizontal wall push correction per frame.
+const MAX_WALL_PUSH_RATIO: f32 = 0.5;
+
+/// Multiplier for the inner radius boundary of the rim deposition ring.
+const RIM_INNER_RADIUS_RATIO: f32 = 0.9;
+
+/// Small safety buffer added to the drift velocity threshold to ensure stable vertical grounding.
+const GROUNDING_DRIFT_BUFFER: f32 = 0.01;
+
+/// Scale factor for converting spatial hash output into a fractional remainder probability.
+const PROBABILITY_HASH_SCALE: f32 = 1000.0;
+
+/// Upward velocity deflection factor applied when moving horizontally through granular material while submerged.
+const SUBMERGED_BUOYANCY_LIFT: f32 = 2.0;
 
 // ============================================================================
 // Component Definitions
@@ -46,6 +76,8 @@ pub struct DynamicRigidSphere {
     pub mass: f32,
     pub radius: f32,
     pub accumulated_compaction: f32,
+    /// Tracks whether the sphere has settled and stopped actively displacing granular material.
+    pub is_granular_inactive: bool,
 }
 
 impl Default for DynamicRigidSphere {
@@ -55,6 +87,7 @@ impl Default for DynamicRigidSphere {
             mass: 50.0,
             radius: 5.0,
             accumulated_compaction: 0.0,
+            is_granular_inactive: false,
         }
     }
 }
@@ -66,6 +99,7 @@ impl DynamicRigidSphere {
             mass,
             radius,
             accumulated_compaction: 0.0,
+            is_granular_inactive: false,
         }
     }
 }
@@ -75,7 +109,7 @@ impl DynamicRigidSphere {
 // ============================================================================
 
 /// Decoupled 3D integration pass applying ballistic integration, inter-entity collision,
-/// continuous embedded bulldozer carving, authoritative grounding restitution, and tight rim deposition.
+/// dynamic bedrock/granular deformation, submerged physics adaptation, and authoritative support.
 pub fn simulate_rigid_sphere_kinematics(
     mut spheres: Query<(&mut Transform, &mut DynamicRigidSphere)>,
     mut grid: ResMut<ActiveWorldGrid>,
@@ -83,10 +117,10 @@ pub fn simulate_rigid_sphere_kinematics(
     config: Res<EntityPhysicsConfig>,
 ) {
     let delta_time = time.delta_secs();
-    let bounds_min = grid.window_origin;
-    let bounds_max = grid.window_origin + IVec2::new(grid.width, grid.height);
+    let bounds_minimum = grid.window_origin;
+    let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
 
-    // Unconstrained Ballistic Integration
+    // 1. Unconstrained Ballistic Integration
     for (mut transform, mut sphere) in spheres.iter_mut() {
         sphere.velocity += config.gravity * delta_time;
         sphere.velocity.x *= config.air_resistance;
@@ -95,7 +129,7 @@ pub fn simulate_rigid_sphere_kinematics(
         transform.translation += sphere.velocity * delta_time;
     }
 
-    // Inter-Entity Overlap Resolution (Sphere-to-Sphere)
+    // 2. Inter-Entity Overlap Resolution (Sphere-to-Sphere)
     let mut combinations = spheres.iter_combinations_mut();
     while let Some(
         [
@@ -110,7 +144,7 @@ pub fn simulate_rigid_sphere_kinematics(
 
         if distance_squared < minimum_distance * minimum_distance {
             let distance = distance_squared.sqrt();
-            let collision_normal = if distance > EPSILON_DIST {
+            let collision_normal = if distance > EPSILON_DISTANCE {
                 position_delta / distance
             } else {
                 Vec3::X
@@ -140,72 +174,104 @@ pub fn simulate_rigid_sphere_kinematics(
         }
     }
 
-    // Continuous Footprint Carving, Authoritative Grounding & Tight Rim Deposition
+    // 3. State Evaluation, Carving, Submerged Physics & Authoritative Grounding
     for (mut transform, mut sphere) in spheres.iter_mut() {
         let mut current_position = transform.translation;
         let sphere_radius = sphere.radius;
 
-        let min_grid_x = (current_position.x - sphere_radius).floor() as i32;
-        let max_grid_x = (current_position.x + sphere_radius).floor() as i32;
-        let min_grid_y = (-(current_position.z + sphere_radius)).floor() as i32;
-        let max_grid_y = (-(current_position.z - sphere_radius)).floor() as i32;
+        let minimum_grid_x = (current_position.x - sphere_radius).floor() as i32;
+        let maximum_grid_x = (current_position.x + sphere_radius).floor() as i32;
+        let minimum_grid_y = (-(current_position.z + sphere_radius)).floor() as i32;
+        let maximum_grid_y = (-(current_position.z - sphere_radius)).floor() as i32;
 
-        // Efficient O(1) hoisted confinement evaluation.
-        let center_grid_pos = IVec2::new(
+        let center_grid_position = IVec2::new(
             current_position.x.floor() as i32,
             (-current_position.z).floor() as i32,
         );
         let baseline_contact_height = fetch_floor_height(
             &grid,
-            center_grid_pos,
-            bounds_min,
-            bounds_max,
+            center_grid_position,
+            bounds_minimum,
+            bounds_maximum,
             config.elevation_scale,
         )
         .unwrap_or(current_position.y - sphere_radius);
 
         let local_outward_resistance = compute_outward_resistance(
             &grid,
-            center_grid_pos,
+            center_grid_position,
             baseline_contact_height,
-            bounds_min,
-            bounds_max,
+            bounds_minimum,
+            bounds_maximum,
             &config,
         );
 
         let effective_crush_cost = config.cost_crush_terrain * local_outward_resistance;
 
-        // Pre-empt un-restituted gravitational drift from triggering artificial floor hollowing.
+        // Determine the sphere's active kinetic energy excluding pure gravitational frame drift
         let gravity_drift = config.gravity * delta_time;
         let mut active_velocity = sphere.velocity - gravity_drift;
 
-        if active_velocity.length_squared() < 0.001 {
+        if active_velocity.length_squared() < SLEEP_VELOCITY_SQUARED {
             active_velocity = Vec3::ZERO;
         }
 
         let mut kinetic_energy = 0.5 * sphere.mass * active_velocity.length_squared();
-        let is_actively_moving = active_velocity.length_squared() > 0.04;
+
+        // Update granular inactivity state
+        if active_velocity.length_squared() > WAKE_VELOCITY_SQUARED {
+            sphere.is_granular_inactive = false;
+        } else if active_velocity.length_squared() < SLEEP_VELOCITY_SQUARED {
+            sphere.is_granular_inactive = true;
+        }
+
+        // Determine surrounding granular submersion level
+        let mut maximum_surrounding_granular_height = f32::NEG_INFINITY;
+        for grid_y in minimum_grid_y..=maximum_grid_y {
+            for grid_x in minimum_grid_x..=maximum_grid_x {
+                let cell_position = IVec2::new(grid_x, grid_y);
+                if cell_position.x >= bounds_minimum.x
+                    && cell_position.x < bounds_maximum.x
+                    && cell_position.y >= bounds_minimum.y
+                    && cell_position.y < bounds_maximum.y
+                {
+                    let cell = grid.get_cell(cell_position);
+                    if cell.granular_vol() > 0 {
+                        let total_height = (cell.elevation() as f32 + cell.granular_vol() as f32)
+                            * config.elevation_scale;
+                        if total_height > maximum_surrounding_granular_height {
+                            maximum_surrounding_granular_height = total_height;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If surrounding granular material is higher than the sphere's center, it is submerged/covered.
+        let is_submerged_under_granular = maximum_surrounding_granular_height > current_position.y;
 
         let mut harvested_granular_volume = 0u32;
         let mut dominant_granular_material = None;
         let mut actual_crushed_terrain = 0u32;
 
         // ========================================================================
-        // Continuous Embedded Bulldozer Carving Pass
+        // Pass A: Bedrock Crushing & Selective Granular Carving
         // ========================================================================
-        for grid_y in min_grid_y..=max_grid_y {
-            for grid_x in min_grid_x..=max_grid_x {
-                let cell_pos = IVec2::new(grid_x, grid_y);
-                if cell_pos.x < bounds_min.x
-                    || cell_pos.x >= bounds_max.x
-                    || cell_pos.y < bounds_min.y
-                    || cell_pos.y >= bounds_max.y
+        // Running carving BEFORE authoritative grounding ensures that an impacting sphere penetrates
+        // bedrock normally and expends kinetic energy to crush/fracture it, solving the "hard as a rock" issue.
+        for grid_y in minimum_grid_y..=maximum_grid_y {
+            for grid_x in minimum_grid_x..=maximum_grid_x {
+                let cell_position = IVec2::new(grid_x, grid_y);
+                if cell_position.x < bounds_minimum.x
+                    || cell_position.x >= bounds_maximum.x
+                    || cell_position.y < bounds_minimum.y
+                    || cell_position.y >= bounds_maximum.y
                 {
                     continue;
                 }
 
-                let cell_center_x = grid_x as f32 + HALF_CELL;
-                let cell_center_z = -grid_y as f32 - HALF_CELL;
+                let cell_center_x = grid_x as f32 + HALF_CELL_OFFSET;
+                let cell_center_z = -grid_y as f32 - HALF_CELL_OFFSET;
                 let delta_x = cell_center_x - current_position.x;
                 let delta_z = cell_center_z - current_position.z;
                 let distance_squared = delta_x * delta_x + delta_z * delta_z;
@@ -214,8 +280,8 @@ pub fn simulate_rigid_sphere_kinematics(
                     let vertical_offset = (sphere_radius * sphere_radius - distance_squared).sqrt();
                     let sphere_bottom = current_position.y - vertical_offset;
 
-                    let mut cell = grid.get_cell(cell_pos);
-                    let mut modified = false;
+                    let mut cell = grid.get_cell(cell_position);
+                    let mut cell_modified = false;
 
                     // Obliterate biologic growth (foliage)
                     if cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE {
@@ -224,110 +290,104 @@ pub fn simulate_rigid_sphere_kinematics(
                             + cell.fluid_vol() as f32)
                             * config.elevation_scale;
                         let surface_top_height = floor_base_height
-                            + (1.0f32.max(cell.surface_state() as f32)) * config.elevation_scale;
+                            + (MIN_SURFACE_THICKNESS.max(cell.surface_state() as f32))
+                                * config.elevation_scale;
 
                         if sphere_bottom < surface_top_height {
                             cell.set_surface_mat(SurfaceMat::EMPTY);
                             cell.set_surface_state(0);
-                            modified = true;
+                            cell_modified = true;
                         }
                     }
 
-                    let elevation = cell.elevation();
+                    let solid_height = cell.elevation() as f32 * config.elevation_scale;
+                    let total_height = (cell.elevation() as f32 + cell.granular_vol() as f32)
+                        * config.elevation_scale;
+
+                    // 1. Solid Bedrock Crushing (Always evaluated on impact)
+                    if cell.elevation() > 0
+                        && solid_height > sphere_bottom
+                        && kinetic_energy >= config.min_deformation_energy
+                        && kinetic_energy >= effective_crush_cost
+                    {
+                        let excess_height = solid_height - sphere_bottom;
+                        let needed_crush = (excess_height / config.elevation_scale).ceil() as u16;
+                        let maximum_affordable =
+                            (kinetic_energy / effective_crush_cost).floor() as u16;
+                        let actual_crush =
+                            needed_crush.min(cell.elevation()).min(maximum_affordable);
+
+                        if actual_crush > 0 {
+                            cell.set_elevation(cell.elevation() - actual_crush);
+
+                            let energy_spent = actual_crush as f32 * effective_crush_cost;
+                            let previous_kinetic = kinetic_energy;
+                            kinetic_energy = (kinetic_energy - energy_spent).max(0.0);
+
+                            if previous_kinetic > 0.0 {
+                                let speed_scale = (kinetic_energy / previous_kinetic).sqrt();
+                                sphere.velocity *= speed_scale;
+                            }
+
+                            actual_crushed_terrain += actual_crush as u32;
+                            cell_modified = true;
+                        }
+                    }
+
+                    // 2. Selective Granular Carving / Displacement
+                    // If the sphere is active and NOT submerged, it displaces overlapping sand out to the rim.
+                    // If the sphere is inactive OR submerged, it gracefully allows incoming sand to flow in/overlap
+                    // without pushing it away, enabling elegant sand-covering realism and avoiding black holes/cavitation.
                     let granular_volume = cell.granular_vol();
-                    let current_total_height =
-                        (elevation as f32 + granular_volume as f32) * config.elevation_scale;
+                    if !sphere.is_granular_inactive
+                        && !is_submerged_under_granular
+                        && granular_volume > 0
+                        && total_height > sphere_bottom
+                    {
+                        let target_granular_volume = if sphere_bottom <= solid_height {
+                            0
+                        } else {
+                            ((sphere_bottom - solid_height) / config.elevation_scale)
+                                .floor()
+                                .max(0.0) as u16
+                        };
 
-                    if current_total_height > sphere_bottom {
-                        let elevation_height = elevation as f32 * config.elevation_scale;
+                        if granular_volume > target_granular_volume {
+                            let actual_removal = granular_volume - target_granular_volume;
+                            if actual_removal > 0 {
+                                if dominant_granular_material.is_none()
+                                    && cell.granular_mat() != GranularMat::EMPTY
+                                {
+                                    dominant_granular_material = Some(cell.granular_mat());
+                                }
+                                cell.set_granular_vol(granular_volume - actual_removal);
+                                if cell.granular_vol() == 0 {
+                                    cell.set_granular_mat(GranularMat::EMPTY);
+                                }
+                                harvested_granular_volume += actual_removal as u32;
 
-                        // Harvest loose granular sand/dirt strictly fueling it via ACTIVE KINETIC ENERGY.
-                        // Removing static energy from this pool completely eradicates the sand-pump oscillation loop.
-                        if is_actively_moving
-                            && granular_volume > 0
-                            && kinetic_energy >= config.cost_displace_granular
-                        {
-                            let target_granular_volume = if sphere_bottom <= elevation_height {
-                                0
-                            } else {
-                                ((sphere_bottom - elevation_height) / config.elevation_scale)
-                                    .floor()
-                                    .max(0.0) as u16
-                            };
-
-                            if granular_volume > target_granular_volume {
-                                let desired_removal = granular_volume - target_granular_volume;
-                                let max_affordable =
-                                    (kinetic_energy / config.cost_displace_granular).floor() as u16;
-                                let actual_removal = desired_removal.min(max_affordable);
-
-                                if actual_removal > 0 {
-                                    if dominant_granular_material.is_none()
-                                        && cell.granular_mat() != GranularMat::EMPTY
-                                    {
-                                        dominant_granular_material = Some(cell.granular_mat());
-                                    }
-                                    cell.set_granular_vol(granular_volume - actual_removal);
-                                    if cell.granular_vol() == 0 {
-                                        cell.set_granular_mat(GranularMat::EMPTY);
-                                    }
-                                    harvested_granular_volume += actual_removal as u32;
-
-                                    // Deplete kinetic energy directly to conserve momentum
+                                // Draining kinetic energy during active carving conserves momentum
+                                if kinetic_energy > 0.0 {
                                     let energy_spent =
                                         actual_removal as f32 * config.cost_displace_granular;
-                                    let old_kinetic = kinetic_energy;
+                                    let previous_kinetic = kinetic_energy;
                                     kinetic_energy = (kinetic_energy - energy_spent).max(0.0);
 
-                                    if old_kinetic > 0.0 {
-                                        let speed_scale = (kinetic_energy / old_kinetic).sqrt();
+                                    if previous_kinetic > 0.0 {
+                                        let speed_scale =
+                                            (kinetic_energy / previous_kinetic).sqrt();
                                         sphere.velocity *= speed_scale;
                                     }
-
-                                    modified = true;
                                 }
-                            }
-                        }
 
-                        // Crush consolidated solid substrate strictly using active kinetic impact energy
-                        if cell.elevation() > 0
-                            && kinetic_energy >= config.min_deformation_energy
-                            && kinetic_energy >= effective_crush_cost
-                        {
-                            let current_elevation_height =
-                                cell.elevation() as f32 * config.elevation_scale;
-
-                            if current_elevation_height > sphere_bottom {
-                                let excess_height = current_elevation_height - sphere_bottom;
-                                let needed_crush =
-                                    (excess_height / config.elevation_scale).ceil() as u16;
-                                let max_affordable =
-                                    (kinetic_energy / effective_crush_cost).floor() as u16;
-                                let actual_crush =
-                                    needed_crush.min(cell.elevation()).min(max_affordable);
-
-                                if actual_crush > 0 {
-                                    cell.set_elevation(cell.elevation() - actual_crush);
-
-                                    let energy_spent = actual_crush as f32 * effective_crush_cost;
-                                    let old_kinetic = kinetic_energy;
-                                    kinetic_energy = (kinetic_energy - energy_spent).max(0.0);
-
-                                    if old_kinetic > 0.0 {
-                                        let speed_scale = (kinetic_energy / old_kinetic).sqrt();
-                                        sphere.velocity *= speed_scale;
-                                    }
-
-                                    actual_crushed_terrain += actual_crush as u32;
-                                    modified = true;
-                                }
+                                cell_modified = true;
                             }
                         }
                     }
 
-                    if modified {
-                        grid.set_cell(cell_pos, cell);
-                        grid.wake_cell(cell_pos);
+                    if cell_modified {
+                        grid.set_cell(cell_position, cell);
+                        grid.wake_cell(cell_position);
                     }
                 }
             }
@@ -339,73 +399,111 @@ pub fn simulate_rigid_sphere_kinematics(
         }
 
         // ========================================================================
-        // Authoritative Grounding & Horizontal Obstacle Resolution Scan
+        // Pass B: Submerged Movement Physics Adaptation
         // ========================================================================
-        let mut max_required_y = f32::NEG_INFINITY;
-        let mut best_contact_offset = Vec3::ZERO;
-        let mut accumulated_push = Vec3::ZERO;
+        // When moving horizontally while submerged/covered in granular material, the surrounding sand
+        // applies a natural buoyant normal force deflecting the trajectory upwards, allowing the sphere
+        // to smoothly emerge/climb out of dunes rather than getting permanently trapped.
+        if is_submerged_under_granular {
+            let horizontal_speed = (sphere.velocity.x * sphere.velocity.x
+                + sphere.velocity.z * sphere.velocity.z)
+                .sqrt();
+            if horizontal_speed > 0.1 {
+                sphere.velocity.y += SUBMERGED_BUOYANCY_LIFT * delta_time * horizontal_speed;
+            }
+        }
+
+        // ========================================================================
+        // Pass C: Authoritative Grounding & Horizontal Wall Resolution Scan
+        // ========================================================================
+        let mut maximum_required_y = f32::NEG_INFINITY;
+        let mut accumulated_push_direction = Vec3::ZERO;
         let mut wall_contact_count = 0;
 
-        for grid_y in min_grid_y..=max_grid_y {
-            for grid_x in min_grid_x..=max_grid_x {
-                let cell_pos = IVec2::new(grid_x, grid_y);
-                let Some(cell_height) = fetch_floor_height(
-                    &grid,
-                    cell_pos,
-                    bounds_min,
-                    bounds_max,
-                    config.elevation_scale,
-                ) else {
+        for grid_y in minimum_grid_y..=maximum_grid_y {
+            for grid_x in minimum_grid_x..=maximum_grid_x {
+                let cell_position = IVec2::new(grid_x, grid_y);
+                if cell_position.x < bounds_minimum.x
+                    || cell_position.x >= bounds_maximum.x
+                    || cell_position.y < bounds_minimum.y
+                    || cell_position.y >= bounds_maximum.y
+                {
                     continue;
-                };
+                }
 
-                let cell_center_x = grid_x as f32 + HALF_CELL;
-                let cell_center_z = -grid_y as f32 - HALF_CELL;
+                let cell = grid.get_cell(cell_position);
+                let solid_height = cell.elevation() as f32 * config.elevation_scale;
+                let total_height =
+                    (cell.elevation() as f32 + cell.granular_vol() as f32) * config.elevation_scale;
+
+                let cell_center_x = grid_x as f32 + HALF_CELL_OFFSET;
+                let cell_center_z = -grid_y as f32 - HALF_CELL_OFFSET;
                 let delta_x = cell_center_x - current_position.x;
                 let delta_z = cell_center_z - current_position.z;
                 let distance_squared = delta_x * delta_x + delta_z * delta_z;
 
                 if distance_squared <= sphere_radius * sphere_radius {
-                    let distance_xz = (delta_x * delta_x + delta_z * delta_z).sqrt();
+                    let distance_horizontal = (delta_x * delta_x + delta_z * delta_z).sqrt();
                     let vertical_offset = (sphere_radius * sphere_radius - distance_squared).sqrt();
+                    let sphere_bottom_at_cell = current_position.y - vertical_offset;
 
-                    if cell_height > current_position.y - vertical_offset {
-                        let step_threshold = current_position.y + sphere_radius * 0.25;
-
-                        if cell_height <= step_threshold {
-                            let required_y = cell_height + vertical_offset;
-                            if required_y > max_required_y {
-                                max_required_y = required_y;
-                                best_contact_offset =
-                                    Vec3::new(-delta_x, vertical_offset, -delta_z);
+                    // 1. Horizontal Wall Pushing: Strictly constrained to solid bedrock. Loose sand shifts
+                    // and flows, lacking the structural strength to block or shove a rigid metal sphere horizontally.
+                    if solid_height > sphere_bottom_at_cell {
+                        let step_threshold =
+                            current_position.y + sphere_radius * BLADE_CEILING_RATIO;
+                        if solid_height <= step_threshold {
+                            let required_y = solid_height + vertical_offset;
+                            if required_y > maximum_required_y {
+                                maximum_required_y = required_y;
                             }
+                        } else if distance_horizontal > EPSILON_DISTANCE {
+                            let penetration_horizontal = sphere_radius - distance_horizontal;
+                            let push_direction =
+                                Vec3::new(-delta_x, 0.0, -delta_z) / distance_horizontal;
+                            accumulated_push_direction += push_direction * penetration_horizontal;
+                            wall_contact_count += 1;
+                        }
+                    }
+
+                    // 2. Vertical Grounding Support: Solid bedrock always supports. Granular material supports
+                    // ONLY if the sphere is not submerged OR if the cell is directly beneath the core load-bearing
+                    // underside. This prevents side-sand overlapping a covered sphere from falsely ejecting it upwards.
+                    let core_load_bearing_radius = sphere_radius * LOAD_BEARING_RADIUS_RATIO;
+                    let supports_vertically = solid_height > sphere_bottom_at_cell
+                        || (!is_submerged_under_granular && total_height > sphere_bottom_at_cell)
+                        || (total_height > sphere_bottom_at_cell
+                            && distance_horizontal <= core_load_bearing_radius);
+
+                    if supports_vertically {
+                        let effective_floor_height = if solid_height > sphere_bottom_at_cell {
+                            solid_height
                         } else {
-                            if distance_xz > EPSILON_DIST {
-                                let penetration_xz = sphere_radius - distance_xz;
-                                let push_dir = Vec3::new(-delta_x, 0.0, -delta_z) / distance_xz;
-                                accumulated_push += push_dir * penetration_xz;
-                                wall_contact_count += 1;
-                            }
+                            total_height
+                        };
+                        let required_y = effective_floor_height + vertical_offset;
+                        if required_y > maximum_required_y {
+                            maximum_required_y = required_y;
                         }
                     }
                 }
             }
         }
 
+        // Resolve horizontal wall pushes
         if wall_contact_count > 0 {
-            let mut mean_push = accumulated_push / (wall_contact_count as f32);
-
-            let max_safe_push = sphere_radius * 0.5;
-            if mean_push.length() > max_safe_push {
-                mean_push = mean_push.normalize() * max_safe_push;
+            let mut mean_push_direction = accumulated_push_direction / (wall_contact_count as f32);
+            let maximum_safe_push = sphere_radius * MAX_WALL_PUSH_RATIO;
+            if mean_push_direction.length() > maximum_safe_push {
+                mean_push_direction = mean_push_direction.normalize() * maximum_safe_push;
             }
 
-            current_position += mean_push;
+            current_position += mean_push_direction;
             transform.translation.x = current_position.x;
             transform.translation.z = current_position.z;
 
-            let wall_normal = if mean_push.length_squared() > EPSILON_DIST {
-                mean_push.normalize()
+            let wall_normal = if mean_push_direction.length_squared() > EPSILON_DISTANCE {
+                mean_push_direction.normalize()
             } else {
                 Vec3::ZERO
             };
@@ -419,19 +517,21 @@ pub fn simulate_rigid_sphere_kinematics(
             }
         }
 
-        if current_position.y <= max_required_y {
-            transform.translation.y = max_required_y;
-            current_position.y = max_required_y;
+        // Enforce authoritative vertical support
+        if current_position.y <= maximum_required_y {
+            transform.translation.y = maximum_required_y;
+            current_position.y = maximum_required_y;
 
-            let contact_normal = if best_contact_offset.length_squared() > EPSILON_DIST {
-                best_contact_offset.normalize()
-            } else {
-                Vec3::Y
-            };
-
+            let contact_normal = Vec3::Y;
             let impact_velocity = sphere.velocity.dot(contact_normal);
             if impact_velocity < 0.0 {
-                if impact_velocity.abs() > config.min_bounce_velocity {
+                let gravity_drift_velocity =
+                    (config.gravity * delta_time).dot(contact_normal).abs();
+                let effective_bounce_threshold = config
+                    .min_bounce_velocity
+                    .max(gravity_drift_velocity + GROUNDING_DRIFT_BUFFER);
+
+                if impact_velocity.abs() > effective_bounce_threshold {
                     sphere.velocity -=
                         (1.0 + config.impact_restitution) * impact_velocity * contact_normal;
                 } else {
@@ -445,53 +545,53 @@ pub fn simulate_rigid_sphere_kinematics(
         }
 
         // ========================================================================
-        // Immediate Tight Rim Deposition (Adjacent Pile-up)
+        // Pass D: Immediate Tight Rim Deposition (Adjacent Pile-up)
         // ========================================================================
         if harvested_granular_volume > 0 {
             let deposit_material = dominant_granular_material.unwrap_or(GranularMat::GRANULAR_DIRT);
-            let radius_inner = sphere_radius * 0.9;
-            let radius_outer = sphere_radius * 1.2;
+            let radius_inner = sphere_radius * RIM_INNER_RADIUS_RATIO;
+            let radius_outer = sphere_radius * config.rim_expansion_factor;
 
-            let rim_min_grid_x = (current_position.x - radius_outer).floor() as i32;
-            let rim_max_grid_x = (current_position.x + radius_outer).floor() as i32;
-            let rim_min_grid_y = (-(current_position.z + radius_outer)).floor() as i32;
-            let rim_max_grid_y = (-(current_position.z - radius_outer)).floor() as i32;
+            let rim_minimum_grid_x = (current_position.x - radius_outer).floor() as i32;
+            let rim_maximum_grid_x = (current_position.x + radius_outer).floor() as i32;
+            let rim_minimum_grid_y = (-(current_position.z + radius_outer)).floor() as i32;
+            let rim_maximum_grid_y = (-(current_position.z - radius_outer)).floor() as i32;
 
-            // Sweep A: Read-only scan accumulating total valid adjacent rim capacity
+            // Sweep 1: Read-only scan accumulating total valid adjacent rim capacity
             let mut total_rim_capacity = 0u32;
 
-            for grid_y in rim_min_grid_y..=rim_max_grid_y {
-                for grid_x in rim_min_grid_x..=rim_max_grid_x {
-                    let cell_pos = IVec2::new(grid_x, grid_y);
-                    if cell_pos.x < bounds_min.x
-                        || cell_pos.x >= bounds_max.x
-                        || cell_pos.y < bounds_min.y
-                        || cell_pos.y >= bounds_max.y
+            for grid_y in rim_minimum_grid_y..=rim_maximum_grid_y {
+                for grid_x in rim_minimum_grid_x..=rim_maximum_grid_x {
+                    let cell_position = IVec2::new(grid_x, grid_y);
+                    if cell_position.x < bounds_minimum.x
+                        || cell_position.x >= bounds_maximum.x
+                        || cell_position.y < bounds_minimum.y
+                        || cell_position.y >= bounds_maximum.y
                     {
                         continue;
                     }
 
-                    let cell_center_x = grid_x as f32 + HALF_CELL;
-                    let cell_center_z = -grid_y as f32 - HALF_CELL;
+                    let cell_center_x = grid_x as f32 + HALF_CELL_OFFSET;
+                    let cell_center_z = -grid_y as f32 - HALF_CELL_OFFSET;
                     let delta_x = cell_center_x - current_position.x;
                     let delta_z = cell_center_z - current_position.z;
                     let distance = (delta_x * delta_x + delta_z * delta_z).sqrt();
 
                     if distance >= radius_inner && distance <= radius_outer {
-                        let cell = grid.get_cell(cell_pos);
-                        let current_mat = cell.granular_mat();
+                        let cell = grid.get_cell(cell_position);
+                        let current_material = cell.granular_mat();
 
-                        if current_mat == GranularMat::EMPTY || current_mat == deposit_material {
-                            let cell_total_h = (cell.elevation() as f32
+                        if current_material == GranularMat::EMPTY
+                            || current_material == deposit_material
+                        {
+                            let cell_total_height = (cell.elevation() as f32
                                 + cell.granular_vol() as f32)
                                 * config.elevation_scale;
+                            let maximum_allowed_height =
+                                current_position.y + sphere_radius * BLADE_CEILING_RATIO;
 
-                            // Physical Blade Ceiling: A bulldozer cannot push material higher than its blade.
-                            // Capping capacity strictly below the sphere's mid-plane permanently prevents multi-sphere beam injection.
-                            let max_allowed_h = current_position.y + sphere_radius * 0.25;
-
-                            if cell_total_h < max_allowed_h {
-                                let height_deficiency = max_allowed_h - cell_total_h;
+                            if cell_total_height < maximum_allowed_height {
+                                let height_deficiency = maximum_allowed_height - cell_total_height;
                                 let volume_allowance =
                                     (height_deficiency / config.elevation_scale).floor() as u16;
 
@@ -508,40 +608,44 @@ pub fn simulate_rigid_sphere_kinematics(
                 }
             }
 
-            // Sweep B: Sequential write scan distributing harvested material isotropically via spatial hashing
+            // Sweep 2: Sequential write scan distributing harvested material isotropically via spatial hashing
             if total_rim_capacity > 0 {
                 let fill_ratio = (harvested_granular_volume as f32) / (total_rim_capacity as f32);
+                let hash_scale_integer = PROBABILITY_HASH_SCALE as u32;
 
-                for grid_y in rim_min_grid_y..=rim_max_grid_y {
-                    for grid_x in rim_min_grid_x..=rim_max_grid_x {
-                        let cell_pos = IVec2::new(grid_x, grid_y);
-                        if cell_pos.x < bounds_min.x
-                            || cell_pos.x >= bounds_max.x
-                            || cell_pos.y < bounds_min.y
-                            || cell_pos.y >= bounds_max.y
+                for grid_y in rim_minimum_grid_y..=rim_maximum_grid_y {
+                    for grid_x in rim_minimum_grid_x..=rim_maximum_grid_x {
+                        let cell_position = IVec2::new(grid_x, grid_y);
+                        if cell_position.x < bounds_minimum.x
+                            || cell_position.x >= bounds_maximum.x
+                            || cell_position.y < bounds_minimum.y
+                            || cell_position.y >= bounds_maximum.y
                         {
                             continue;
                         }
 
-                        let cell_center_x = grid_x as f32 + HALF_CELL;
-                        let cell_center_z = -grid_y as f32 - HALF_CELL;
+                        let cell_center_x = grid_x as f32 + HALF_CELL_OFFSET;
+                        let cell_center_z = -grid_y as f32 - HALF_CELL_OFFSET;
                         let delta_x = cell_center_x - current_position.x;
                         let delta_z = cell_center_z - current_position.z;
                         let distance = (delta_x * delta_x + delta_z * delta_z).sqrt();
 
                         if distance >= radius_inner && distance <= radius_outer {
-                            let mut cell = grid.get_cell(cell_pos);
-                            let current_mat = cell.granular_mat();
+                            let mut cell = grid.get_cell(cell_position);
+                            let current_material = cell.granular_mat();
 
-                            if current_mat == GranularMat::EMPTY || current_mat == deposit_material
+                            if current_material == GranularMat::EMPTY
+                                || current_material == deposit_material
                             {
-                                let cell_total_h = (cell.elevation() as f32
+                                let cell_total_height = (cell.elevation() as f32
                                     + cell.granular_vol() as f32)
                                     * config.elevation_scale;
-                                let max_allowed_h = current_position.y + sphere_radius * 0.25;
+                                let maximum_allowed_height =
+                                    current_position.y + sphere_radius * BLADE_CEILING_RATIO;
 
-                                if cell_total_h < max_allowed_h {
-                                    let height_deficiency = max_allowed_h - cell_total_h;
+                                if cell_total_height < maximum_allowed_height {
+                                    let height_deficiency =
+                                        maximum_allowed_height - cell_total_height;
                                     let volume_allowance =
                                         (height_deficiency / config.elevation_scale).floor() as u16;
 
@@ -557,9 +661,10 @@ pub fn simulate_rigid_sphere_kinematics(
                                         let remainder_probability =
                                             exact_fill - (base_deposit as f32);
 
-                                        let random_value =
-                                            (spatial_hash(cell_pos, grid.tick) % 1000) as f32
-                                                / 1000.0;
+                                        let random_value = (spatial_hash(cell_position, grid.tick)
+                                            % hash_scale_integer)
+                                            as f32
+                                            / PROBABILITY_HASH_SCALE;
                                         let extra = if random_value < remainder_probability {
                                             1
                                         } else {
@@ -572,8 +677,8 @@ pub fn simulate_rigid_sphere_kinematics(
                                             cell.set_granular_vol(
                                                 cell.granular_vol() + actual_deposit,
                                             );
-                                            grid.set_cell(cell_pos, cell);
-                                            grid.wake_cell(cell_pos);
+                                            grid.set_cell(cell_position, cell);
+                                            grid.wake_cell(cell_position);
                                         }
                                     }
                                 }

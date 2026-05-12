@@ -44,7 +44,11 @@ impl Plugin for DevToolsPlugin {
             // Runs every frame, but the system internally ignores clicks over UI
             .add_systems(
                 Update,
-                (brush::handle_brush_input, brush::attract_spheres_input),
+                (
+                    brush::handle_brush_input,
+                    brush::attract_spheres_input,
+                    brush::lift_spheres_input,
+                ),
             );
     }
 }

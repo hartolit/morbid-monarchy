@@ -89,7 +89,7 @@ pub fn handle_brush_input(
                     ..default()
                 })),
                 Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
-                DynamicRigidSphere::new(100.0, 10.0),
+                DynamicRigidSphere::new(1000.0, 10.0),
             ));
             return;
         }
@@ -244,6 +244,73 @@ pub fn attract_spheres_input(
             if dist_sq > 0.0001 {
                 let direction = to_target.normalize();
                 sphere.velocity += direction * pull_strength * dt;
+            }
+        }
+    }
+}
+
+pub fn lift_spheres_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    camera_query: Query<(&Camera, &GlobalTransform)>,
+    mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
+    time: Res<Time>,
+    mut egui_contexts: EguiContexts,
+) {
+    // Check for the Forward mouse button (typically button 5)
+    if !mouse.pressed(MouseButton::Forward) && !mouse.pressed(MouseButton::Other(5)) {
+        return;
+    }
+
+    let Ok(context) = egui_contexts.ctx_mut() else {
+        return;
+    };
+    if context.wants_pointer_input() {
+        return;
+    }
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_query.single() else {
+        return;
+    };
+
+    if let Some(cursor_position) = window.cursor_position() {
+        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
+            return;
+        };
+
+        if ray.direction.y.abs() < 0.001 {
+            return;
+        }
+
+        let distance_to_plane = -ray.origin.y / ray.direction.y;
+        if distance_to_plane < 0.0 {
+            return;
+        }
+
+        let hit_position = ray.origin + ray.direction * distance_to_plane;
+        let lift_acceleration = 250.0;
+        let horizontal_centering_force = 40.0;
+        let delta_time = time.delta_secs();
+        let influence_radius_squared = 150.0 * 150.0;
+
+        for (transform, mut sphere) in spheres.iter_mut() {
+            let vector_to_target = hit_position - transform.translation;
+            let horizontal_offset = Vec3::new(vector_to_target.x, 0.0, vector_to_target.z);
+            let distance_squared = horizontal_offset.length_squared();
+
+            // Apply an upward velocity vector to lift spheres within the influence beam into the air
+            if distance_squared < influence_radius_squared {
+                sphere.velocity.y += lift_acceleration * delta_time;
+
+                // Provide a soft horizontal inward pull to keep entities contained inside the lifting column
+                if distance_squared > 0.0001 {
+                    let horizontal_direction = horizontal_offset.normalize();
+                    sphere.velocity +=
+                        horizontal_direction * horizontal_centering_force * delta_time;
+                }
             }
         }
     }

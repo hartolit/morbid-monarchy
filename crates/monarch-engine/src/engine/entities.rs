@@ -44,7 +44,7 @@ impl Default for EntityPhysicsConfig {
             resistance_multiplier: 1.5, // Increased to provide strong confining pressure at depth
             force_to_volume_factor: 1.0, // Pure physical mapping without arbitrary scaling
             min_deformation_energy: 0.5,
-            cost_displace_granular: 0.1,
+            cost_displace_granular: 10.0,
             cost_crush_terrain: 25.0, // Solid rock requires substantial energy to fracture
             rim_expansion_factor: 1.5,
             max_rim_deposit_per_cell: 3,
