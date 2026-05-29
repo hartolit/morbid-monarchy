@@ -27,6 +27,22 @@ pub struct EntityPhysicsConfig {
     pub cost_crush_terrain: f32,
     pub rim_expansion_factor: f32,
     pub max_rim_deposit_per_cell: u16,
+
+    // Extracted from spherical.rs constants
+    pub epsilon_distance: f32,
+    pub cluster_damping: f32,
+    pub half_cell_offset: f32,
+    pub compaction_decay_rate: f32,
+    pub sleep_velocity_squared: f32,
+    pub wake_velocity_squared: f32,
+    pub step_threshold_ratio: f32,
+    pub blade_ceiling_ratio: f32,
+    pub load_bearing_radius_ratio: f32,
+    pub max_wall_push_ratio: f32,
+    pub rim_inner_radius_ratio: f32,
+    pub grounding_drift_buffer: f32,
+    pub probability_hash_scale: f32,
+    pub submerged_buoyancy_lift: f32,
 }
 
 impl Default for EntityPhysicsConfig {
@@ -39,15 +55,31 @@ impl Default for EntityPhysicsConfig {
             min_bounce_velocity: 0.05,
             elevation_scale: 0.50,
             outward_sample_rings: 3,
-            outward_stride_step: 8, // 8 cells maps cleanly across 64-byte L1 cache-line strides
+            outward_stride_step: 8,
             volatile_cliff_threshold: 12.0,
-            resistance_multiplier: 1.5, // Increased to provide strong confining pressure at depth
-            force_to_volume_factor: 1.0, // Pure physical mapping without arbitrary scaling
+            resistance_multiplier: 1.5,
+            force_to_volume_factor: 1.0,
             min_deformation_energy: 0.5,
             cost_displace_granular: 10.0,
-            cost_crush_terrain: 25.0, // Solid rock requires substantial energy to fracture
+            cost_crush_terrain: 25.0,
             rim_expansion_factor: 1.5,
             max_rim_deposit_per_cell: 3,
+
+            // Extracted from spherical.rs constants
+            epsilon_distance: 0.000001,
+            cluster_damping: 0.99,
+            half_cell_offset: 0.5,
+            compaction_decay_rate: 2.0,
+            sleep_velocity_squared: 0.001,
+            wake_velocity_squared: 0.04,
+            step_threshold_ratio: 0.65,
+            blade_ceiling_ratio: 0.25,
+            load_bearing_radius_ratio: 0.75,
+            max_wall_push_ratio: 0.5,
+            rim_inner_radius_ratio: 0.9,
+            grounding_drift_buffer: 0.01,
+            probability_hash_scale: 1000.0,
+            submerged_buoyancy_lift: 6.0,
         }
     }
 }
@@ -65,13 +97,11 @@ pub struct SerializedEntity {
 }
 
 impl SerializedEntity {
-    /// Helper to easily extract the Bevy math type when loading the chunk into the ECS
     #[inline(always)]
     pub fn get_position(&self) -> DVec3 {
         DVec3::from_array(self.position)
     }
 
-    /// Helper to easily create a SerializedEntity from Bevy transforms
     #[inline(always)]
     pub fn new(
         entity_type: EntityTypeId,
@@ -94,7 +124,6 @@ impl SerializedEntity {
     }
 }
 
-/// Represents a unique type ID for an entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct EntityTypeId(pub u32);
 
@@ -106,7 +135,6 @@ impl EntityTypeId {
     pub const RIGID_SPHERE: Self = Self(5);
 }
 
-/// Represents the flags for an entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct EntityFlags(pub u16);
