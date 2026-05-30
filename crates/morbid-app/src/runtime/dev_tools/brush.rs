@@ -89,7 +89,7 @@ pub fn handle_brush_input(
                     ..default()
                 })),
                 Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
-                DynamicRigidSphere::new(1000.0, 10.0),
+                DynamicRigidSphere::new(100.0, 10.0),
             ));
             return;
         }
@@ -238,6 +238,7 @@ pub fn attract_spheres_input(
 
         for (transform, mut sphere) in spheres.iter_mut() {
             let to_target = hit_position - transform.translation;
+
             let dist_sq = to_target.length_squared();
 
             // Safe normalization threshold

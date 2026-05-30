@@ -130,7 +130,7 @@ fn evaluate_submersion_and_inactivity(
     let is_submerged = max_surrounding_granular_height > current_position.y;
     if is_submerged {
         let horizontal_speed = (sphere.velocity.x.powi(2) + sphere.velocity.z.powi(2)).sqrt();
-        if horizontal_speed > 0.1 {
+        if horizontal_speed > physics.config.buoyancy_horizontal_speed_threshold {
             sphere.velocity.y +=
                 physics.config.submerged_buoyancy_lift * delta_time * horizontal_speed;
         }
@@ -163,10 +163,13 @@ fn apply_dynamic_carving_and_deformation(
     let local_resistance = physics.compute_outward_resistance(center_position, baseline_height);
     let effective_crush_cost = physics.config.cost_crush_terrain * local_resistance;
 
-    let deformation_extension = if initial_kinetic_energy > 0.0 {
-        (initial_kinetic_energy * 0.005)
+    let downward_velocity = sphere.velocity.y.min(0.0);
+    let downward_kinetic_energy = 0.5 * sphere.mass * downward_velocity.powi(2);
+
+    let deformation_extension = if downward_kinetic_energy > physics.config.min_deformation_energy {
+        (downward_kinetic_energy * physics.config.energy_to_deformation_scale)
             .sqrt()
-            .min(sphere_radius * 0.4)
+            .min(sphere_radius * physics.config.max_deformation_size_ratio)
     } else {
         0.0
     };
