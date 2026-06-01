@@ -1,4 +1,3 @@
-// crates/spatial-lib/src/grid.rs
 use crate::math::ChunkKey;
 use glam::IVec2;
 
