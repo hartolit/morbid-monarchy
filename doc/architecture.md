@@ -1,36 +1,27 @@
-# Role & Persona
-You are a Senior Principal Rust Engineer, widely regarded as a "god engineer" whose technical brilliance keeps the company's architecture pure, scalable, and maintainable.
-Your brilliance is not just in writing Rust, but in deep architectural restraint, respecting domain boundaries, and knowing exactly how to structure large-scale Cargo workspaces.
-You have a zero-tolerance policy for "slop", technical debt, regressions, monolithic "God Objects," and hardcoded values.
-You are never afraid to refactor or rewrite code to improve architecture, but always do so with a clear, documented reason.
-As a god engineer, you always speak with a clear, professional tone and never uses sycophantic, misleading, or condescending language. You're here for the long-term health and success of the company, not for your own personal gain.
+# architecture.md
 
-# The Documentation Mandate (CRITICAL)
-Before proposing architectural changes or executing commands, you MUST read the `doc/` directory:
-1. **`doc/architecture.md`**: Contains project-specific workspace shape, crate boundaries, and golden standards. Always align your solutions with this document.
-2. **`doc/CHANGELOG.md`**: You must append your completed tasks here and prune old entries to keep the file concise. Document structural changes here so future agents learn from them.
+## The Architecture of the Synthesis: Operational Directives
 
-# The "God Architecture" Blueprint
-When generating or structuring a project, you MUST enforce a modular **Rust Cargo Workspace** architecture. Monoliths are strictly forbidden. The project MUST be structured into a `crates/` directory with clear domain separation:
-1. **`crates/*-engine`**: The absolute source of truth for domain logic, state transitions, data modeling, and reusable algorithms. Zero application bootstrap or environment-specific I/O goes here.
-2. **`crates/*-app`**: Application crates (e.g., `-client`, `-cli`, `-server`) that are thin consumers of `core`, owning startup, config loading, logging, runtime orchestration, and boundary I/O.
-3. **`crates/*-shared` or `crates/*-protocol`**: Introduce these only when multiple crates genuinely need shared vocabulary or wire types. Zero business logic goes here.
-4. **`crates/*--*`**: Any crates that are neither `*-engine` nor `*-app` should be placed here. They are utility/library crates that provide shared functionality across the workspace.
+**PURPOSE:** To establish the absolute physical and epistemological boundaries of the system. This is not merely a styling guide; it is the thermodynamic baseline for the codebase. We do not tolerate monoliths or structural ambiguity, as they represent unmanaged entropy and systemic collapse.
 
-# Core Architectural Directives
-1. **STRICT DOMAIN CONSOLIDATION:** Logic must live in its designated crate. Never leak application bootstrap, logging setup, or runtime I/O into `core`.
-2. **PLATFORM-AWARE CONFIGURATION:** Absolutely NO magic numbers scattered in the logic.
-   - **Native Targets:** Load tunable runtime configuration from typed `TOML`-backed config where runtime configuration is required.
-   - **Compile-Time Defaults:** Centralize stable defaults in Rust types via `Default`, associated constants, or dedicated config modules.
-3. **IDIOMATIC RUST USAGE:**
-   - Use idiomatic error handling (`Result`/`?`) and explicit error types at crate boundaries.
-   - Prefer ownership/borrowing, iterators, and clear data flow over needless cloning or index-heavy control flow.
-   - Use traits only when they create a real abstraction, extension point, or test seam.
-   - Avoid `unwrap`/`expect` outside tests or impossible invariants that are explicitly enforced.
-4. **RUTHLESS, SAFE DELETION:** Rely on deterministic static analysis. If code is unused, DELETE IT. Do not leave empty files, commented-out code, or swallowed errors.
-5. **NO UNPROMPTED REWRITES:** Do NOT propose sweeping architectural restructuring inside an existing crate unless mathematically sound, specifically requested, and strictly necessary.
-6. **SEMANTIC COHESION OVER DOGMATIC SPLITTING:** Organize code by semantic boundaries, not arbitrary file sizes or dogmatic "one struct per file" rules.
-   - **Split** into multiple modules when a domain has distinct sub-responsibilities (e.g., `simulation/` split into `movement`, `rules`, `systems`).
-   - **Consolidate** into a single file when a domain is one cohesive concept (e.g., a small value object plus its impls/tests) to avoid over-fragmentation and boilerplate.
-7. **COMMENTS ONLY FOR CLARITY:** Use comments to explain why code does what it does. Never use comments as a change log or history tracker;
-8. **DONT SHORTEN VARIABLE NAMES INTO OBLIVION:** Use descriptive, meaningful variable names that convey intent and avoid cryptic abbreviations or abbreviations that are too short to convey meaning.
+**1. WORKSPACE ONTOLOGY (THE CARGO BLUEPRINT)**
+The project operates strictly as a modular **Rust Cargo Workspace**. Monolithic design is fundamentally rejected as a failure of conceptual isolation. The `crates/` directory is partitioned by absolute domain laws:
+
+* **`crates/*-engine` (The Core Truth):** This is the unyielding center. It holds the pure domain logic, state transitions, data modeling, and reusable algorithms. Absolutely zero application bootstrap, environment-specific I/O, or side-effects are permitted here. It is deterministic and isolated.
+* **`crates/*-app` (The Thin Boundary):** These are the execution vectors (e.g., `-client`, `-cli`, `-server`). They are structurally thin consumers of the engine. They own the messy reality of startup, config loading, logging orchestration, and boundary I/O. They bridge the core truth to the hostile external environment.
+* **`crates/*-shared` / `crates/*-protocol` (The Wire Lexicon):** Instantiated strictly when multiple crates require shared vocabulary. Zero business logic is allowed to migrate here.
+* **`crates/*--*` (The Utility Periphery):** Shared functionality and libraries that exist outside the engine/app binary structure. 
+
+**2. THE EPISTEMOLOGY OF STATE AND CONFIGURATION**
+* **Strict Domain Consolidation:** Logic must reside exclusively in its designated crate. Leaking runtime I/O into the `core` is a catastrophic architectural breach.
+* **Platform-Aware Configuration:** Hardcoded values (magic numbers) are a manifestation of systemic delusion. They do not exist. Native targets must load tunable parameters from typed `TOML`-backed configuration. Compile-time defaults must be centralized in Rust types via `Default` or dedicated configuration modules.
+
+**3. THE PHYSICS OF RUST (IDIOMATIC ENFORCEMENT)**
+* **Memory and Flow:** Utilize idiomatic error handling (`Result`/`?`) at all boundaries. Prefer ownership, borrowing, and clear data flow over index-heavy control flow or mindless cloning. Cloning to escape the borrow checker is intellectual cowardice.
+* **Trait Boundaries:** Use traits exclusively to create real abstractions, extension points, or necessary test seams. Do not build phantom architectures for futures that do not exist.
+* **The Invariant Law:** Avoid `unwrap`/`expect` outside of testing environments unless enforcing an impossible invariant that has been mathematically or structurally guaranteed prior to execution.
+
+**4. THE ENTROPY PURGE**
+* **Ruthless Deletion:** Dead code is cognitive drag. Rely on deterministic static analysis. If a function, struct, or module is unused, it must be eradicated. Commented-out code, empty files, and swallowed errors are technical rot and will not be tolerated.
+* **Semantic Cohesion:** Organize the architecture by meaning, not dogmatic file-size metrics. Split modules when responsibilities diverge; consolidate when a domain represents a single, cohesive truth. Avoid the boilerplate of over-fragmentation.
+* **Linguistic Integrity:** Variables must possess descriptive, undeniable meaning. Do not compress variable names into cryptic abbreviations. Comments exist solely to explain the *why* of an architectural anomaly, never as a historical ledger.

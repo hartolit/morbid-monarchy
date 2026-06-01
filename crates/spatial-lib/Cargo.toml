@@ -1,0 +1,13 @@
+[package]
+name = "spatial-chunk"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+redb-storage = ["dep:redb", "dep:bitcode"]
+
+[dependencies]
+glam = { workspace = true }
+redb ={ workspace = true, optional = true }
+bitcode = { workspace = true, optional = true, features = ["derive"] }

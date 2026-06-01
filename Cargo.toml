@@ -2,6 +2,7 @@
 members = [
     "crates/morbid-app",
     "crates/monarch-engine",
+    "crates/spatial-lib",
 ]
 resolver = "2"
 
@@ -17,6 +18,8 @@ redb = "4.0.0"
 noise = "0.9.0"
 rayon = "1.12.0"
 flume = "0.12.0"
+glam = "0.33.0"
 
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
+spatial-lib = { path = "crates/spatial-lib" }

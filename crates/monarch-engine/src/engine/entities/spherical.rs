@@ -10,7 +10,7 @@ use bevy::{
 
 use crate::engine::{
     entities::EntityPhysicsConfig,
-    physics::grid_api::GridPhysicsApi,
+    physics::grid_physics::GridPhysicsApi,
     utils::spatial_hash,
     world::{
         cell::{GranularMat, WorldCell},
