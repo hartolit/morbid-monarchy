@@ -9,5 +9,5 @@ redb-storage = ["dep:redb", "dep:bitcode"]
 
 [dependencies]
 glam = { workspace = true }
-redb ={ workspace = true, optional = true }
+redb = { workspace = true, optional = true }
 bitcode = { workspace = true, optional = true, features = ["derive"] }
