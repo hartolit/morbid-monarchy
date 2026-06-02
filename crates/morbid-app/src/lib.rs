@@ -4,8 +4,8 @@ use monarch_engine::prelude::*;
 use crate::runtime::{
     dev_tools::DevToolsPlugin,
     input::{
-        apply_camera_transform, center_camera_on_grid, orbit_camera, player_movement,
-        setup_focal_point, sync_world_focus, zoom_camera,
+        manage_os_cursor_boundary, observer_hardware_ingest, setup_observer, sync_lens_orientation,
+        sync_world_focus,
     },
     persistence,
     render::WorldRenderPlugin,
@@ -39,21 +39,20 @@ pub fn run() {
             2.0,
             TimerMode::Repeating,
         )))
-        .add_systems(Startup, (setup_focal_point, center_camera_on_grid).chain())
-        // Camera: pan mutates anchor, orbit/zoom mutate angles/distance,
-        // then the single transform-derivation pass runs last in this group.
+        // Instantiate the physical intent buffer and sensory lens
+        .add_systems(Startup, setup_observer)
+        // I/O Boundary: Harvest hardware deltas into the ObserverIntent membrane
         .add_systems(
             Update,
             (
-                player_movement,
-                orbit_camera,
-                zoom_camera,
-                apply_camera_transform,
+                manage_os_cursor_boundary,
+                observer_hardware_ingest,
+                sync_lens_orientation,
             )
                 .chain(),
         )
-        // Engine sync: runs after the camera group has settled.
-        .add_systems(Update, (sync_world_focus).after(apply_camera_transform))
+        // Engine Sync: Projects the post-integration physical state onto the thermodynamic grid
+        .add_systems(Update, sync_world_focus.after(sync_lens_orientation))
         // Persistence: independent of camera, runs every frame.
         .add_systems(
             Update,
