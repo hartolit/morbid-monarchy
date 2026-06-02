@@ -5,15 +5,20 @@ use bevy::{
 };
 use monarch_engine::prelude::*;
 use redb::Database;
-use spatial_lib::storage::{ChunkStorage, redb_backend::RedbChunkStorage};
+use spatial_lib::{
+    math::ChunkKey,
+    storage::{ChunkStorage, redb_backend::RedbChunkStorage},
+};
 use std::{path::PathBuf, sync::Arc};
 
 const WORLD_DATA_DIR: &str = "world_data";
 const DB_FILE: &str = "save.redb";
 
+/// Encapsulates the thread-safe spatial-lib DB backend.
 #[derive(Resource, Clone)]
 pub struct WorldDatabase(pub Arc<RedbChunkStorage>);
 
+/// An accumulator queue to batch disk writes per-frame.
 #[derive(Resource, Default)]
 pub struct ChunkSaveQueue {
     pub chunks: Vec<(ChunkKey, CellChunk)>,
@@ -38,10 +43,10 @@ pub fn initialize_database() -> WorldDatabase {
     }
 
     let db_path = dir.join(DB_FILE);
-    let db = Database::create(db_path).expect("Failed to initialize redb database");
+    let db = Arc::new(Database::create(db_path).expect("Failed to initialize redb database"));
 
-    let storage =
-        RedbChunkStorage::new(Arc::new(db)).expect("Failed to initialize spatial-lib Redb backend");
+    // Abstract the physical layout generation to the spatial-lib driver
+    let storage = RedbChunkStorage::new(db).expect("Failed to initialize chunk storage backend");
 
     WorldDatabase(Arc::new(storage))
 }
@@ -58,20 +63,23 @@ pub fn handle_load_requests(
 
     for request in reader.read() {
         let key = request.key;
-        let db_clone = db.0.clone();
+        let storage_clone = db.0.clone();
 
         let task = io_pool.spawn(async move {
-            let cached_chunk = match load_chunk_from_db(&db_clone, key) {
-                Ok(Some(chunk_data)) => Some(chunk_data),
-                Ok(None) => None,
-                Err(e) => {
-                    error!(
-                        "Database read error for chunk {:?}: {}. Generating chunk.",
-                        key, e
-                    );
-                    None
-                }
-            };
+            // Zero-copy decoding: bitcode operates directly on the redb mmap slice
+            let cached_chunk =
+                match storage_clone.read_chunk(key, |bytes| bitcode::decode::<CellChunk>(bytes)) {
+                    Ok(Some(Ok(data))) => Some(data),
+                    Ok(Some(Err(e))) => {
+                        error!("Corruption decoding chunk {:?}: {}", key, e);
+                        None
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        error!("Storage read error for chunk {:?}: {}", key, e);
+                        None
+                    }
+                };
 
             let data = if let Some(chunk_data) = cached_chunk {
                 chunk_data
@@ -80,7 +88,6 @@ pub fn handle_load_requests(
                     let generator = WorldGenerator::new(world_seed);
                     generator.generate_chunk(key)
                 });
-
                 gen_task.await
             };
 
@@ -115,11 +122,21 @@ pub fn process_save_queue(
 
     if timer.0.is_finished() || save_queue.chunks.len() >= 50 {
         let chunks_to_save = std::mem::take(&mut save_queue.chunks);
-        let db_clone = db.0.clone();
+        let storage_clone = db.0.clone();
         let pool = IoTaskPool::get();
 
         let task = pool.spawn(async move {
-            if let Err(e) = save_chunks_to_db_batch(&db_clone, &chunks_to_save) {
+            let encoded_payloads: Vec<(ChunkKey, Vec<u8>)> = chunks_to_save
+                .into_iter()
+                .map(|(k, data)| (k, bitcode::encode(&data)))
+                .collect();
+
+            let batch_refs: Vec<(ChunkKey, &[u8])> = encoded_payloads
+                .iter()
+                .map(|(k, bytes)| (*k, bytes.as_slice()))
+                .collect();
+
+            if let Err(e) = storage_clone.write_batch(&batch_refs) {
                 error!("Failed to execute batch chunk save: {}", e);
             }
         });
@@ -138,23 +155,27 @@ pub fn emergency_flush_on_exit(
         exiting = true;
     }
 
-    if !exiting {
-        return;
-    }
-
-    if queue.chunks.is_empty() {
-        info!("Save queue is empty. Shutting down cleanly.");
+    if !exiting || queue.chunks.is_empty() {
         return;
     }
 
     info!(
-        "AppExit detected! Synchronously flushing {} pending chunks to disk...",
+        "AppExit detected! Synchronously flushing {} pending chunks...",
         queue.chunks.len()
     );
 
     let chunks_to_save = std::mem::take(&mut queue.chunks);
+    let encoded_payloads: Vec<(ChunkKey, Vec<u8>)> = chunks_to_save
+        .into_iter()
+        .map(|(k, data)| (k, bitcode::encode(&data)))
+        .collect();
 
-    if let Err(e) = save_chunks_to_db_batch(&db.0, &chunks_to_save) {
+    let batch_refs: Vec<(ChunkKey, &[u8])> = encoded_payloads
+        .iter()
+        .map(|(k, bytes)| (*k, bytes.as_slice()))
+        .collect();
+
+    if let Err(e) = db.0.write_batch(&batch_refs) {
         error!("CRITICAL: Failed to flush chunks on shutdown: {}", e);
     } else {
         info!("Emergency flush complete. Safe to terminate.");
@@ -182,43 +203,5 @@ pub fn poll_save_tasks(
         if block_on(future::poll_once(&mut task.0)).is_some() {
             commands.entity(entity).despawn();
         }
-    }
-}
-
-// --- Internal DB I/O (Delegated to spatial-lib) ---
-
-fn save_chunks_to_db_batch(
-    storage: &RedbChunkStorage,
-    chunks: &[(ChunkKey, CellChunk)],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Serialize all domain types into raw byte vectors
-    let encoded_chunks: Vec<(ChunkKey, Vec<u8>)> = chunks
-        .iter()
-        .map(|(key, data)| (*key, bitcode::encode(data)))
-        .collect();
-
-    // 2. Map vectors into slices to satisfy the zero-knowledge spatial-lib trait bound
-    let storage_refs: Vec<(ChunkKey, &[u8])> = encoded_chunks
-        .iter()
-        .map(|(key, bytes)| (*key, bytes.as_slice()))
-        .collect();
-
-    // 3. Delegate physical disk transaction
-    storage.write_batch(&storage_refs)?;
-
-    Ok(())
-}
-
-fn load_chunk_from_db(
-    storage: &RedbChunkStorage,
-    key: ChunkKey,
-) -> Result<Option<CellChunk>, Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Retrieve agnostic raw bytes from the spatial-lib backend
-    if let Some(bytes) = storage.read_chunk(key)? {
-        // 2. Rehydrate the bytes into the strictly defined engine domain logic
-        let data: CellChunk = bitcode::decode(&bytes)?;
-        Ok(Some(data))
-    } else {
-        Ok(None)
     }
 }

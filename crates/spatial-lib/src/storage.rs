@@ -6,7 +6,10 @@ pub trait ChunkStorage: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Fetches a raw byte payload corresponding to the given coordinate.
-    fn read_chunk(&self, key: ChunkKey) -> Result<Option<Vec<u8>>, Self::Error>;
+    /// Executes a closure against the byte slice if the chunk exists, enabling zero-copy deserialization.
+    fn read_chunk<F, R>(&self, key: ChunkKey, f: F) -> Result<Option<R>, Self::Error>
+    where
+        F: FnOnce(&[u8]) -> R;
 
     /// Commits a single raw byte payload to the physical media.
     fn write_chunk(&self, key: ChunkKey, data: &[u8]) -> Result<(), Self::Error>;
@@ -94,12 +97,15 @@ pub mod redb_backend {
     impl ChunkStorage for RedbChunkStorage {
         type Error = RedbStorageError;
 
-        fn read_chunk(&self, key: ChunkKey) -> Result<Option<Vec<u8>>, Self::Error> {
+        fn read_chunk<F, R>(&self, key: ChunkKey, f: F) -> Result<Option<R>, Self::Error>
+        where
+            F: FnOnce(&[u8]) -> R,
+        {
             let read_txn = self.db.begin_read()?;
             let table = read_txn.open_table(CHUNKS_TABLE)?;
 
             if let Some(access) = table.get([key.key.x, key.key.y, key.key.z])? {
-                Ok(Some(access.value().to_vec()))
+                Ok(Some(f(access.value())))
             } else {
                 Ok(None)
             }

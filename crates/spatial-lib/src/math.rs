@@ -2,7 +2,6 @@ use glam::{DVec3, IVec2, IVec3};
 
 /// A discrete 3D coordinate identifying a specific spatial chunk in the world grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "redb-storage", derive(bitcode::Encode, bitcode::Decode))]
 pub struct ChunkKey {
     pub key: IVec3,
 }
