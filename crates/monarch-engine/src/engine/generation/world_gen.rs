@@ -5,7 +5,7 @@ use crate::engine::world::{
 
 use noise::{NoiseFn, OpenSimplex};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use spatial_lib::math::ChunkKey;
+use spatial_lib::prelude::math::ChunkKey;
 
 pub struct WorldGenerator {
     pub seed: u32,

@@ -1,4 +1,4 @@
-use crate::math::ChunkKey;
+use crate::chunk::math::ChunkKey;
 use glam::IVec2;
 
 /// A purely mathematical toroidal view over an isolated memory block for safe parallel lookups.

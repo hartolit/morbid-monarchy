@@ -1,5 +1,9 @@
 use std::fmt::Debug;
 
+pub mod manager;
+pub mod math;
+pub mod storage;
+
 /// A rigid spatial container for dense voxel or cellular data.
 ///
 /// Enforces a physically contiguous memory block via `Box<[T]>`. This prohibits

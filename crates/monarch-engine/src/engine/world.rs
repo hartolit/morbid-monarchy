@@ -8,7 +8,10 @@ use bevy::{
     time::Time,
 };
 
-use spatial_lib::{manager::ChunkManager as SpatialManager, math::ChunkKey, store::ChunkStore};
+use spatial_lib::prelude::{
+    manager::{ChunkManager, ChunkStore},
+    math::ChunkKey,
+};
 
 use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
@@ -46,13 +49,13 @@ impl Default for WorldStore {
 
 #[derive(Resource)]
 pub struct WorldManager {
-    pub inner: SpatialManager,
+    pub inner: ChunkManager,
 }
 
 impl Default for WorldManager {
     fn default() -> Self {
         Self {
-            inner: SpatialManager::new(
+            inner: ChunkManager::new(
                 DEFAULT_ACTIVE_RADIUS_X,
                 DEFAULT_ACTIVE_RADIUS_Y,
                 PRELOAD_EXT_RADIUS,

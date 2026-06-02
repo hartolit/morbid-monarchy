@@ -5,7 +5,7 @@ use bevy::{
 };
 use monarch_engine::prelude::*;
 use redb::Database;
-use spatial_lib::{
+use spatial_lib::prelude::{
     math::ChunkKey,
     storage::{ChunkStorage, redb_backend::RedbChunkStorage},
 };

@@ -1,4 +1,4 @@
-use crate::math::ChunkKey;
+use crate::prelude::math::ChunkKey;
 
 /// Defines the physical boundary for chunk persistence.
 /// Enforces raw byte slice (`&[u8]`) I/O to prohibit serialization logic from bleeding into the storage backend.
@@ -21,7 +21,7 @@ pub trait ChunkStorage: Send + Sync {
 #[cfg(feature = "redb-storage")]
 pub mod redb_backend {
     use super::ChunkStorage;
-    use crate::math::ChunkKey;
+    use crate::prelude::math::ChunkKey;
     use redb::{Database, ReadableDatabase, TableDefinition};
     use std::sync::Arc;
 

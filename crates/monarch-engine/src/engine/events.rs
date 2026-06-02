@@ -1,6 +1,6 @@
 use crate::engine::world::chunk::CellChunk;
 use bevy::ecs::message::Message;
-use spatial_lib::math::ChunkKey;
+use spatial_lib::prelude::math::ChunkKey;
 
 /// Emitted by monarch-engine when the player moves and a chunk falls out of the Active Window.
 /// morbid-app listens to this and writes the Box to disk.
