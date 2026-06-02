@@ -30,6 +30,8 @@ impl Plugin for WorldRenderPlugin {
 struct GridMeshSize {
     width: i32,
     height: i32,
+    current_mesh_width: i32,
+    current_mesh_height: i32,
 }
 
 #[derive(Resource)]
@@ -212,24 +214,28 @@ fn sync_grid_rendering(
     );
     material.window.elevation_scale = tuning.elevation_scale;
 
+    transform.translation.x = grid_ref.spatial.window_origin.x as f32;
+    transform.translation.z =
+        -(grid_ref.spatial.window_origin.y as f32) - (grid_ref.spatial.height as f32) + 1.0;
+
+    // The dirty flag strictly governs heavy GPU buffer I/O and mesh regeneration
     if !grid_ref.cells_dirty {
         return;
     }
 
-    let dims_changed =
-        mesh_size.width != grid_ref.spatial.width || mesh_size.height != grid_ref.spatial.height;
-    if dims_changed
-        || mesh3d.0.id() == Handle::<Mesh>::default().id()
-        || meshes
-            .get(&mesh3d.0)
-            .map_or(true, |m| m.count_vertices() == 0)
-    {
+    // Relies on strict internal state tracking instead of asynchronous asset queries
+    let dims_changed = mesh_size.current_mesh_width != grid_ref.spatial.width
+        || mesh_size.current_mesh_height != grid_ref.spatial.height;
+
+    if dims_changed {
         mesh3d.0 = meshes.add(build_procedural_dummy(
             grid_ref.spatial.width as u32,
             grid_ref.spatial.height as u32,
         ));
         mesh_size.width = grid_ref.spatial.width;
         mesh_size.height = grid_ref.spatial.height;
+        mesh_size.current_mesh_width = grid_ref.spatial.width;
+        mesh_size.current_mesh_height = grid_ref.spatial.height;
     }
 
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
@@ -242,10 +248,6 @@ fn sync_grid_rendering(
             slot => *slot = Some(src.to_vec()),
         }
     }
-
-    transform.translation.x = grid_ref.spatial.window_origin.x as f32;
-    transform.translation.z =
-        -(grid_ref.spatial.window_origin.y as f32) - (grid_ref.spatial.height as f32) + 1.0;
 
     grid.cells_dirty = false;
 }

@@ -35,7 +35,11 @@ pub fn setup_observer(
             parent.spawn((
                 ObserverLens,
                 Camera3d::default(),
-                Transform::from_xyz(0.0, 0.9, 0.0),
+                Projection::Perspective(PerspectiveProjection {
+                    fov: 85.0_f32.to_radians(),
+                    ..default()
+                }),
+                Transform::from_xyz(0.0, 0.7, 0.0),
             ));
         });
 }
@@ -105,7 +109,6 @@ pub fn observer_hardware_ingest(
         intent.translation_vector.x += 1.0;
     }
 
-    // Explicit vertical axis mapping for noclip flight altitude control
     if keyboard.pressed(KeyCode::Space) {
         intent.translation_vector.y += 1.0;
     }
@@ -128,7 +131,6 @@ pub fn sync_lens_orientation(
         return;
     };
 
-    // The child camera maps purely to the isolated mathematical pitch maintained by the core engine logic
     lens_transform.rotation = Quat::from_rotation_x(observer.pitch);
 }
 
