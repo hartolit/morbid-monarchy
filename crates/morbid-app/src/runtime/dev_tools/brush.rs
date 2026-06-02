@@ -82,7 +82,7 @@ pub fn handle_brush_input(
             }
 
             commands.spawn((
-                Mesh3d(meshes.add(Sphere::new(10.0))),
+                Mesh3d(meshes.add(Sphere::new(5.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: Color::srgb(0.6, 0.6, 0.65),
                     metallic: 0.8,
@@ -90,7 +90,7 @@ pub fn handle_brush_input(
                     ..default()
                 })),
                 Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
-                DynamicRigidSphere::new(100.0, 10.0),
+                DynamicRigidSphere::new(5.0, 5.0),
             ));
             return;
         }

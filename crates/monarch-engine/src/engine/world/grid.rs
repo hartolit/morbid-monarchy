@@ -49,6 +49,21 @@ impl Default for ActiveWorldGrid {
 }
 
 impl ActiveWorldGrid {
+    pub fn resize_buffers(&mut self) {
+        let new_size = (self.spatial.width * self.spatial.height) as usize;
+
+        self.back_buffer = vec![WorldCell::default(); new_size].into_boxed_slice();
+        self.wake_buffer = (0..new_size)
+            .map(|_| AtomicU8::new(0))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.next_wake_buffer = (0..new_size)
+            .map(|_| AtomicU8::new(2)) // Force full-grid simulation wake to process structural mutations
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.cells_dirty = true;
+    }
+
     #[inline(always)]
     pub fn back_buffer_view(&self) -> CellGridReadView<'_> {
         GridReadView {

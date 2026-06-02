@@ -87,6 +87,8 @@ pub fn handle_simulation_resize(
             &mut grid.spatial,
         );
 
+        grid.resize_buffers();
+
         for key in window_events.loads_requested {
             load_writer.write(ChunkLoadRequest { key });
         }

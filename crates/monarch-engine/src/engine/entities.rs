@@ -90,24 +90,24 @@ impl Default for EntityPhysicsConfig {
     fn default() -> Self {
         Self {
             // Kinematics & Motion
-            gravity: Vec3::new(0.0, -35.0, 0.0),
+            gravity: Vec3::new(0.0, -10.0, 0.0),
             air_resistance: 0.99,
-            rolling_friction: 0.95,
-            impact_restitution: 0.50,
+            rolling_friction: 0.90,
+            impact_restitution: 0.20,
             min_bounce_velocity: 0.05,
             elevation_scale: 0.50,
 
             // Terrain Carving
-            outward_sample_rings: 4,
+            outward_sample_rings: 2,
             outward_stride_step: 10,
-            volatile_cliff_threshold: 12.0,
-            resistance_multiplier: 1.5,
-            force_to_volume_factor: 1.2,
+            volatile_cliff_threshold: 16.0,
+            resistance_multiplier: 1.0,
+            force_to_volume_factor: 0.8,
             min_deformation_energy: 250.0,
             energy_to_deformation_scale: 0.001,
             max_deformation_size_ratio: 1.0,
-            cost_displace_granular: 4.0,
-            cost_crush_terrain: 8.0,
+            cost_displace_granular: 2.0,
+            cost_crush_terrain: 4.0,
             rim_expansion_factor: 1.5,
             max_rim_deposit_per_cell: 3,
 
@@ -125,7 +125,7 @@ impl Default for EntityPhysicsConfig {
             rim_inner_radius_ratio: 0.9,
             grounding_drift_buffer: 0.01,
             probability_hash_scale: 1000.0,
-            submerged_buoyancy_lift: 2.0,
+            submerged_buoyancy_lift: 2.5,
             buoyancy_horizontal_speed_threshold: 0.1,
         }
     }
