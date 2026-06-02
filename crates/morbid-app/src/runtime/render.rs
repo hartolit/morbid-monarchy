@@ -37,12 +37,16 @@ struct GridMeshSize {
 #[derive(Resource)]
 pub struct WorldTuningConfig {
     pub elevation_scale: f32,
+    pub visual_roughness: f32,
+    pub corner_warp: f32,
 }
 
 impl Default for WorldTuningConfig {
     fn default() -> Self {
         Self {
             elevation_scale: 0.50,
+            visual_roughness: 0.5,
+            corner_warp: 0.035,
         }
     }
 }
@@ -95,7 +99,7 @@ impl Material for WorldMaterial {
 pub struct WorldWindowUniform {
     pub origin_size: Vec4, // x: origin.x, y: origin.y, z: size.x, w: size.y
     pub head_cursor: Vec4, // x: head.x,   y: head.y,   z: cursor.x, w: cursor.y
-    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: (pad), w: (pad)
+    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: visual_roughness, w: corner_warp
 }
 
 #[derive(Component)]
@@ -106,6 +110,7 @@ fn setup_rendering(
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    tuning: Res<WorldTuningConfig>,
 ) {
     let grid_buffer = buffers.add(ShaderStorageBuffer::new(
         &[0u8; 8], // 8 bytes per cell
@@ -164,7 +169,12 @@ fn setup_rendering(
         grid_buffer,
         palette_buffer,
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // Elev scale 0.15, hidden cursor
+            config: Vec4::new(
+                tuning.elevation_scale,
+                -1.0,
+                tuning.visual_roughness,
+                tuning.corner_warp,
+            ), // Hidden cursor; visual tuning is synchronized from WorldTuningConfig.
             ..default()
         },
     });
@@ -209,6 +219,8 @@ fn sync_grid_rendering(
     material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
     material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
     material.window.config.x = tuning.elevation_scale;
+    material.window.config.z = tuning.visual_roughness;
+    material.window.config.w = tuning.corner_warp;
 
     transform.translation.x = grid_ref.spatial.window_origin.x as f32;
     transform.translation.z =

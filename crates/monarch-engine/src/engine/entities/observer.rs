@@ -19,9 +19,9 @@ pub struct ObserverConfig {
 impl Default for ObserverConfig {
     fn default() -> Self {
         Self {
-            base_speed: 400.0,
-            sprint_speed: 1200.0,
-            jump_impulse: 120.0,
+            base_speed: 25.0,
+            sprint_speed: 50.0,
+            jump_impulse: 2.0,
             look_sensitivity: 0.002,
             max_pitch: 1.54,
             structural_radius: 2.5,
