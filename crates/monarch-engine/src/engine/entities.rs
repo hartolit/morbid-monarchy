@@ -91,7 +91,7 @@ impl Default for EntityPhysicsConfig {
     fn default() -> Self {
         Self {
             // Kinematics & Motion
-            gravity: Vec3::new(0.0, -10.0, 0.0),
+            gravity: Vec3::new(0.0, -24.0, 0.0),
             air_resistance: 0.99,
             rolling_friction: 0.90,
             impact_restitution: 0.20,

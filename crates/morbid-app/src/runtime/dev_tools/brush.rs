@@ -5,7 +5,96 @@ use monarch_engine::{
     prelude::{ActiveWorldGrid, FluidMat, GranularMat, SurfaceMat, WorldCell},
 };
 
-use crate::runtime::dev_tools::{BrushSettings, GridBrush};
+use crate::runtime::{
+    dev_tools::{BrushSettings, GridBrush},
+    render::WorldMaterial,
+};
+
+/// Volumetric raymarcher. Steps strictly through physical world coordinates
+/// to find true intersection with the dynamic thermodynamic floor.
+#[inline(always)]
+pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) -> Option<Vec3> {
+    let mut t = 0.0;
+    let step = 0.25; // Precision limit to catch steep cliff faces
+    let max_dist = 1000.0;
+    let bounds_min = grid.spatial.window_origin;
+    let bounds_max = bounds_min + IVec2::new(grid.spatial.width, grid.spatial.height);
+
+    while t < max_dist {
+        let pos = ray.origin + ray.direction * t;
+        let cx = pos.x.floor() as i32;
+        let cy = (-pos.z).floor() as i32;
+
+        if cx >= bounds_min.x && cx < bounds_max.x && cy >= bounds_min.y && cy < bounds_max.y {
+            let cell = grid.get_cell(IVec2::new(cx, cy));
+            // Floor height includes the structural bedrock and shifting granular mass
+            let h = (cell.elevation() as f32 + cell.granular_vol() as f32) * elevation_scale;
+            if pos.y <= h {
+                return Some(pos);
+            }
+        } else if pos.y < 0.0 {
+            // Terminate search if the ray falls into the void outside grid limits
+            return None;
+        }
+        t += step;
+    }
+    None
+}
+
+/// Mutates the GPU uniform buffer directly, eliminating ECS entity allocation overhead.
+pub fn update_brush_cursor(
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    grid: Res<ActiveWorldGrid>,
+    config: Res<EntityPhysicsConfig>,
+    brush: Res<GridBrush>,
+    settings: Res<BrushSettings>,
+    mut materials: ResMut<Assets<WorldMaterial>>,
+    mut egui_contexts: EguiContexts,
+) {
+    let is_active = *brush != GridBrush::None;
+    let Ok(ctx) = egui_contexts.ctx_mut() else {
+        return;
+    };
+    let pointer_over_ui = ctx.wants_pointer_input();
+
+    for (_, mat) in materials.iter_mut() {
+        if !is_active || pointer_over_ui {
+            mat.window.config.y = -1.0; // Negative radius disables shader evaluation
+            continue;
+        }
+
+        let Ok(window) = windows.single() else {
+            continue;
+        };
+        let Ok((camera, camera_transform)) = camera_q.single() else {
+            continue;
+        };
+
+        let Some(cursor_pos) = window.cursor_position() else {
+            mat.window.config.y = -1.0;
+            continue;
+        };
+        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+            mat.window.config.y = -1.0;
+            continue;
+        };
+
+        if let Some(hit_pos) = raymarch_grid(&ray, &grid, config.elevation_scale) {
+            let cursor_radius = if *brush == GridBrush::SpawnSphere {
+                0.0
+            } else {
+                settings.radius as f32
+            };
+            // Inject hit coordinates into the Z/W slots of the head_cursor block
+            mat.window.head_cursor.z = hit_pos.x.floor();
+            mat.window.head_cursor.w = (-hit_pos.z).floor();
+            mat.window.config.y = cursor_radius;
+        } else {
+            mat.window.config.y = -1.0;
+        }
+    }
+}
 
 pub fn handle_brush_input(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -52,12 +141,9 @@ pub fn handle_brush_input(
             return;
         };
 
-        if ray.direction.y.abs() < 0.001 {
+        let Some(hit_position) = raymarch_grid(&ray, &grid, config.elevation_scale) else {
             return;
-        }
-
-        let distance_to_plane = -ray.origin.y / ray.direction.y;
-        let hit_position = ray.origin + ray.direction * distance_to_plane;
+        };
 
         if is_spawning_entity {
             let center_x = hit_position.x.floor() as i32;
@@ -69,7 +155,6 @@ pub fn handle_brush_input(
             let bounds_maximum =
                 grid.spatial.window_origin + IVec2::new(grid.spatial.width, grid.spatial.height);
 
-            // Safely fetch the true physical surface elevation including granular volume
             if cell_pos.x >= bounds_minimum.x
                 && cell_pos.x < bounds_maximum.x
                 && cell_pos.y >= bounds_minimum.y
@@ -186,7 +271,7 @@ pub fn handle_brush_input(
 
                     if cell_was_mutated {
                         grid.set_cell(world_position, cell);
-                        grid.wake_cell(world_position);
+                        grid.wake_cell(world_position); // Wake local topology to process physics next frame
                     }
                 }
             }
@@ -198,6 +283,8 @@ pub fn attract_spheres_input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
+    grid: Res<ActiveWorldGrid>,
+    config: Res<EntityPhysicsConfig>,
     mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
     time: Res<Time>,
     mut egui_contexts: EguiContexts,
@@ -205,7 +292,6 @@ pub fn attract_spheres_input(
     if !mouse.pressed(MouseButton::Back) && !mouse.pressed(MouseButton::Other(4)) {
         return;
     }
-
     let Ok(ctx) = egui_contexts.ctx_mut() else {
         return;
     };
@@ -224,26 +310,17 @@ pub fn attract_spheres_input(
         let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
             return;
         };
-
-        if ray.direction.y.abs() < 0.001 {
+        let Some(hit_position) = raymarch_grid(&ray, &grid, config.elevation_scale) else {
             return;
-        }
+        };
 
-        let distance_to_plane = -ray.origin.y / ray.direction.y;
-        if distance_to_plane < 0.0 {
-            return;
-        }
-
-        let hit_position = ray.origin + ray.direction * distance_to_plane;
         let pull_strength = 250.0;
         let dt = time.delta_secs();
 
         for (transform, mut sphere) in spheres.iter_mut() {
             let to_target = hit_position - transform.translation;
-
             let dist_sq = to_target.length_squared();
 
-            // Safe normalization threshold
             if dist_sq > 0.0001 {
                 let direction = to_target.normalize();
                 sphere.velocity += direction * pull_strength * dt;
@@ -256,15 +333,15 @@ pub fn lift_spheres_input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
+    grid: Res<ActiveWorldGrid>,
+    config: Res<EntityPhysicsConfig>,
     mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
     time: Res<Time>,
     mut egui_contexts: EguiContexts,
 ) {
-    // Check for the Forward mouse button (typically button 5)
     if !mouse.pressed(MouseButton::Forward) && !mouse.pressed(MouseButton::Other(5)) {
         return;
     }
-
     let Ok(context) = egui_contexts.ctx_mut() else {
         return;
     };
@@ -283,17 +360,10 @@ pub fn lift_spheres_input(
         let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
             return;
         };
-
-        if ray.direction.y.abs() < 0.001 {
+        let Some(hit_position) = raymarch_grid(&ray, &grid, config.elevation_scale) else {
             return;
-        }
+        };
 
-        let distance_to_plane = -ray.origin.y / ray.direction.y;
-        if distance_to_plane < 0.0 {
-            return;
-        }
-
-        let hit_position = ray.origin + ray.direction * distance_to_plane;
         let lift_acceleration = 250.0;
         let horizontal_centering_force = 40.0;
         let delta_time = time.delta_secs();
@@ -304,11 +374,9 @@ pub fn lift_spheres_input(
             let horizontal_offset = Vec3::new(vector_to_target.x, 0.0, vector_to_target.z);
             let distance_squared = horizontal_offset.length_squared();
 
-            // Apply an upward velocity vector to lift spheres within the influence beam into the air
             if distance_squared < influence_radius_squared {
                 sphere.velocity.y += lift_acceleration * delta_time;
 
-                // Provide a soft horizontal inward pull to keep entities contained inside the lifting column
                 if distance_squared > 0.0001 {
                     let horizontal_direction = horizontal_offset.normalize();
                     sphere.velocity +=

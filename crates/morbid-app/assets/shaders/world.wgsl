@@ -1,10 +1,9 @@
 #import bevy_pbr::mesh_functions::{get_world_from_local, mesh_position_local_to_clip}
 
 struct WorldWindow {
-    origin: vec2<f32>,
-    size: vec2<f32>,
-    head: vec2<f32>,
-    elevation_scale: f32,
+    origin_size: vec4<f32>, // x: origin.x, y: origin.y, z: size.x, w: size.y
+    head_cursor: vec4<f32>, // x: head.x, y: head.y, z: cursor.x, w: cursor.y
+    config: vec4<f32>,      // x: elev_scale, y: cursor_radius
 }
 
 @group(3) @binding(10) var<storage, read> world_buffer: array<u32>;
@@ -24,8 +23,9 @@ fn calculate_heights_at(
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    let wrapped_x = ((cell_x + i32(window.head.x)) % grid_width + grid_width) % grid_width;
-    let wrapped_y = ((cell_y + i32(window.head.y)) % grid_height + grid_height) % grid_height;
+    let wrapped_x = ((cell_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
+    let wrapped_y = ((cell_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
+
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
 
     let word_0 = world_buffer[buffer_index];
@@ -67,9 +67,9 @@ struct VertexOutput {
 fn vertex(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    let grid_width = i32(window.size.x);
-    let grid_height = i32(window.size.y);
-    let scale = window.elevation_scale;
+    let grid_width = i32(window.origin_size.z);
+    let grid_height = i32(window.origin_size.w);
+    let scale = window.config.x;
 
     let cell_index = in.vertex_index / VERTS_PER_CELL;
     let index_within_cell = in.vertex_index % VERTS_PER_CELL;
@@ -79,8 +79,8 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let cell_x = i32(cell_index) % grid_width;
     let cell_y = i32(cell_index) / grid_width;
 
-    let wrapped_x = ((cell_x + i32(window.head.x)) % grid_width + grid_width) % grid_width;
-    let wrapped_y = ((cell_y + i32(window.head.y)) % grid_height + grid_height) % grid_height;
+    let wrapped_x = ((cell_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
+    let wrapped_y = ((cell_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
 
     let word_0 = world_buffer[buffer_index];
@@ -212,6 +212,20 @@ fn vertex(in: VertexInput) -> VertexOutput {
     base_color.r = saturate(base_color.r + visual_shift);
     base_color.g = saturate(base_color.g + visual_shift);
     base_color.b = saturate(base_color.b + visual_shift);
+
+    // Reconstruct the absolute spatial coordinate of the rendered vertex to test bounds
+    let true_world_x = f32(cell_x) + window.origin_size.x;
+    let true_world_y = f32(cell_y) + window.origin_size.y;
+
+    let dx = true_world_x - window.head_cursor.z;
+    let dy = true_world_y - window.head_cursor.w;
+    let dist_sq = dx * dx + dy * dy;
+
+    // Radius boundary test. Sub-zero radii cleanly bypass the mutation.
+    if window.config.y >= 0.0 && dist_sq <= (window.config.y * window.config.y) + 0.1 {
+        // Clinically apply a localized color mix against the base thermodynamic rendering
+        base_color = mix(base_color, vec4<f32>(1.0, 0.4, 0.4, 1.0), 0.35);
+    }
 
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
     let ambient = select(0.3, 0.15, normal.y < 0.5);

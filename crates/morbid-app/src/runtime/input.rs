@@ -46,56 +46,52 @@ pub fn setup_observer(
 
 pub fn manage_os_cursor_boundary(
     mut cursor_query: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
 ) {
     let Ok(mut cursor) = cursor_query.single_mut() else {
         return;
     };
 
-    if keys.just_pressed(KeyCode::Escape) {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-    }
-
-    if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
+    // Traps and releases the OS cursor
+    if mouse.just_pressed(MouseButton::Right) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
+    } else if mouse.just_released(MouseButton::Right) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
     }
 }
 
 pub fn observer_hardware_ingest(
     keyboard: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut motion: MessageReader<bevy::input::mouse::MouseMotion>,
     mut query: Query<&mut ObserverIntent>,
-    cursor_query: Query<&CursorOptions, With<bevy::window::PrimaryWindow>>,
     tuning: Res<ObserverConfig>,
 ) {
-    let Ok(cursor) = cursor_query.single() else {
-        for _ in motion.read() {}
-        return;
-    };
-
-    if cursor.grab_mode == bevy::window::CursorGrabMode::None {
-        for _ in motion.read() {}
-        return;
-    }
-
     let Ok(mut intent) = query.single_mut() else {
-        for _ in motion.read() {}
+        for _ in motion.read() {} // Drain hardware queue to prevent event leakage
         return;
     };
 
-    // Erase translational and toggle state to prevent cross-frame intent leaking
+    // Erase prior translation vectors to guarantee frame-perfect decay
     intent.translation_vector = Vec3::ZERO;
+    intent.yaw_delta = 0.0;
+    intent.pitch_delta = 0.0;
+
     intent.toggle_noclip = keyboard.just_pressed(KeyCode::KeyN);
     intent.toggle_grid_attachment = keyboard.just_pressed(KeyCode::KeyG);
 
+    // Gated strictly behind explicit hardware intent
+    let right_click_held = mouse.pressed(MouseButton::Right);
     for ev in motion.read() {
-        intent.yaw_delta += ev.delta.x * tuning.look_sensitivity;
-        intent.pitch_delta += ev.delta.y * tuning.look_sensitivity;
+        if right_click_held {
+            intent.yaw_delta += ev.delta.x * tuning.look_sensitivity;
+            intent.pitch_delta += ev.delta.y * tuning.look_sensitivity;
+        }
     }
 
+    // Processed unconditionally, allowing blind locomotion
     if keyboard.pressed(KeyCode::KeyW) {
         intent.translation_vector.z -= 1.0;
     }

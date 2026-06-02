@@ -90,12 +90,12 @@ impl Material for WorldMaterial {
     }
 }
 
+/// GPU boundary struct reflecting the projection window and UI state.
 #[derive(Clone, Default, ShaderType, Debug)]
 pub struct WorldWindowUniform {
-    pub origin: Vec2,
-    pub size: Vec2,
-    pub head: Vec2,
-    pub elevation_scale: f32,
+    pub origin_size: Vec4, // x: origin.x, y: origin.y, z: size.x, w: size.y
+    pub head_cursor: Vec4, // x: head.x,   y: head.y,   z: cursor.x, w: cursor.y
+    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: (pad), w: (pad)
 }
 
 #[derive(Component)]
@@ -164,7 +164,7 @@ fn setup_rendering(
         grid_buffer,
         palette_buffer,
         window: WorldWindowUniform {
-            elevation_scale: 0.15,
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // Elev scale 0.15, hidden cursor
             ..default()
         },
     });
@@ -195,35 +195,29 @@ fn sync_grid_rendering(
     let Ok((mut transform, mut mesh3d, material_handle)) = grid_query.single_mut() else {
         return;
     };
-
     let Some(material) = materials.get_mut(&material_handle.0) else {
         return;
     };
 
-    material.window.origin = Vec2::new(
+    material.window.origin_size = Vec4::new(
         grid_ref.spatial.window_origin.x as f32,
         grid_ref.spatial.window_origin.y as f32,
-    );
-    material.window.size = Vec2::new(
         grid_ref.spatial.width as f32,
         grid_ref.spatial.height as f32,
     );
-    material.window.head = Vec2::new(
-        grid_ref.spatial.buffer_head.x as f32,
-        grid_ref.spatial.buffer_head.y as f32,
-    );
-    material.window.elevation_scale = tuning.elevation_scale;
+    // Overwrite head positions, but strictly preserve the cursor XY injected by the brush system
+    material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
+    material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
+    material.window.config.x = tuning.elevation_scale;
 
     transform.translation.x = grid_ref.spatial.window_origin.x as f32;
     transform.translation.z =
         -(grid_ref.spatial.window_origin.y as f32) - (grid_ref.spatial.height as f32) + 1.0;
 
-    // The dirty flag strictly governs heavy GPU buffer I/O and mesh regeneration
     if !grid_ref.cells_dirty {
         return;
     }
 
-    // Relies on strict internal state tracking instead of asynchronous asset queries
     let dims_changed = mesh_size.current_mesh_width != grid_ref.spatial.width
         || mesh_size.current_mesh_height != grid_ref.spatial.height;
 
@@ -253,7 +247,6 @@ fn sync_grid_rendering(
 }
 
 fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
-    // 20 faces per cell (Terrain=5, Granular=5, Fluid=5, Surface=5) * 6 vertices per face
     let vertex_count = (width * height * 20 * 6) as usize;
     let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
 

@@ -41,10 +41,10 @@ impl Plugin for DevToolsPlugin {
             .add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_systems(EguiPrimaryContextPass, ui::dev_tuning_ui)
-            // Runs every frame, but the system internally ignores clicks over UI
             .add_systems(
                 Update,
                 (
+                    brush::update_brush_cursor,
                     brush::handle_brush_input,
                     brush::attract_spheres_input,
                     brush::lift_spheres_input,
