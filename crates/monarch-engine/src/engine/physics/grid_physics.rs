@@ -17,7 +17,7 @@ pub struct GridPhysicsApi<'a> {
 
 impl<'a> GridPhysicsApi<'a> {
     pub fn new(grid: &'a mut ActiveWorldGrid, config: &'a EntityPhysicsConfig) -> Self {
-        let bounds_minimum = grid.window_origin;
+        let bounds_minimum = grid.spatial.window_origin;
         Self {
             grid,
             config,
@@ -30,7 +30,7 @@ impl<'a> GridPhysicsApi<'a> {
     pub fn is_in_bounds(&self, cell_position: IVec2) -> bool {
         let local_x = (cell_position.x - self.bounds_minimum.x) as u32;
         let local_y = (cell_position.y - self.bounds_minimum.y) as u32;
-        local_x < self.grid.width as u32 && local_y < self.grid.height as u32
+        local_x < self.grid.spatial.width as u32 && local_y < self.grid.spatial.height as u32
     }
 
     pub fn get_bedrock_height(&self, cell_position: IVec2) -> Option<f32> {

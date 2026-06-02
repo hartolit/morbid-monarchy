@@ -5,7 +5,7 @@ use crate::engine::{
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
         cell::{GranularMat, WorldCell},
-        grid::GridReadView,
+        grid::CellGridReadView,
     },
 };
 
@@ -48,7 +48,7 @@ fn calc_granular_transfer(
 #[inline(always)]
 fn get_preferred_destination(
     world_pos: IVec2,
-    view: GridReadView,
+    view: CellGridReadView,
     tick: u32,
 ) -> Option<(usize, IVec2)> {
     let (_, source_cell) = view.get_cell(world_pos)?;
@@ -94,7 +94,11 @@ fn get_preferred_destination(
 
 /// Determines the best neighboring source that wishes to drop granular material here.
 #[inline(always)]
-fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
+fn get_preferred_source(
+    world_pos: IVec2,
+    view: CellGridReadView,
+    tick: u32,
+) -> Option<(usize, IVec2)> {
     let shuffled = ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, 0, 0);
 
     let mut best_source = None;
@@ -132,7 +136,7 @@ fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Opti
 pub fn step_granular(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
-    view: GridReadView,
+    view: CellGridReadView,
     world_pos: IVec2,
     tick: u32,
 ) {

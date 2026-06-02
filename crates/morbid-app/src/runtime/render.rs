@@ -199,18 +199,25 @@ fn sync_grid_rendering(
     };
 
     material.window.origin = Vec2::new(
-        grid_ref.window_origin.x as f32,
-        grid_ref.window_origin.y as f32,
+        grid_ref.spatial.window_origin.x as f32,
+        grid_ref.spatial.window_origin.y as f32,
     );
-    material.window.size = Vec2::new(grid_ref.width as f32, grid_ref.height as f32);
-    material.window.head = Vec2::new(grid_ref.buffer_head.x as f32, grid_ref.buffer_head.y as f32);
+    material.window.size = Vec2::new(
+        grid_ref.spatial.width as f32,
+        grid_ref.spatial.height as f32,
+    );
+    material.window.head = Vec2::new(
+        grid_ref.spatial.buffer_head.x as f32,
+        grid_ref.spatial.buffer_head.y as f32,
+    );
     material.window.elevation_scale = tuning.elevation_scale;
 
     if !grid_ref.cells_dirty {
         return;
     }
 
-    let dims_changed = mesh_size.width != grid_ref.width || mesh_size.height != grid_ref.height;
+    let dims_changed =
+        mesh_size.width != grid_ref.spatial.width || mesh_size.height != grid_ref.spatial.height;
     if dims_changed
         || mesh3d.0.id() == Handle::<Mesh>::default().id()
         || meshes
@@ -218,15 +225,15 @@ fn sync_grid_rendering(
             .map_or(true, |m| m.count_vertices() == 0)
     {
         mesh3d.0 = meshes.add(build_procedural_dummy(
-            grid_ref.width as u32,
-            grid_ref.height as u32,
+            grid_ref.spatial.width as u32,
+            grid_ref.spatial.height as u32,
         ));
-        mesh_size.width = grid_ref.width;
-        mesh_size.height = grid_ref.height;
+        mesh_size.width = grid_ref.spatial.width;
+        mesh_size.height = grid_ref.spatial.height;
     }
 
     if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
-        let src: &[u8] = bytemuck::cast_slice(&grid_ref.cells);
+        let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
         match &mut buffer.data {
             Some(dst) => {
                 dst.resize(src.len(), 0);
@@ -236,8 +243,9 @@ fn sync_grid_rendering(
         }
     }
 
-    transform.translation.x = grid_ref.window_origin.x as f32;
-    transform.translation.z = -(grid_ref.window_origin.y as f32) - (grid_ref.height as f32) + 1.0;
+    transform.translation.x = grid_ref.spatial.window_origin.x as f32;
+    transform.translation.z =
+        -(grid_ref.spatial.window_origin.y as f32) - (grid_ref.spatial.height as f32) + 1.0;
 
     grid.cells_dirty = false;
 }

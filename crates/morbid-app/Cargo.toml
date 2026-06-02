@@ -10,6 +10,7 @@ bitcode.workspace = true
 bytemuck.workspace = true
 redb.workspace = true
 bevy_egui.workspace = true
+spatial-lib.workspace = { features = ["redb-storage"] }
 
 [lib]
 name = "morbid_app"

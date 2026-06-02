@@ -1,12 +1,13 @@
-use crate::engine::world::chunk::{ChunkData, ChunkKey};
+use crate::engine::world::chunk::CellChunk;
 use bevy::ecs::message::Message;
+use spatial_lib::math::ChunkKey;
 
 /// Emitted by monarch-engine when the player moves and a chunk falls out of the Active Window.
 /// morbid-app listens to this and writes the Box to disk.
 #[derive(Message)]
 pub struct ChunkUnloadEvent {
     pub key: ChunkKey,
-    pub data: ChunkData,
+    pub data: CellChunk,
 }
 
 /// Emitted by monarch-engine to tell morbid-app: "I need this chunk to fill the grid!"
@@ -20,7 +21,7 @@ pub struct ChunkLoadRequest {
 #[derive(Message)]
 pub struct ChunkLoadedEvent {
     pub key: ChunkKey,
-    pub data: ChunkData,
+    pub data: CellChunk,
 }
 
 /// Emitted to resize the active simulation domain and its preloading buffer.

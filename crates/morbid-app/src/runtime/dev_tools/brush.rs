@@ -65,8 +65,9 @@ pub fn handle_brush_input(
             let cell_pos = IVec2::new(center_x, center_y);
 
             let mut spawn_y = 10.0;
-            let bounds_minimum = grid.window_origin;
-            let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
+            let bounds_minimum = grid.spatial.window_origin;
+            let bounds_maximum =
+                grid.spatial.window_origin + IVec2::new(grid.spatial.width, grid.spatial.height);
 
             // Safely fetch the true physical surface elevation including granular volume
             if cell_pos.x >= bounds_minimum.x
@@ -98,8 +99,9 @@ pub fn handle_brush_input(
         let center_y = (-hit_position.z).floor() as i32;
 
         let radius = settings.radius;
-        let bounds_minimum = grid.window_origin;
-        let bounds_maximum = grid.window_origin + IVec2::new(grid.width, grid.height);
+        let bounds_minimum = grid.spatial.window_origin;
+        let bounds_maximum =
+            grid.spatial.window_origin + IVec2::new(grid.spatial.width, grid.spatial.height);
 
         for dy in -radius..=radius {
             for dx in -radius..=radius {

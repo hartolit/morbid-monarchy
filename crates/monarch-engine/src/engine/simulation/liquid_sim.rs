@@ -2,7 +2,7 @@ use crate::engine::{
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
         cell::{CompassFlags, FluidMat, WorldCell},
-        grid::GridReadView,
+        grid::CellGridReadView,
     },
 };
 use bevy::math::IVec2;
@@ -52,7 +52,7 @@ fn calc_liquid_transfer(
 #[inline(always)]
 fn get_preferred_destination(
     world_pos: IVec2,
-    view: GridReadView,
+    view: CellGridReadView,
     tick: u32,
 ) -> Option<(usize, IVec2)> {
     let (_, source_cell) = view.get_cell(world_pos)?;
@@ -113,7 +113,11 @@ fn get_preferred_destination(
 
 /// Determines the highest-volume neighboring source that wishes to flow into this cell.
 #[inline(always)]
-fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
+fn get_preferred_source(
+    world_pos: IVec2,
+    view: CellGridReadView,
+    tick: u32,
+) -> Option<(usize, IVec2)> {
     let (_, dest_cell) = view.get_cell(world_pos)?;
 
     let pattern = if dest_cell.fluid_mat() == FluidMat::FLUID_MAGMA {
@@ -159,7 +163,7 @@ fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Opti
 pub fn step_liquid(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
-    view: GridReadView,
+    view: CellGridReadView,
     world_pos: IVec2,
     tick: u32,
 ) {

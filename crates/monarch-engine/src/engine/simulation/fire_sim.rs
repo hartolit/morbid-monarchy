@@ -6,7 +6,7 @@ use crate::engine::{
     simulation::GridEvent,
     world::{
         cell::{FluidMat, SurfaceMat, WorldCell},
-        grid::GridReadView,
+        grid::CellGridReadView,
     },
 };
 
@@ -14,7 +14,7 @@ use crate::engine::{
 pub fn step_fire<R: Rng + ?Sized>(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
-    view: GridReadView,
+    view: CellGridReadView,
     world_pos: IVec2,
     rng: &mut R,
     _local_events: &mut Vec<GridEvent>,

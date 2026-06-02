@@ -4,28 +4,24 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, block_on, futures_lite::future},
 };
 use monarch_engine::prelude::*;
-use redb::{Database, ReadableDatabase, TableDefinition};
+use redb::Database;
+use spatial_lib::storage::{ChunkStorage, redb_backend::RedbChunkStorage};
 use std::{path::PathBuf, sync::Arc};
 
 const WORLD_DATA_DIR: &str = "world_data";
 const DB_FILE: &str = "save.redb";
 
-const CHUNKS_TABLE: TableDefinition<[i32; 3], &[u8]> = TableDefinition::new("chunks");
-
 #[derive(Resource, Clone)]
-pub struct WorldDatabase(pub Arc<Database>);
+pub struct WorldDatabase(pub Arc<RedbChunkStorage>);
 
-/// An accumulator queue so we can batch disk writes per-frame.
 #[derive(Resource, Default)]
 pub struct ChunkSaveQueue {
-    pub chunks: Vec<(ChunkKey, ChunkData)>,
+    pub chunks: Vec<(ChunkKey, CellChunk)>,
 }
 
-/// A timer to flush the save queue to disk periodically.
 #[derive(Resource)]
 pub struct SaveTimer(pub Timer);
 
-/// Stores the active simulation seed to replace hardcoded values.
 #[derive(Resource)]
 pub struct WorldSeed(pub u32);
 
@@ -43,9 +39,11 @@ pub fn initialize_database() -> WorldDatabase {
 
     let db_path = dir.join(DB_FILE);
     let db = Database::create(db_path).expect("Failed to initialize redb database");
-    ensure_chunks_table(&db).expect("Failed to initialize chunks table");
 
-    WorldDatabase(Arc::new(db))
+    let storage =
+        RedbChunkStorage::new(Arc::new(db)).expect("Failed to initialize spatial-lib Redb backend");
+
+    WorldDatabase(Arc::new(storage))
 }
 
 pub fn handle_load_requests(
@@ -63,7 +61,6 @@ pub fn handle_load_requests(
         let db_clone = db.0.clone();
 
         let task = io_pool.spawn(async move {
-            // Read the DB and let the non-Send error drop immediately.
             let cached_chunk = match load_chunk_from_db(&db_clone, key) {
                 Ok(Some(chunk_data)) => Some(chunk_data),
                 Ok(None) => None,
@@ -79,7 +76,6 @@ pub fn handle_load_requests(
             let data = if let Some(chunk_data) = cached_chunk {
                 chunk_data
             } else {
-                // Disk miss - Offload heavy CPU math to the Compute Pool!
                 let gen_task = compute_pool.spawn(async move {
                     let generator = WorldGenerator::new(world_seed);
                     generator.generate_chunk(key)
@@ -117,7 +113,6 @@ pub fn process_save_queue(
 
     timer.0.tick(time.delta());
 
-    // Flush if timer finished OR if queue is getting too large (prevent RAM spikes)
     if timer.0.is_finished() || save_queue.chunks.len() >= 50 {
         let chunks_to_save = std::mem::take(&mut save_queue.chunks);
         let db_clone = db.0.clone();
@@ -133,8 +128,6 @@ pub fn process_save_queue(
     }
 }
 
-/// Intercepts application shutdown and forces a synchronous, blocking write
-/// to guarantee no chunks are lost in the ether when the user quits.
 pub fn emergency_flush_on_exit(
     mut exit_events: MessageReader<AppExit>,
     mut queue: ResMut<ChunkSaveQueue>,
@@ -192,45 +185,38 @@ pub fn poll_save_tasks(
     }
 }
 
-// --- Internal DB I/O ---
-
-fn ensure_chunks_table(db: &Database) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let write_txn = db.begin_write()?;
-    {
-        let _table = write_txn.open_table(CHUNKS_TABLE)?;
-    }
-    write_txn.commit()?;
-    Ok(())
-}
+// --- Internal DB I/O (Delegated to spatial-lib) ---
 
 fn save_chunks_to_db_batch(
-    db: &Database,
-    chunks: &[(ChunkKey, ChunkData)],
+    storage: &RedbChunkStorage,
+    chunks: &[(ChunkKey, CellChunk)],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let write_txn = db.begin_write()?;
-    {
-        let mut table = write_txn.open_table(CHUNKS_TABLE)?;
-        for (key, data) in chunks {
-            let encoded: Vec<u8> = bitcode::encode(data);
-            table.insert([key.key.x, key.key.y, key.key.z], encoded.as_slice())?;
-        }
-    }
+    // 1. Serialize all domain types into raw byte vectors
+    let encoded_chunks: Vec<(ChunkKey, Vec<u8>)> = chunks
+        .iter()
+        .map(|(key, data)| (*key, bitcode::encode(data)))
+        .collect();
 
-    write_txn.commit()?;
+    // 2. Map vectors into slices to satisfy the zero-knowledge spatial-lib trait bound
+    let storage_refs: Vec<(ChunkKey, &[u8])> = encoded_chunks
+        .iter()
+        .map(|(key, bytes)| (*key, bytes.as_slice()))
+        .collect();
+
+    // 3. Delegate physical disk transaction
+    storage.write_batch(&storage_refs)?;
 
     Ok(())
 }
 
 fn load_chunk_from_db(
-    db: &Database,
+    storage: &RedbChunkStorage,
     key: ChunkKey,
-) -> Result<Option<ChunkData>, Box<dyn std::error::Error + Send + Sync>> {
-    let read_txn = db.begin_read()?;
-    let table = read_txn.open_table(CHUNKS_TABLE)?;
-
-    if let Some(access) = table.get([key.key.x, key.key.y, key.key.z])? {
-        let bytes = access.value();
-        let data: ChunkData = bitcode::decode(bytes)?;
+) -> Result<Option<CellChunk>, Box<dyn std::error::Error + Send + Sync>> {
+    // 1. Retrieve agnostic raw bytes from the spatial-lib backend
+    if let Some(bytes) = storage.read_chunk(key)? {
+        // 2. Rehydrate the bytes into the strictly defined engine domain logic
+        let data: CellChunk = bitcode::decode(&bytes)?;
         Ok(Some(data))
     } else {
         Ok(None)

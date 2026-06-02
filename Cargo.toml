@@ -18,7 +18,7 @@ redb = "4.0.0"
 noise = "0.9.0"
 rayon = "1.12.0"
 flume = "0.12.0"
-glam = "0.33.0"
+glam = "0.30.7"
 
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
