@@ -1,4 +1,4 @@
-use crate::engine::world::cell::{GranularMat, SurfaceMat, TerrainMat};
+use crate::engine::world::cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat};
 
 #[inline(always)]
 pub fn get_granular_repose(material: GranularMat) -> u16 {
@@ -23,12 +23,12 @@ pub fn get_terrain_repose(material: TerrainMat) -> u16 {
 }
 
 #[inline(always)]
-pub fn is_combustible(material: SurfaceMat) -> bool {
+pub fn is_combustible(surface: SurfaceMat, fluid: FluidMat) -> bool {
     matches!(
-        material,
+        surface,
         SurfaceMat::SURFACE_FOLIAGE
             | SurfaceMat::SURFACE_WOOD
             | SurfaceMat::SURFACE_FLESH
             | SurfaceMat::SURFACE_ROT
-    )
+    ) || fluid == FluidMat::FLUID_OIL
 }

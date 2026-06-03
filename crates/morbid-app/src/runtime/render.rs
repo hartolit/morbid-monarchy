@@ -13,25 +13,18 @@ use bevy::{
     shader::ShaderRef,
 };
 use monarch_engine::prelude::*;
+use rustc_hash::FxHashSet;
+use spatial_lib::chunk::math::ChunkKey;
 
 pub struct WorldRenderPlugin;
 
 impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WorldMaterial>::default())
-            .init_resource::<GridMeshSize>()
             .init_resource::<WorldTuningConfig>()
             .add_systems(Startup, setup_rendering)
             .add_systems(Update, sync_grid_rendering);
     }
-}
-
-#[derive(Resource, Default)]
-struct GridMeshSize {
-    width: i32,
-    height: i32,
-    current_mesh_width: i32,
-    current_mesh_height: i32,
 }
 
 #[derive(Resource)]
@@ -90,7 +83,7 @@ impl Material for WorldMaterial {
     }
 }
 
-/// GPU boundary struct reflecting the projection window and UI state.
+/// GPU boundary struct reflecting the active projection window and brush tuning.
 #[derive(Clone, Default, ShaderType, Debug)]
 pub struct WorldWindowUniform {
     pub origin_size: Vec4, // x: origin.x, y: origin.y, z: size.x, w: size.y
@@ -98,8 +91,25 @@ pub struct WorldWindowUniform {
     pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: (pad), w: (pad)
 }
 
+#[derive(Resource)]
+pub struct ChunkMeshHandle(pub Handle<Mesh>);
+
+#[derive(Resource)]
+pub struct GlobalWorldMaterial(pub Handle<WorldMaterial>);
+
 #[derive(Component)]
-pub struct WorldGridMarker;
+pub struct ChunkRenderMarker(pub ChunkKey);
+
+/// Allocates an immutable, contiguous dummy mesh mapping exactly to a single physical chunk.
+/// Prevents catastrophic VRAM scaling by locking the footprint to ~5MB per instance.
+fn build_chunk_dummy(size: u32) -> Mesh {
+    let vertex_count = (size * size * 120) as usize;
+    let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh
+}
 
 fn setup_rendering(
     mut commands: Commands,
@@ -108,14 +118,14 @@ fn setup_rendering(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let grid_buffer = buffers.add(ShaderStorageBuffer::new(
-        &[0u8; 8], // 8 bytes per cell
+        &[0u8; 8],
         RenderAssetUsages::all(),
     ));
 
     let mut palette = vec![[0.0f32; 4]; 256];
     palette[0] = [0.00, 0.00, 0.00, 0.0];
 
-    // --- Terrain (Offset 0) ---
+    // Terrain Offset (0)
     palette[TerrainMat::TERRAIN_STONE.0 as usize] = [0.48, 0.46, 0.44, 1.0];
     palette[TerrainMat::TERRAIN_DIRT.0 as usize] = [0.40, 0.28, 0.15, 1.0];
     palette[TerrainMat::TERRAIN_SANDSTONE.0 as usize] = [0.65, 0.55, 0.35, 1.0];
@@ -123,7 +133,7 @@ fn setup_rendering(
     palette[TerrainMat::TERRAIN_METAL.0 as usize] = [0.60, 0.60, 0.65, 1.0];
     palette[TerrainMat::TERRAIN_CORRUPTION.0 as usize] = [0.35, 0.15, 0.40, 1.0];
 
-    // --- Granular (Offset 32) ---
+    // Granular Offset (32)
     palette[(32 + GranularMat::GRANULAR_DIRT.0) as usize] = [0.45, 0.32, 0.18, 1.0];
     palette[(32 + GranularMat::GRANULAR_SAND.0) as usize] = [0.82, 0.72, 0.48, 1.0];
     palette[(32 + GranularMat::GRANULAR_MUD.0) as usize] = [0.25, 0.18, 0.10, 1.0];
@@ -132,7 +142,7 @@ fn setup_rendering(
     palette[(32 + GranularMat::GRANULAR_LIQUID_METAL.0) as usize] = [0.75, 0.75, 0.80, 1.0];
     palette[(32 + GranularMat::GRANULAR_CORRUPTION.0) as usize] = [0.45, 0.20, 0.50, 1.0];
 
-    // --- Fluid (Offset 64) ---
+    // Fluid Offset (64)
     palette[(64 + FluidMat::FLUID_WATER.0) as usize] = [0.15, 0.35, 0.85, 1.0];
     palette[(64 + FluidMat::FLUID_MAGMA.0) as usize] = [0.85, 0.25, 0.05, 1.0];
     palette[(64 + FluidMat::FLUID_BLOOD.0) as usize] = [0.55, 0.02, 0.02, 1.0];
@@ -140,7 +150,7 @@ fn setup_rendering(
     palette[(64 + FluidMat::FLUID_OIL.0) as usize] = [0.12, 0.08, 0.04, 1.0];
     palette[(64 + FluidMat::FLUID_CORRUPTION.0) as usize] = [0.25, 0.05, 0.30, 1.0];
 
-    // --- Surface (Offset 96) ---
+    // Surface Offset (96)
     palette[(96 + SurfaceMat::SURFACE_FIRE.0) as usize] = [1.00, 0.60, 0.10, 1.0];
     palette[(96 + SurfaceMat::SURFACE_FOLIAGE.0) as usize] = [0.18, 0.45, 0.12, 1.0];
     palette[(96 + SurfaceMat::SURFACE_WOOD.0) as usize] = [0.45, 0.28, 0.12, 1.0];
@@ -164,93 +174,88 @@ fn setup_rendering(
         grid_buffer,
         palette_buffer,
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // Elev scale 0.15, hidden cursor
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // elev_scale, cursor_radius (hidden)
             ..default()
         },
     });
 
-    commands.spawn((
-        Mesh3d(meshes.add(build_procedural_dummy(1, 1))),
-        MeshMaterial3d(material),
-        Transform::from_translation(Vec3::ZERO),
-        NoFrustumCulling,
-        WorldGridMarker,
-    ));
+    let chunk_mesh = meshes.add(build_chunk_dummy(CHUNK_SIZE as u32));
+
+    commands.insert_resource(GlobalWorldMaterial(material));
+    commands.insert_resource(ChunkMeshHandle(chunk_mesh));
 }
 
+/// Enforces spatial synchronization between the ECS hierarchy and the active SSBO matrix.
 fn sync_grid_rendering(
+    mut commands: Commands,
     mut grid: ResMut<ActiveWorldGrid>,
+    manager: Res<WorldManager>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mesh_size: ResMut<GridMeshSize>,
+    chunk_mesh: Res<ChunkMeshHandle>,
+    global_material: Res<GlobalWorldMaterial>,
     tuning: Res<WorldTuningConfig>,
-    mut grid_query: Query<
-        (&mut Transform, &mut Mesh3d, &MeshMaterial3d<WorldMaterial>),
-        With<WorldGridMarker>,
-    >,
+    chunk_query: Query<(Entity, &ChunkRenderMarker)>,
 ) {
     let grid_ref = grid.bypass_change_detection();
 
-    let Ok((mut transform, mut mesh3d, material_handle)) = grid_query.single_mut() else {
-        return;
-    };
-    let Some(material) = materials.get_mut(&material_handle.0) else {
-        return;
-    };
+    // Maintain ToroidalGrid SSBO memory projection
+    if grid_ref.cells_dirty {
+        if let Some(material) = materials.get_mut(&global_material.0) {
+            material.window.origin_size = Vec4::new(
+                grid_ref.spatial.window_origin.x as f32,
+                grid_ref.spatial.window_origin.y as f32,
+                grid_ref.spatial.width as f32,
+                grid_ref.spatial.height as f32,
+            );
 
-    material.window.origin_size = Vec4::new(
-        grid_ref.spatial.window_origin.x as f32,
-        grid_ref.spatial.window_origin.y as f32,
-        grid_ref.spatial.width as f32,
-        grid_ref.spatial.height as f32,
-    );
-    // Overwrite head positions, but strictly preserve the cursor XY injected by the brush system
-    material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
-    material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
-    material.window.config.x = tuning.elevation_scale;
+            // Overwrite head positions; brush cursor coordinates (Z/W) are injected asynchronously
+            material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
+            material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
+            material.window.config.x = tuning.elevation_scale;
 
-    transform.translation.x = grid_ref.spatial.window_origin.x as f32;
-    transform.translation.z =
-        -(grid_ref.spatial.window_origin.y as f32) - (grid_ref.spatial.height as f32) + 1.0;
-
-    if !grid_ref.cells_dirty {
-        return;
-    }
-
-    let dims_changed = mesh_size.current_mesh_width != grid_ref.spatial.width
-        || mesh_size.current_mesh_height != grid_ref.spatial.height;
-
-    if dims_changed {
-        mesh3d.0 = meshes.add(build_procedural_dummy(
-            grid_ref.spatial.width as u32,
-            grid_ref.spatial.height as u32,
-        ));
-        mesh_size.width = grid_ref.spatial.width;
-        mesh_size.height = grid_ref.spatial.height;
-        mesh_size.current_mesh_width = grid_ref.spatial.width;
-        mesh_size.current_mesh_height = grid_ref.spatial.height;
-    }
-
-    if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
-        let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
-        match &mut buffer.data {
-            Some(dst) => {
-                dst.resize(src.len(), 0);
-                dst.copy_from_slice(src);
+            if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
+                let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
+                match &mut buffer.data {
+                    Some(dst) => {
+                        dst.resize(src.len(), 0);
+                        dst.copy_from_slice(src);
+                    }
+                    slot => *slot = Some(src.to_vec()),
+                }
             }
-            slot => *slot = Some(src.to_vec()),
+        }
+        grid.cells_dirty = false;
+    }
+
+    let Some(active_view) = manager.inner.active_view else {
+        return;
+    };
+
+    // Eradicate ECS instances outside the strict topological boundary
+    let mut existing_chunks = FxHashSet::default();
+    for (entity, marker) in chunk_query.iter() {
+        if active_view.contains(&marker.0) {
+            existing_chunks.insert(marker.0);
+        } else {
+            commands.entity(entity).despawn();
         }
     }
 
-    grid.cells_dirty = false;
-}
+    // Spawns missing instances locked to their physical coordinate origins
+    for key in active_view.iter() {
+        if !existing_chunks.contains(&key) {
+            let chunk_x = key.key.x * (CHUNK_SIZE as i32);
+            let chunk_y = key.key.y * (CHUNK_SIZE as i32);
 
-fn build_procedural_dummy(width: u32, height: u32) -> Mesh {
-    let vertex_count = (width * height * 20 * 6) as usize;
-    let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh
+            commands.spawn((
+                Mesh3d(chunk_mesh.0.clone()),
+                MeshMaterial3d(global_material.0.clone()),
+                // Translate the chunk instance mapping mathematical X/Y to physical X/-Z
+                Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32)),
+                ChunkRenderMarker(key),
+                NoFrustumCulling,
+            ));
+        }
+    }
 }

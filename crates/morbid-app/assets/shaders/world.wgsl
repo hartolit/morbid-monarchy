@@ -27,7 +27,6 @@ fn calculate_heights_at(
     let wrapped_y = ((cell_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
 
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
-
     let word_0 = world_buffer[buffer_index];
     let word_1 = world_buffer[buffer_index + 1u];
 
@@ -55,6 +54,7 @@ fn calculate_heights_at(
 struct VertexInput {
     @location(0) _position: vec3<f32>,
     @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
 };
 
 struct VertexOutput {
@@ -71,16 +71,30 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let grid_height = i32(window.origin_size.w);
     let scale = window.config.x;
 
+    // Harvest the physical absolute origin from the ECS transform matrix
+    let chunk_matrix = get_world_from_local(in.instance_index);
+    let chunk_origin_x = i32(round(chunk_matrix[3].x));
+    let chunk_origin_y = i32(round(-chunk_matrix[3].z));
+
     let cell_index = in.vertex_index / VERTS_PER_CELL;
     let index_within_cell = in.vertex_index % VERTS_PER_CELL;
     let face_slot = index_within_cell / VERTS_PER_FACE;
     let vertex_within_face = index_within_cell % VERTS_PER_FACE;
 
-    let cell_x = i32(cell_index) % grid_width;
-    let cell_y = i32(cell_index) / grid_width;
+    // Bound to the local 64x64 chunk iteration, avoiding geometry expansion
+    let local_cell_x = i32(cell_index) % 64;
+    let local_cell_y = i32(cell_index) / 64;
 
-    let wrapped_x = ((cell_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
-    let wrapped_y = ((cell_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
+    // Resolve mathematical coordinate for SSBO retrieval
+    let world_cell_x = chunk_origin_x + local_cell_x;
+    let world_cell_y = chunk_origin_y + local_cell_y;
+
+    // Relative extraction boundaries mapped against the shifting window ToroidalGrid
+    let local_grid_x = world_cell_x - i32(window.origin_size.x);
+    let local_grid_y = world_cell_y - i32(window.origin_size.y);
+
+    let wrapped_x = ((local_grid_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
+    let wrapped_y = ((local_grid_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
 
     let word_0 = world_buffer[buffer_index];
@@ -105,9 +119,6 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let f_height = g_height + (fluid_vol * scale);
     let s_height = f_height + max(1.0, surface_state) * scale;
 
-    let world_offset_x = f32(cell_x);
-    let world_offset_z = f32(grid_height - 1 - cell_y);
-
     var local_pos = vec3<f32>(0.0, 0.0, 0.0);
     var normal = vec3<f32>(0.0, 1.0, 0.0);
     var mat_lookup = mat_terrain;
@@ -123,10 +134,10 @@ fn vertex(in: VertexInput) -> VertexOutput {
     if face_slot == 3u || face_slot == 8u || face_slot == 13u || face_slot == 18u { normal = vec3<f32>(1.0, 0.0, 0.0); n_dx = 1; }
     if face_slot == 4u || face_slot == 9u || face_slot == 14u || face_slot == 19u { normal = vec3<f32>(-1.0, 0.0, 0.0); n_dx = -1; }
 
-    let neighbor_h = calculate_heights_at(cell_x + n_dx, cell_y + n_dy, grid_width, grid_height, scale);
+    let neighbor_h = calculate_heights_at(local_grid_x + n_dx, local_grid_y + n_dy, grid_width, grid_height, scale);
 
     switch face_slot {
-        // --- TERRAIN FACES (0-4) ---
+        // TERRAIN FACES (0-4)
         case 0u: { // Cap
             mat_lookup = mat_terrain;
             if mat_terrain != 0u && t_height > 0.0 {
@@ -141,8 +152,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 is_rendered = true;
             }
         }
-
-        // --- GRANULAR FACES (5-9) ---
+        // GRANULAR FACES (5-9)
         case 5u: { // Cap
             mat_lookup = mat_granular + 32u;
             if mat_granular != 0u && granular_vol > 0.0 {
@@ -158,8 +168,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 is_rendered = true;
             }
         }
-
-        // --- FLUID FACES (10-14) ---
+        // FLUID FACES (10-14)
         case 10u: { // Cap
             mat_lookup = mat_fluid + 64u;
             if mat_fluid != 0u && fluid_vol > 0.0 {
@@ -175,8 +184,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
                 is_rendered = true;
             }
         }
-
-        // --- SURFACE FACES (15-19) ---
+        // SURFACE FACES (15-19)
         case 15u: { // Cap
             mat_lookup = mat_surface + 96u;
             if mat_surface != 0u {
@@ -195,16 +203,19 @@ fn vertex(in: VertexInput) -> VertexOutput {
         default: {}
     }
 
-    // Discards the triangle without triggering float-clipping explosions.
     if !is_rendered {
         out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return out;
     }
 
-    local_pos = local_pos + vec3<f32>(world_offset_x, 0.0, world_offset_z);
+    // Bind local geometry shift to the exact instance coordinate bounds
+    let local_offset_x = f32(local_cell_x);
+    let local_offset_z = f32(-local_cell_y);
+    local_pos = local_pos + vec3<f32>(local_offset_x, 0.0, local_offset_z);
 
     out.normal = normal;
-    out.clip_position = mesh_position_local_to_clip(get_world_from_local(0u), vec4<f32>(local_pos, 1.0));
+    // Map geometry to the active global matrix
+    out.clip_position = mesh_position_local_to_clip(chunk_matrix, vec4<f32>(local_pos, 1.0));
 
     var base_color = palette[mat_lookup];
     let visual_shift = (f32(variants) - 16.0) / 16.0 * 0.10;
@@ -213,17 +224,14 @@ fn vertex(in: VertexInput) -> VertexOutput {
     base_color.g = saturate(base_color.g + visual_shift);
     base_color.b = saturate(base_color.b + visual_shift);
 
-    // Reconstruct the absolute spatial coordinate of the rendered vertex to test bounds
-    let true_world_x = f32(cell_x) + window.origin_size.x;
-    let true_world_y = f32(cell_y) + window.origin_size.y;
+    let true_world_x = f32(world_cell_x);
+    let true_world_y = f32(world_cell_y);
 
     let dx = true_world_x - window.head_cursor.z;
     let dy = true_world_y - window.head_cursor.w;
     let dist_sq = dx * dx + dy * dy;
 
-    // Radius boundary test. Sub-zero radii cleanly bypass the mutation.
     if window.config.y >= 0.0 && dist_sq <= (window.config.y * window.config.y) + 0.1 {
-        // Clinically apply a localized color mix against the base thermodynamic rendering
         base_color = mix(base_color, vec4<f32>(1.0, 0.4, 0.4, 1.0), 0.35);
     }
 

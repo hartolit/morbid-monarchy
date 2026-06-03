@@ -1,1 +1,2 @@
--- **Purged changelog**
+* **Render Pipeline Overhaul:** Eradicated the monolithic procedural dummy mesh allocation. Replaced with localized `ChunkRenderMarker` ECS entities projecting a singular, immutable 5MB dummy mesh. 
+* **Shader Reprojection:** Decoupled `vertex_index` from global world bounds. WGSL now harvests absolute topological coordinates dynamically from the ECS `instance_index` transform matrix, eliminating catastrophic VRAM scaling failures and visual tearing.

@@ -20,9 +20,9 @@ pub fn step_fire<R: Rng + ?Sized>(
     _local_events: &mut Vec<GridEvent>,
 ) {
     let surface = old_cell.surface_mat();
-
-    // Extinguish immediately if submerged in a non-combustible fluid (Water, Blood, Acid)
     let fluid = old_cell.fluid_mat();
+
+    // Extinguish immediately if submerged in a non-combustible fluid
     if fluid != FluidMat::EMPTY && fluid != FluidMat::FLUID_OIL {
         if surface == SurfaceMat::SURFACE_FIRE {
             cell.set_surface_mat(SurfaceMat::EMPTY);
@@ -31,8 +31,8 @@ pub fn step_fire<R: Rng + ?Sized>(
         return;
     }
 
-    // Ignition & Spread Phase
-    if is_combustible(surface) {
+    // Ignition & Spread Phase structurally observes the combined surface and fluid matrix
+    if is_combustible(surface, fluid) {
         let mut fire_neighbors = 0;
         for dy in -1..=1 {
             for dx in -1..=1 {
