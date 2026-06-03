@@ -10,33 +10,93 @@ use crate::runtime::{
     render::WorldMaterial,
 };
 
-/// Volumetric raymarcher. Steps strictly through physical world coordinates
-/// to find true intersection with the dynamic thermodynamic floor.
+/// Volumetric raymarcher executing a pure 2D Digital Differential Analyzer (DDA)
+/// across the XZ plane to mathematically guarantee intersection with the dynamic thermodynamic floor.
 #[inline(always)]
 pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) -> Option<Vec3> {
-    let mut t = 0.0;
-    let step = 0.25; // Precision limit to catch steep cliff faces
     let max_dist = 1000.0;
+    let start_pos = ray.origin;
+
+    // Isolate mathematical origin coordinates
+    let mut cx = start_pos.x.floor() as i32;
+    let mut cy = (-start_pos.z).floor() as i32;
+
+    // Vector step directions mapped to the grid's topology (cy acts against -Z)
+    let step_x = if ray.direction.x > 0.0 { 1 } else { -1 };
+    let step_y = if ray.direction.z < 0.0 { 1 } else { -1 };
+
+    // Delta T: distance the ray must travel to cross exactly one full cell width/height
+    let t_delta_x = if ray.direction.x != 0.0 {
+        (1.0 / ray.direction.x).abs()
+    } else {
+        f32::MAX
+    };
+    let t_delta_y = if ray.direction.z != 0.0 {
+        (1.0 / ray.direction.z).abs()
+    } else {
+        f32::MAX
+    };
+
+    // Max T: distance to the very first cellular boundary crossing
+    let mut t_max_x = if ray.direction.x > 0.0 {
+        (cx as f32 + 1.0 - start_pos.x) * t_delta_x
+    } else {
+        (start_pos.x - cx as f32) * t_delta_x
+    };
+
+    let mut t_max_y = if ray.direction.z < 0.0 {
+        (cy as f32 + 1.0 - (-start_pos.z)) * t_delta_y
+    } else {
+        ((-start_pos.z) - cy as f32) * t_delta_y
+    };
+
     let bounds_min = grid.spatial.window_origin;
     let bounds_max = bounds_min + IVec2::new(grid.spatial.width, grid.spatial.height);
 
-    while t < max_dist {
-        let pos = ray.origin + ray.direction * t;
-        let cx = pos.x.floor() as i32;
-        let cy = (-pos.z).floor() as i32;
+    let mut t = 0.0;
 
+    while t < max_dist {
         if cx >= bounds_min.x && cx < bounds_max.x && cy >= bounds_min.y && cy < bounds_max.y {
             let cell = grid.get_cell(IVec2::new(cx, cy));
-            // Floor height includes the structural bedrock and shifting granular mass
             let h = (cell.elevation() as f32 + cell.granular_vol() as f32) * elevation_scale;
-            if pos.y <= h {
-                return Some(pos);
+
+            let entry_t = t;
+            let exit_t = t_max_x.min(t_max_y);
+
+            let y_entry = start_pos.y + ray.direction.y * entry_t;
+            let y_exit = start_pos.y + ray.direction.y * exit_t;
+
+            // Check if the ray's vertical bounds intersect the physical cellular pillar
+            if y_entry.min(y_exit) <= h {
+                if ray.direction.y < 0.0 {
+                    if y_entry >= h {
+                        // Impacted from above (hit the roof of the voxel)
+                        let hit_t = (h - start_pos.y) / ray.direction.y;
+                        return Some(start_pos + *ray.direction * hit_t);
+                    } else {
+                        // Impacted from the side (hit the wall of the voxel)
+                        return Some(start_pos + *ray.direction * entry_t);
+                    }
+                } else if y_entry <= h {
+                    // Ascending from below/side
+                    return Some(start_pos + *ray.direction * entry_t);
+                }
             }
-        } else if pos.y < 0.0 {
-            // Terminate search if the ray falls into the void outside grid limits
+        } else if start_pos.y + ray.direction.y * t < 0.0 {
+            // Ray has fallen off the mathematical map into the void
             return None;
         }
-        t += step;
+
+        // Advance the DDA to the next cellular boundary
+        if t_max_x < t_max_y {
+            t = t_max_x;
+            t_max_x += t_delta_x;
+            cx += step_x;
+        } else {
+            t = t_max_y;
+            t_max_y += t_delta_y;
+            cy += step_y;
+        }
     }
     None
 }
@@ -271,7 +331,7 @@ pub fn handle_brush_input(
 
                     if cell_was_mutated {
                         grid.set_cell(world_position, cell);
-                        grid.wake_cell(world_position); // Wake local topology to process physics next frame
+                        grid.wake_cell(world_position);
                     }
                 }
             }
