@@ -30,16 +30,12 @@ impl Plugin for WorldRenderPlugin {
 #[derive(Resource)]
 pub struct WorldTuningConfig {
     pub elevation_scale: f32,
-    pub visual_roughness: f32,
-    pub corner_warp: f32,
 }
 
 impl Default for WorldTuningConfig {
     fn default() -> Self {
         Self {
             elevation_scale: 0.50,
-            visual_roughness: 0.5,
-            corner_warp: 0.035,
         }
     }
 }
@@ -52,7 +48,7 @@ pub struct WorldMaterial {
     #[storage(11, read_only, visibility(vertex))]
     pub palette_buffer: Handle<ShaderStorageBuffer>,
 
-    #[uniform(12, visibility(vertex, fragment))]
+    #[uniform(12, visibility(vertex))]
     pub window: WorldWindowUniform,
 }
 
@@ -87,13 +83,12 @@ impl Material for WorldMaterial {
     }
 }
 
-/// GPU boundary struct reflecting the active projection window, brush tuning, and simulation time.
+/// GPU boundary struct reflecting the active projection window and brush tuning.
 #[derive(Clone, Default, ShaderType, Debug)]
 pub struct WorldWindowUniform {
     pub origin_size: Vec4, // x: origin.x, y: origin.y, z: size.x, w: size.y
     pub head_cursor: Vec4, // x: head.x,   y: head.y,   z: cursor.x, w: cursor.y
-    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: visual_roughness, w: corner_warp
-    pub time_data: Vec4,   // x: elapsed_seconds, yzw: (padding)
+    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: (pad), w: (pad)
 }
 
 #[derive(Resource)]
@@ -106,7 +101,7 @@ pub struct GlobalWorldMaterial(pub Handle<WorldMaterial>);
 pub struct ChunkRenderMarker(pub ChunkKey);
 
 /// Allocates an immutable, contiguous dummy mesh mapping exactly to a single physical chunk.
-/// Prevents catastrophic VRAM scaling by locking the footprint.
+/// Prevents catastrophic VRAM scaling by locking the footprint to ~5MB per instance.
 fn build_chunk_dummy(size: u32) -> Mesh {
     let vertex_count = (size * size * 120) as usize;
     let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
@@ -179,7 +174,7 @@ fn setup_rendering(
         grid_buffer,
         palette_buffer,
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 0.5, 0.035),
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // elev_scale, cursor_radius (hidden)
             ..default()
         },
     });
@@ -195,7 +190,6 @@ fn sync_grid_rendering(
     mut commands: Commands,
     mut grid: ResMut<ActiveWorldGrid>,
     manager: Res<WorldManager>,
-    time: Res<Time>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     chunk_mesh: Res<ChunkMeshHandle>,
@@ -205,26 +199,21 @@ fn sync_grid_rendering(
 ) {
     let grid_ref = grid.bypass_change_detection();
 
-    // Constant injection of uniform metadata (Time, Tuning, Origins)
-    if let Some(material) = materials.get_mut(&global_material.0) {
-        material.window.origin_size = Vec4::new(
-            grid_ref.spatial.window_origin.x as f32,
-            grid_ref.spatial.window_origin.y as f32,
-            grid_ref.spatial.width as f32,
-            grid_ref.spatial.height as f32,
-        );
-
-        material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
-        material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
-        material.window.config.x = tuning.elevation_scale;
-        material.window.config.z = tuning.visual_roughness;
-        material.window.config.w = tuning.corner_warp;
-        material.window.time_data.x = time.elapsed_secs();
-    }
-
-    // Maintain ToroidalGrid SSBO memory projection ONLY when physics diverge
+    // Maintain ToroidalGrid SSBO memory projection
     if grid_ref.cells_dirty {
         if let Some(material) = materials.get_mut(&global_material.0) {
+            material.window.origin_size = Vec4::new(
+                grid_ref.spatial.window_origin.x as f32,
+                grid_ref.spatial.window_origin.y as f32,
+                grid_ref.spatial.width as f32,
+                grid_ref.spatial.height as f32,
+            );
+
+            // Overwrite head positions; brush cursor coordinates (Z/W) are injected asynchronously
+            material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
+            material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
+            material.window.config.x = tuning.elevation_scale;
+
             if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
                 let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
                 match &mut buffer.data {
