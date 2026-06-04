@@ -2,7 +2,7 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::{diagnostic::DiagnosticsStore, ecs::message::MessageWriter, prelude::*};
 use bevy_egui::{EguiContexts, egui};
 use monarch_engine::prelude::{
-    ActiveWorldGrid, ChunkManager, FluidMat, ResizeSimulationEvent, SimulationConfig,
+    ActiveWorldGrid, FluidMat, ResizeSimulationEvent, SimulationConfig, WorldManager,
 };
 
 use crate::runtime::{
@@ -33,7 +33,7 @@ pub fn dev_tuning_ui(
     mut pending_resize: Local<Option<[u32; 2]>>,
     mut show_menu: Local<Option<bool>>,
     mut show_stats: Local<bool>,
-    manager: Res<ChunkManager>,
+    manager: Res<WorldManager>,
     grid: Res<ActiveWorldGrid>,
     keys: Res<ButtonInput<KeyCode>>,
     diagnostics: Res<DiagnosticsStore>,
@@ -51,8 +51,8 @@ pub fn dev_tuning_ui(
         return;
     };
 
-    let current_size =
-        pending_resize.get_or_insert_with(|| [manager.active_radius_x, manager.active_radius_y]);
+    let current_size = pending_resize
+        .get_or_insert_with(|| [manager.inner.active_radius_x, manager.inner.active_radius_y]);
 
     egui::TopBottomPanel::top("dev_navbar").show(ctx, |ui| {
         ui.horizontal_centered(|ui| {
@@ -89,8 +89,8 @@ pub fn dev_tuning_ui(
             ui.add_space(16.0);
 
             if ui.button("Apply Resize").clicked() {
-                if current_size[0] != manager.active_radius_x
-                    || current_size[1] != manager.active_radius_y
+                if current_size[0] != manager.inner.active_radius_x
+                    || current_size[1] != manager.inner.active_radius_y
                 {
                     info!(
                         "Dev UI dispatching Resize: {}x{}",
@@ -156,13 +156,19 @@ pub fn dev_tuning_ui(
             .collapsible(false)
             .show(ctx, |ui| {
                 let total_mass: u64 = grid
+                    .spatial
                     .cells
                     .iter()
                     .filter(|c| c.fluid_mat() != FluidMat::EMPTY)
                     .map(|c| c.fluid_vol() as u64)
                     .sum();
 
-                let total_elev: u64 = grid.cells.iter().map(|c| c.elevation() as u64).sum();
+                let total_elev: u64 = grid
+                    .spatial
+                    .cells
+                    .iter()
+                    .map(|c| c.elevation() as u64)
+                    .sum();
 
                 egui::Grid::new("stats_grid").striped(true).show(ui, |ui| {
                     ui.label(egui::RichText::new("Total Liquid Vol:").strong());

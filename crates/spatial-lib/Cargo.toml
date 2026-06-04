@@ -1,0 +1,15 @@
+[package]
+name = "spatial-lib"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+redb-storage = ["dep:redb", "dep:bitcode"]
+
+[dependencies]
+glam = { workspace = true }
+lru = { workspace = true }
+rustc-hash = { workspace = true }
+redb = { workspace = true, optional = true }
+bitcode = { workspace = true, optional = true, features = ["derive"] }

@@ -13,3 +13,4 @@ bitcode.workspace = true
 bytemuck.workspace = true
 rayon.workspace = true
 flume.workspace = true
+spatial-lib.workspace = true

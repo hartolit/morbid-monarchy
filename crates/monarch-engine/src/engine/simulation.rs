@@ -12,11 +12,14 @@ use bevy::{
 };
 use flume::{Receiver, Sender};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use std::sync::atomic::Ordering;
 
 use crate::engine::world::cell::SurfaceMat;
-use crate::prelude::{ActiveWorldGrid, GridReadView};
+use crate::prelude::ActiveWorldGrid;
+use crate::prelude::CellGridReadView;
 
 pub enum GridEvent {
     SpawnTerrainParticle {
@@ -77,8 +80,8 @@ pub fn simulate_world(
     grid_res.swap_buffers();
     let grid_mut = grid_res.into_inner();
 
-    let width = grid_mut.width;
-    let height = grid_mut.height;
+    let width = grid_mut.spatial.width;
+    let height = grid_mut.spatial.height;
     let tick = grid_mut.tick;
     let global_tx = event_queue.tx.clone();
 
@@ -87,39 +90,39 @@ pub fn simulate_world(
     let run_granular = config.run_granular;
     let run_fire = config.run_fire;
 
-    let view = GridReadView {
+    let view = CellGridReadView {
         cells: &grid_mut.back_buffer,
         width,
         height,
-        window_origin: grid_mut.window_origin,
-        buffer_head: grid_mut.buffer_head,
+        window_origin: grid_mut.spatial.window_origin,
+        buffer_head: grid_mut.spatial.buffer_head,
     };
 
-    let wake_buf = &grid_mut.wake_buffer;
-    let next_wake_buf = &grid_mut.next_wake_buffer;
+    let spatial_cells = &mut grid_mut.spatial.cells;
+    let wake_buf = &*grid_mut.wake_buffer;
+    let next_wake_buf = &*grid_mut.next_wake_buffer;
+    let back_buf = &*grid_mut.back_buffer;
 
-    // Rayon fold creates thread-local variables. Zero lock contention on the global channel.
-    let events: Vec<GridEvent> = grid_mut
-        .cells
+    // Strict 3-way zip locks the hardware prefetcher into a unified linear stride.
+    let events: Vec<GridEvent> = spatial_cells
         .par_iter_mut()
+        .zip(wake_buf.par_iter())
+        .zip(back_buf.par_iter())
         .enumerate()
         .fold(
             || (Vec::new(), SmallRng::from_rng(&mut rand::rng())),
-            |(mut local_events, mut rng), (idx, cell)| {
-                // Lock-Free O(1) Asleep Elimination
-                let wake_val = wake_buf[idx].load(Ordering::Relaxed);
+            |(mut local_events, mut rng), (idx, ((cell, wake_atomic), old_cell))| {
+                let wake_val = wake_atomic.load(Ordering::Relaxed);
                 if wake_val == 0 {
                     return (local_events, rng);
                 }
 
-                let buffer_pos = ActiveWorldGrid::index_to_pos(idx, width);
+                let buffer_pos = IVec2::new((idx as i32) % width, (idx as i32) / width);
                 let local_pos = IVec2::new(
                     (buffer_pos.x - view.buffer_head.x).rem_euclid(width),
                     (buffer_pos.y - view.buffer_head.y).rem_euclid(height),
                 );
-
                 let world_pos = local_pos + view.window_origin;
-                let old_cell = &view.cells[idx];
 
                 if run_granular && tick % 2 != 0 {
                     granular_sim::step_granular(cell, old_cell, view, world_pos, tick);

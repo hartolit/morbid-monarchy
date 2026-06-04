@@ -1,29 +1,13 @@
 use bevy::math::IVec2;
 
 use crate::engine::{
+    physics::materials::get_granular_repose,
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
         cell::{GranularMat, WorldCell},
-        grid::GridReadView,
+        grid::CellGridReadView,
     },
 };
-
-/// Returns the angle of repose for a given granular material.
-/// A lower value means the material spreads flatter (e.g., liquids/mud).
-/// A higher value means the material forms steeper piles (e.g., gravel/dirt).
-#[inline(always)]
-fn get_angle_of_repose(mat: GranularMat) -> u16 {
-    match mat {
-        GranularMat::GRANULAR_SAND => 2,
-        GranularMat::GRANULAR_SNOW => 3,
-        GranularMat::GRANULAR_GRAVEL => 4,
-        GranularMat::GRANULAR_DIRT => 4,
-        GranularMat::GRANULAR_MUD => 1,
-        GranularMat::GRANULAR_LIQUID_METAL => 0,
-        GranularMat::GRANULAR_CORRUPTION => 2,
-        _ => u16::MAX, // Non-granular or empty; will not flow
-    }
-}
 
 /// Calculates the exact volume of granular material to transfer between two cells.
 #[inline(always)]
@@ -64,12 +48,12 @@ fn calc_granular_transfer(
 #[inline(always)]
 fn get_preferred_destination(
     world_pos: IVec2,
-    view: GridReadView,
+    view: CellGridReadView,
     tick: u32,
 ) -> Option<(usize, IVec2)> {
     let (_, source_cell) = view.get_cell(world_pos)?;
     let source_mat = source_cell.granular_mat();
-    let repose = get_angle_of_repose(source_mat);
+    let repose = get_granular_repose(source_mat);
 
     if repose == u16::MAX || source_cell.granular_vol() == 0 {
         return None;
@@ -110,7 +94,11 @@ fn get_preferred_destination(
 
 /// Determines the best neighboring source that wishes to drop granular material here.
 #[inline(always)]
-fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Option<(usize, IVec2)> {
+fn get_preferred_source(
+    world_pos: IVec2,
+    view: CellGridReadView,
+    tick: u32,
+) -> Option<(usize, IVec2)> {
     let shuffled = ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, 0, 0);
 
     let mut best_source = None;
@@ -120,7 +108,7 @@ fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Opti
         let neighbor_pos = world_pos + dir;
 
         if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos) {
-            if get_angle_of_repose(neighbor_cell.granular_mat()) != u16::MAX {
+            if get_granular_repose(neighbor_cell.granular_mat()) != u16::MAX {
                 if let Some((_, dest_pos)) = get_preferred_destination(neighbor_pos, view, tick) {
                     if dest_pos == world_pos {
                         let (_, dest_cell) = view.get_cell(world_pos)?;
@@ -148,7 +136,7 @@ fn get_preferred_source(world_pos: IVec2, view: GridReadView, tick: u32) -> Opti
 pub fn step_granular(
     cell: &mut WorldCell,
     old_cell: &WorldCell,
-    view: GridReadView,
+    view: CellGridReadView,
     world_pos: IVec2,
     tick: u32,
 ) {

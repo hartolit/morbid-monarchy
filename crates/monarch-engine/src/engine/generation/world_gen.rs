@@ -1,10 +1,11 @@
 use crate::engine::world::{
     cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},
-    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, ChunkData, ChunkKey, ChunkTheme},
+    chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, CellChunk, ChunkMetadata, ChunkTheme},
 };
 
 use noise::{NoiseFn, OpenSimplex};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
+use spatial_lib::prelude::math::ChunkKey;
 
 pub struct WorldGenerator {
     pub seed: u32,
@@ -19,7 +20,7 @@ impl WorldGenerator {
         }
     }
 
-    pub fn generate_chunk(&self, key: ChunkKey) -> ChunkData {
+    pub fn generate_chunk(&self, key: ChunkKey) -> CellChunk {
         let mut cells = vec![WorldCell::default(); CHUNK_CELL_COUNT];
 
         let mut rng = StdRng::seed_from_u64(
@@ -39,11 +40,12 @@ impl WorldGenerator {
             }
         }
 
-        ChunkData {
-            last_simulated: 0.0,
-            theme: ChunkTheme::GRASS_PLAINS,
-            cells,
-            serialized_entities: Vec::new(),
+        CellChunk {
+            cells: cells.into_boxed_slice(),
+            metadata: ChunkMetadata {
+                last_simulated: 0.0,
+                theme: ChunkTheme::GRASS_PLAINS,
+            },
         }
     }
 
@@ -56,29 +58,23 @@ impl WorldGenerator {
             .get([world_x as f64 * global_scale, world_y as f64 * global_scale]);
         let normalized = (base_noise + 1.0) * 0.5;
 
-        // Base structural elevation
         let elevation = (normalized * 255.0).clamp(0.0, 255.0) as u16;
         cell.set_elevation(elevation);
         cell.set_variants(rng.random_range(0..WorldCell::MAX_VARIANTS));
 
         if elevation < 100 {
-            // Deep Ocean: Stone base, sand floor, heavy water column
             cell.set_terrain_mat(TerrainMat::TERRAIN_STONE);
             cell.set_granular_mat(GranularMat::GRANULAR_SAND);
             cell.set_granular_vol(2);
             cell.set_fluid_mat(FluidMat::FLUID_WATER);
             cell.set_fluid_vol(100 - elevation);
         } else if elevation < 120 {
-            // Coastlines / Shoals: Sandstone base, heavy granular sand
             cell.set_terrain_mat(TerrainMat::TERRAIN_SANDSTONE);
             cell.set_granular_mat(GranularMat::GRANULAR_SAND);
             cell.set_granular_vol(5);
         } else {
-            // Highlands: Dirt base, organic surface cover
             cell.set_terrain_mat(TerrainMat::TERRAIN_DIRT);
             cell.set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
-
-            // Randomize starting lifecycle to prevent massive simultaneous die-offs
             cell.set_surface_state(rng.random_range(0..10));
         }
 
