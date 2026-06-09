@@ -34,8 +34,8 @@ fn calculate_heights_at(
     let mat_surface = (word_0 >> 4u) & 0xFu;
     let elevation = f32((word_0 >> 20u) & 0xFFFu);
     let fluid_vol = f32(word_1 & 0x1FFu);
-    let granular_vol = f32((word_1 >> 9u) & 0x1FFu);
-    let surface_state = f32((word_1 >> 18u) & 0x3Fu);
+    let granular_vol = f32((word_1 >> 9u) & 0xFu);
+    let surface_state = f32((word_1 >> 13u) & 0x1FFu);
 
     // Compute stacked absolute heights
     let t_height = elevation * elevation_scale;
@@ -110,8 +110,8 @@ fn vertex(in: VertexInput) -> VertexOutput {
 
     // Decode Word 1 (Physics)
     let fluid_vol = f32(word_1 & 0x1FFu);
-    let granular_vol = f32((word_1 >> 9u) & 0x1FFu);
-    let surface_state = f32((word_1 >> 18u) & 0x3Fu);
+    let granular_vol = f32((word_1 >> 9u) & 0xFu);
+    let surface_state = f32((word_1 >> 13u) & 0x1FFu);
 
     // Absolute Stacked Heights
     let t_height = elevation * scale;

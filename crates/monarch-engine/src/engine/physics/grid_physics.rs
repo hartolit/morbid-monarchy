@@ -254,8 +254,10 @@ impl<'a> GridPhysicsApi<'a> {
 
         let structural_allowance =
             ((ceiling_height - total_height) / self.global_config.elevation_scale).floor() as u16;
-        let mathematical_allowance =
-            WorldCell::MAX_GRANULAR_VOL.saturating_sub(cell.granular_vol());
+
+        let mathematical_allowance = ((WorldCell::MAX_ELEVATION as u16)
+            .saturating_sub(cell.elevation()))
+            + WorldCell::MAX_GRANULAR_VOL.saturating_sub(cell.granular_vol());
 
         let exact_deposit = attempt_amount
             .min(mathematical_allowance)

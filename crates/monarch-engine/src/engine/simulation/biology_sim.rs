@@ -71,13 +71,16 @@ pub fn step_biology<R: Rng + ?Sized>(
             cell.set_surface_state(state + 1);
         } else {
             // Decay Phase: The plant dies off.
-            // Emergent physics: Dead matter drops 1 volume of Granular Dirt,
-            // physically raising the terrain over centuries of biological cycles.
             cell.set_surface_mat(SurfaceMat::EMPTY);
             cell.set_surface_state(0);
 
-            // Only drop dirt if there's room in the volume limit
-            if old_cell.granular_vol() < WorldCell::MAX_GRANULAR_VOL {
+            // Removed the strict MAX_GRANULAR_VOL restriction to allow continuous bio-elevation buildup.
+            let total_capacity = ((WorldCell::MAX_ELEVATION as u32)
+                .saturating_sub(old_cell.elevation() as u32))
+                + ((WorldCell::MAX_GRANULAR_VOL as u32)
+                    .saturating_sub(old_cell.granular_vol() as u32));
+
+            if total_capacity > 0 {
                 if old_cell.granular_mat() == GranularMat::EMPTY
                     || old_cell.granular_mat() == GranularMat::GRANULAR_DIRT
                 {

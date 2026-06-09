@@ -56,6 +56,18 @@ impl GranularMat {
     pub const GRANULAR_SNOW: Self = Self(5);
     pub const GRANULAR_LIQUID_METAL: Self = Self(6);
     pub const GRANULAR_CORRUPTION: Self = Self(7);
+
+    /// Geologically maps a loose granular material to its solid bedrock equivalent under high compression.
+    pub fn to_terrain(self) -> TerrainMat {
+        match self {
+            Self::GRANULAR_SAND => TerrainMat::TERRAIN_SANDSTONE,
+            Self::GRANULAR_SNOW => TerrainMat::TERRAIN_ICE,
+            Self::GRANULAR_DIRT | Self::GRANULAR_MUD => TerrainMat::TERRAIN_DIRT,
+            Self::GRANULAR_GRAVEL | Self::GRANULAR_LIQUID_METAL => TerrainMat::TERRAIN_STONE,
+            Self::GRANULAR_CORRUPTION => TerrainMat::TERRAIN_CORRUPTION,
+            _ => TerrainMat::TERRAIN_STONE,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
@@ -126,17 +138,17 @@ impl WorldCell {
     const FLUID_VOL_SHIFT: u64 = 32;
     const FLUID_VOL_MASK: u64 = 0x1FF;
 
-    // Granular Volume: 9 bits (Bits 41-49)
+    // Granular Volume: 4 bits (Bits 41-44)
     const GRANULAR_VOL_SHIFT: u64 = 41;
-    const GRANULAR_VOL_MASK: u64 = 0x1FF;
+    const GRANULAR_VOL_MASK: u64 = 0xF;
 
-    // Surface State: 6 bits (Bits 50-55)
-    const SURFACE_STATE_SHIFT: u64 = 50;
-    const SURFACE_STATE_MASK: u64 = 0x3F;
+    // Surface State: 9 bits (Bits 45-53)
+    const SURFACE_STATE_SHIFT: u64 = 45;
+    const SURFACE_STATE_MASK: u64 = 0x1FF;
 
-    // Terrain State: 4 bits (Bits 56-59)
-    const TERRAIN_STATE_SHIFT: u64 = 56;
-    const TERRAIN_STATE_MASK: u64 = 0xF;
+    // Terrain State: 6 bits (Bits 54-59)
+    const TERRAIN_STATE_SHIFT: u64 = 54;
+    const TERRAIN_STATE_MASK: u64 = 0x3F;
 
     // Compass / Momentum: 4 bits (Bits 60-63)
     const COMPASS_SHIFT: u64 = 60;
@@ -148,9 +160,9 @@ impl WorldCell {
 
     pub const MAX_ELEVATION: u32 = Self::ELEVATION_MASK as u32; // 4,095
     pub const MAX_FLUID_VOL: u16 = Self::FLUID_VOL_MASK as u16; // 511
-    pub const MAX_GRANULAR_VOL: u16 = Self::GRANULAR_VOL_MASK as u16; // 511
-    pub const MAX_SURFACE_STATE: u8 = Self::SURFACE_STATE_MASK as u8; // 63
-    pub const MAX_TERRAIN_STATE: u8 = Self::TERRAIN_STATE_MASK as u8; // 15
+    pub const MAX_GRANULAR_VOL: u16 = Self::GRANULAR_VOL_MASK as u16; // 15
+    pub const MAX_SURFACE_STATE: u16 = Self::SURFACE_STATE_MASK as u16; // 511
+    pub const MAX_TERRAIN_STATE: u8 = Self::TERRAIN_STATE_MASK as u8; // 63
     pub const MAX_VARIANTS: u8 = Self::VARIANTS_MASK as u8; // 31
 
     // =======================================================================
@@ -234,24 +246,46 @@ impl WorldCell {
             | (((val as u64) & Self::FLUID_VOL_MASK) << Self::FLUID_VOL_SHIFT);
     }
 
-    // --- Granular Volume ---
+    // --- Granular Volume & Compression ---
     #[inline(always)]
     pub fn granular_vol(&self) -> u16 {
         ((self.0 >> Self::GRANULAR_VOL_SHIFT) & Self::GRANULAR_VOL_MASK) as u16
     }
+
     #[inline(always)]
     pub fn set_granular_vol(&mut self, val: u16) {
-        self.0 = (self.0 & !(Self::GRANULAR_VOL_MASK << Self::GRANULAR_VOL_SHIFT))
-            | (((val as u64) & Self::GRANULAR_VOL_MASK) << Self::GRANULAR_VOL_SHIFT);
+        if val > Self::MAX_GRANULAR_VOL {
+            let excess = val - Self::MAX_GRANULAR_VOL;
+            let current_elev = self.elevation();
+
+            // Transmute the bedrock if we are compressing granular matter into a void
+            if self.terrain_mat() == TerrainMat::EMPTY {
+                self.set_terrain_mat(self.granular_mat().to_terrain());
+            }
+
+            // Physically compress the overflow directly into the baseline elevation.
+            self.set_elevation(
+                current_elev
+                    .saturating_add(excess)
+                    .min(Self::MAX_ELEVATION as u16),
+            );
+
+            self.0 = (self.0 & !(Self::GRANULAR_VOL_MASK << Self::GRANULAR_VOL_SHIFT))
+                | (((Self::MAX_GRANULAR_VOL as u64) & Self::GRANULAR_VOL_MASK)
+                    << Self::GRANULAR_VOL_SHIFT);
+        } else {
+            self.0 = (self.0 & !(Self::GRANULAR_VOL_MASK << Self::GRANULAR_VOL_SHIFT))
+                | (((val as u64) & Self::GRANULAR_VOL_MASK) << Self::GRANULAR_VOL_SHIFT);
+        }
     }
 
     // --- Surface State ---
     #[inline(always)]
-    pub fn surface_state(&self) -> u8 {
-        ((self.0 >> Self::SURFACE_STATE_SHIFT) & Self::SURFACE_STATE_MASK) as u8
+    pub fn surface_state(&self) -> u16 {
+        ((self.0 >> Self::SURFACE_STATE_SHIFT) & Self::SURFACE_STATE_MASK) as u16
     }
     #[inline(always)]
-    pub fn set_surface_state(&mut self, val: u8) {
+    pub fn set_surface_state(&mut self, val: u16) {
         self.0 = (self.0 & !(Self::SURFACE_STATE_MASK << Self::SURFACE_STATE_SHIFT))
             | (((val as u64) & Self::SURFACE_STATE_MASK) << Self::SURFACE_STATE_SHIFT);
     }

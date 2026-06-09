@@ -298,13 +298,12 @@ pub fn handle_brush_input(
                         } else {
                             0
                         };
-                        let new_vol = old_vol
-                            .saturating_add(settings.strength as u16)
-                            .min(WorldCell::MAX_GRANULAR_VOL);
 
-                        if cell.granular_mat() != GranularMat::GRANULAR_SAND
-                            || cell.granular_vol() != new_vol
-                        {
+                        let new_vol = old_vol.saturating_add(settings.strength as u16).min(
+                            WorldCell::MAX_ELEVATION as u16 + WorldCell::MAX_GRANULAR_VOL as u16,
+                        );
+
+                        if cell.granular_mat() != GranularMat::GRANULAR_SAND || old_vol != new_vol {
                             cell.set_granular_mat(GranularMat::GRANULAR_SAND);
                             cell.set_granular_vol(new_vol);
                             cell_was_mutated = true;
