@@ -16,6 +16,7 @@ use spatial_lib::prelude::{
 use crate::engine::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
     world::{
+        cell::WorldCell,
         chunk::{CHUNK_SIZE, ChunkMetadata},
         grid::ActiveWorldGrid,
     },
@@ -36,7 +37,7 @@ pub const CACHE_CHUNK_SIZE: usize = (((DEFAULT_ACTIVE_RADIUS_X * 2)
 
 #[derive(Resource)]
 pub struct WorldStore {
-    pub inner: ChunkStore<crate::engine::world::cell::WorldCell, ChunkMetadata>,
+    pub inner: ChunkStore<WorldCell, ChunkMetadata>,
 }
 
 impl Default for WorldStore {
