@@ -42,10 +42,11 @@ fn calculate_heights_at(
     let g_height = t_height + (granular_vol * elevation_scale);
     let f_height = g_height + (fluid_vol * elevation_scale);
 
-    var s_height = f_height;
+    // Anchor Surface directly to the Granular crust, bypassing Fluid displacement
+    var s_height = g_height;
     if mat_surface != 0u {
         // Enforce a minimum thickness of 1.0 so empty states still render a slim base
-        s_height = f_height + max(1.0, surface_state) * elevation_scale;
+        s_height = g_height + max(1.0, surface_state) * elevation_scale;
     }
 
     return vec4<f32>(t_height, g_height, f_height, s_height);
@@ -117,7 +118,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let t_height = elevation * scale;
     let g_height = t_height + (granular_vol * scale);
     let f_height = g_height + (fluid_vol * scale);
-    let s_height = f_height + max(1.0, surface_state) * scale;
+    let s_height = g_height + max(1.0, surface_state) * scale; // Anchored to Ground
 
     var local_pos = vec3<f32>(0.0, 0.0, 0.0);
     var normal = vec3<f32>(0.0, 1.0, 0.0);
@@ -194,7 +195,8 @@ fn vertex(in: VertexInput) -> VertexOutput {
         }
         case 16u, 17u, 18u, 19u: { // Walls
             mat_lookup = mat_surface + 96u;
-            let n_floor = max(neighbor_h.w, f_height);
+            // Floor is now bound to the local ground crust, not the fluid height
+            let n_floor = max(neighbor_h.w, g_height);
             if mat_surface != 0u && s_height > n_floor {
                 local_pos = get_quad_vertex(vertex_within_face, n_floor, s_height, normal);
                 is_rendered = true;

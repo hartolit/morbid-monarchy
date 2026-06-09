@@ -17,27 +17,15 @@ use rayon::iter::{
 };
 use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::SurfaceMat;
+use crate::engine::world::cell::{FluidMat, SurfaceMat, TerrainMat};
 use crate::prelude::ActiveWorldGrid;
 use crate::prelude::CellGridReadView;
 
 pub enum GridEvent {
-    SpawnTerrainParticle {
-        pos: IVec2,
-        material: crate::engine::world::cell::TerrainMat,
-    },
-    SpawnFluidParticle {
-        pos: IVec2,
-        material: crate::engine::world::cell::FluidMat,
-    },
-    ApplyDamage {
-        pos: IVec2,
-        amount: u32,
-    },
-    PlaySound {
-        pos: IVec2,
-        sound_id: u8,
-    },
+    SpawnTerrainParticle { pos: IVec2, material: TerrainMat },
+    SpawnFluidParticle { pos: IVec2, material: FluidMat },
+    ApplyDamage { pos: IVec2, amount: u32 },
+    PlaySound { pos: IVec2, sound_id: u8 },
 }
 
 #[derive(Resource)]

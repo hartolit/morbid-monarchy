@@ -21,7 +21,7 @@ pub struct GlobalPhysicsConfig {
 impl Default for GlobalPhysicsConfig {
     fn default() -> Self {
         Self {
-            gravity: Vec3::new(0.0, -24.0, 0.0),
+            gravity: Vec3::new(0.0, -32.0, 0.0),
             elevation_scale: 0.50,
             epsilon_distance: 0.000001,
             half_cell_offset: 0.5,

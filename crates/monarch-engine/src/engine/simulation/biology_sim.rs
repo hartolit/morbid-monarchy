@@ -9,6 +9,9 @@ use crate::engine::{
     },
 };
 
+// The absolute physical limit (in structural volume units) that water can be wicked upwards by roots.
+const MAX_CAPILLARY_LIFT: u32 = 2;
+
 #[inline(always)]
 pub fn step_biology<R: Rng + ?Sized>(
     cell: &mut WorldCell,
@@ -18,19 +21,15 @@ pub fn step_biology<R: Rng + ?Sized>(
     rng: &mut R,
     _local_events: &mut Vec<GridEvent>,
 ) {
-    // Foliage cannot grow underwater or in magma
-    if old_cell.fluid_mat() != FluidMat::EMPTY {
-        return;
-    }
-
     let surface = old_cell.surface_mat();
+    let fluid = old_cell.fluid_mat();
 
-    // Skip if the surface is occupied by an inorganic element (Fire, Stone Wall, etc.)
+    // Skip if the surface is occupied by an inorganic element
     if surface != SurfaceMat::EMPTY && surface != SurfaceMat::SURFACE_FOLIAGE {
         return;
     }
 
-    // Determine if the structural substrate can support plant life
+    // Determine if the structural substrate is fertile
     let is_fertile_ground = old_cell.terrain_mat() == TerrainMat::TERRAIN_DIRT
         || old_cell.granular_mat() == GranularMat::GRANULAR_DIRT
         || old_cell.granular_mat() == GranularMat::GRANULAR_MUD;
@@ -39,54 +38,75 @@ pub fn step_biology<R: Rng + ?Sized>(
         return;
     }
 
-    // Scan neighbors for biological wavefronts
-    let mut fertile_neighbors = 0;
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let n_pos = world_pos + IVec2::new(dx, dy);
+    let my_crust_height = old_cell.elevation() as u32 + old_cell.granular_vol() as u32;
 
-            if let Some((_, n_cell)) = view.get_cell(n_pos) {
-                if n_cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE
-                    && n_cell.surface_state() >= 2
+    // Evaluate physical constraints: Base hydration and Drowning bounds
+    let mut is_hydrated =
+        old_cell.granular_mat() == GranularMat::GRANULAR_MUD || fluid == FluidMat::FLUID_WATER;
+    let is_drowning = fluid != FluidMat::EMPTY && old_cell.fluid_vol() > 15;
+
+    let mut fertile_neighbors = 0;
+
+    // Restrict propagation to a Von Neumann (cardinal) neighborhood.
+    // This dramatically reduces CPU cycles and prevents unnatural geometric diagonal spreading.
+    let search_dirs = [
+        IVec2::new(0, 1),
+        IVec2::new(1, 0),
+        IVec2::new(0, -1),
+        IVec2::new(-1, 0),
+    ];
+
+    for &dir in &search_dirs {
+        let n_pos = world_pos + dir;
+
+        if let Some((_, n_cell)) = view.get_cell(n_pos) {
+            let n_crust_height = n_cell.elevation() as u32 + n_cell.granular_vol() as u32;
+            let vertical_delta = my_crust_height.abs_diff(n_crust_height);
+
+            // Biological propagation requires roughly even terrain
+            if surface == SurfaceMat::EMPTY
+                && n_cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE
+                && n_cell.surface_state() >= 2
+                && vertical_delta <= 1
+            {
+                fertile_neighbors += 1;
+            }
+
+            // Hydration requires the fluid to be within the capillary lift limit
+            if !is_hydrated && vertical_delta <= MAX_CAPILLARY_LIFT {
+                if n_cell.fluid_mat() == FluidMat::FLUID_WATER
+                    || n_cell.fluid_mat() == FluidMat::FLUID_BLOOD
                 {
-                    fertile_neighbors += 1;
+                    is_hydrated = true;
                 }
             }
         }
     }
 
     if surface == SurfaceMat::EMPTY {
-        // Sprouting Phase: Seed from nearby neighbors or rare spontaneous generation
-        if fertile_neighbors > 0 || rng.random_ratio(1, 1000) {
-            cell.set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
-            cell.set_surface_state(0);
+        // Sprouting Phase: Requires fertility, hydration, and non-drowning conditions.
+        // The extreme stochastic friction (1 in 12 chance per tick per neighbor) prevents solid square blocks.
+        if is_fertile_ground && is_hydrated && !is_drowning {
+            if (fertile_neighbors > 0 && rng.random_ratio(1, 12)) || rng.random_ratio(1, 5000) {
+                cell.set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
+                cell.set_surface_state(1);
+            }
         }
     } else if surface == SurfaceMat::SURFACE_FOLIAGE {
-        // Lifecycle Phase: Advance the biological clock
         let state = old_cell.surface_state();
-        if state < 10 {
-            cell.set_surface_state(state + 1);
+
+        // Decay Phase: The organism fails its vertical or lateral environmental checks
+        if is_drowning || !is_hydrated {
+            if state <= 1 {
+                cell.set_surface_mat(SurfaceMat::EMPTY);
+                cell.set_surface_state(0);
+            } else {
+                cell.set_surface_state(state - 1);
+            }
         } else {
-            // Decay Phase: The plant dies off.
-            cell.set_surface_mat(SurfaceMat::EMPTY);
-            cell.set_surface_state(0);
-
-            // Removed the strict MAX_GRANULAR_VOL restriction to allow continuous bio-elevation buildup.
-            let total_capacity = ((WorldCell::MAX_ELEVATION as u32)
-                .saturating_sub(old_cell.elevation() as u32))
-                + ((WorldCell::MAX_GRANULAR_VOL as u32)
-                    .saturating_sub(old_cell.granular_vol() as u32));
-
-            if total_capacity > 0 {
-                if old_cell.granular_mat() == GranularMat::EMPTY
-                    || old_cell.granular_mat() == GranularMat::GRANULAR_DIRT
-                {
-                    cell.set_granular_mat(GranularMat::GRANULAR_DIRT);
-                    cell.set_granular_vol(old_cell.granular_vol().saturating_add(1));
-                }
+            // Lifecycle Phase: Advance the biological volume up to the mechanical ceiling
+            if state < 10 && rng.random_ratio(1, 6) {
+                cell.set_surface_state(state + 1);
             }
         }
     }
