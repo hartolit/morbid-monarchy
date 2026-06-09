@@ -1,6 +1,5 @@
-// --- crates/monarch-engine/src/engine/entities/observer.rs ---
 use crate::engine::{
-    entities::EntityPhysicsConfig, physics::grid_physics::GridPhysicsApi,
+    entities::GlobalPhysicsConfig, physics::grid_physics::GridPhysicsApi,
     world::grid::ActiveWorldGrid,
 };
 use bevy::prelude::*;
@@ -45,7 +44,7 @@ impl Default for KinematicObserver {
             velocity: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
-            is_noclip: true, // Default to developmental zero-resistance flight
+            is_noclip: true,
             is_grid_attached: true,
         }
     }
@@ -66,17 +65,16 @@ pub fn resolve_observer_kinematics(
     mut query: Query<(&mut Transform, &mut KinematicObserver, &mut ObserverIntent)>,
     mut grid: ResMut<ActiveWorldGrid>,
     time: Res<Time>,
-    config: Res<EntityPhysicsConfig>,
+    global_config: Res<GlobalPhysicsConfig>,
     tuning: Res<ObserverConfig>,
 ) {
     let delta_time = time.delta_secs();
-    let physics = GridPhysicsApi::new(&mut grid, &config);
+    let physics = GridPhysicsApi::new(&mut grid, &global_config);
 
     for (mut transform, mut observer, mut intent) in query.iter_mut() {
         if intent.toggle_noclip {
             observer.is_noclip = !observer.is_noclip;
         }
-
         if intent.toggle_grid_attachment {
             observer.is_grid_attached = !observer.is_grid_attached;
         }
@@ -90,7 +88,6 @@ pub fn resolve_observer_kinematics(
         intent.toggle_noclip = false;
         intent.toggle_grid_attachment = false;
 
-        // The root transform is mathematically bound to horizontal orientation
         let horizontal_rotation = Quat::from_rotation_y(observer.yaw);
         transform.rotation = horizontal_rotation;
 
@@ -102,8 +99,6 @@ pub fn resolve_observer_kinematics(
         };
 
         if observer.is_noclip {
-            // Forward and Right vectors are strictly derived from the XZ plane.
-            // Pitch is ignored to prevent vertical translation bleed.
             let forward = (horizontal_rotation * Vec3::NEG_Z).normalize_or_zero();
             let right = (horizontal_rotation * Vec3::X).normalize_or_zero();
             let up = Vec3::Y;
@@ -130,7 +125,6 @@ pub fn resolve_observer_kinematics(
             observer.velocity = wish_dir.normalize_or_zero() * active_speed;
             transform.translation += observer.velocity * delta_time;
         } else {
-            // Strictly grounded horizontal orientation
             let forward = transform.forward().normalize_or_zero();
             let right = transform.right().normalize_or_zero();
 
@@ -151,7 +145,7 @@ pub fn resolve_observer_kinematics(
 
             observer.velocity.x = grounded_dir.x * active_speed;
             observer.velocity.z = grounded_dir.z * active_speed;
-            observer.velocity.y += config.gravity.y * delta_time;
+            observer.velocity.y += global_config.gravity.y * delta_time;
 
             if intent.is_jumping && observer.velocity.y <= 0.0 {
                 observer.velocity.y = tuning.jump_impulse;

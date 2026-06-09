@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::{
     engine::{
         entities::{
-            EntityPhysicsConfig,
+            GlobalPhysicsConfig,
             observer::{ObserverConfig, resolve_observer_kinematics},
             spherical::simulate_rigid_sphere_kinematics,
         },
@@ -29,7 +29,7 @@ impl Plugin for MonarchEnginePlugin {
             .init_resource::<WorldStore>()
             .init_resource::<SimulationEventQueue>()
             .init_resource::<SimulationConfig>()
-            .init_resource::<EntityPhysicsConfig>()
+            .init_resource::<GlobalPhysicsConfig>()
             .init_resource::<ObserverConfig>()
             .insert_resource(ActiveWorldGrid::default())
             .add_message::<ChunkLoadRequest>()
