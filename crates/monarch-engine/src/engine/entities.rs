@@ -64,7 +64,7 @@ impl Default for DeformationProfile {
             min_deformation_energy: 250.0,
             energy_to_deformation_scale: 0.001,
             cost_displace_granular: 2.0,
-            cost_crush_terrain: 4.0,
+            cost_crush_terrain: 3.0,
         }
     }
 }
