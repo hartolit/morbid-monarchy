@@ -1,4 +1,4 @@
-use crate::engine::world::{
+use crate::core::world::{
     cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},
     chunk::{CHUNK_CELL_COUNT, CHUNK_SIZE, CellChunk, ChunkMetadata, ChunkTheme},
 };

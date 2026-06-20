@@ -1,6 +1,6 @@
 use bevy::math::IVec2;
 
-use crate::engine::{
+use crate::core::{
     physics::materials::get_granular_repose,
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{

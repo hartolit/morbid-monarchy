@@ -1,7 +1,7 @@
 use bevy::math::IVec2;
 use rand::{Rng, RngExt};
 
-use crate::engine::{
+use crate::core::{
     physics::materials::is_combustible,
     simulation::GridEvent,
     world::{

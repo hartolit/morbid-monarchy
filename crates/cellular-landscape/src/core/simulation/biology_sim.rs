@@ -1,7 +1,7 @@
 use bevy::math::IVec2;
 use rand::{Rng, RngExt};
 
-use crate::engine::{
+use crate::core::{
     simulation::GridEvent,
     world::{
         cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},

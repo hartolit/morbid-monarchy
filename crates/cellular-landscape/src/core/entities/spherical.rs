@@ -8,7 +8,7 @@ use bevy::{
     transform::components::Transform,
 };
 
-use crate::engine::{
+use crate::core::{
     entities::{DeformationProfile, GlobalPhysicsConfig, KinematicProfile},
     physics::grid_physics::GridPhysicsApi,
     utils::spatial_hash,

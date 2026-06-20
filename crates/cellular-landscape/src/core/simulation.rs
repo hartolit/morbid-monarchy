@@ -17,7 +17,7 @@ use rayon::iter::{
 };
 use std::sync::atomic::Ordering;
 
-use crate::engine::world::cell::{FluidMat, SurfaceMat, TerrainMat};
+use crate::core::world::cell::{FluidMat, SurfaceMat, TerrainMat};
 use crate::prelude::ActiveWorldGrid;
 use crate::prelude::CellGridReadView;
 

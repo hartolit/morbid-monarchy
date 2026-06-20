@@ -2,7 +2,7 @@ use bevy::{ecs::resource::Resource, math::IVec2};
 use spatial_lib::grid::{GridReadView, ToroidalGrid};
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::engine::world::{
+use crate::core::world::{
     DEFAULT_ACTIVE_RADIUS_X, DEFAULT_ACTIVE_RADIUS_Y, cell::WorldCell, chunk::CHUNK_SIZE,
 };
 

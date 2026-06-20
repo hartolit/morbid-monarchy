@@ -1,4 +1,4 @@
-use crate::engine::{
+use crate::core::{
     entities::GlobalPhysicsConfig, physics::grid_physics::GridPhysicsApi,
     world::grid::ActiveWorldGrid,
 };

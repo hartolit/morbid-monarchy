@@ -1,11 +1,11 @@
-use crate::engine::world::cell::CompassFlags;
+use crate::core::world::cell::CompassFlags;
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
 
 #[derive(Clone, Copy)]
 pub enum FlowPattern {
-    Omni,     // All 8 directions (Liquids, Gases)
-    Cardinal, // 4 directions (Magma, Slimes)
+    Omni,
+    Cardinal,
 }
 
 pub struct ShuffledDirs {

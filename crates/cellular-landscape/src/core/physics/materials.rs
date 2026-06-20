@@ -1,4 +1,4 @@
-use crate::engine::world::cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat};
+use crate::core::world::cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat};
 
 #[inline(always)]
 pub fn get_granular_repose(material: GranularMat) -> u16 {

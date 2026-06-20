@@ -1,4 +1,4 @@
-use crate::engine::{
+use crate::core::{
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
     world::{
         cell::{CompassFlags, FluidMat, WorldCell},

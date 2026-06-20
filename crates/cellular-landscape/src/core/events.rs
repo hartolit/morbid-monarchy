@@ -1,4 +1,4 @@
-use crate::engine::world::chunk::CellChunk;
+use crate::core::world::chunk::CellChunk;
 use bevy::ecs::message::Message;
 use spatial_lib::prelude::math::ChunkKey;
 

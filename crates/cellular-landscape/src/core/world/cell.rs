@@ -1,9 +1,7 @@
 use bitcode::{Decode, Encode};
 use bytemuck::{Pod, Zeroable};
 
-// ---------------------------------------------------------------------------
 // Material Definitions
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(transparent)]
@@ -93,18 +91,14 @@ impl CompassFlags {
     pub const FACING_W: u8 = 1 << 3;
 }
 
-// ---------------------------------------------------------------------------
 // WorldCell Core Data Structure
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct WorldCell(pub u64);
 
 impl WorldCell {
-    // =======================================================================
     // WORD 0: Geometry & Visuals (Lower 32 bits)
-    // =======================================================================
 
     // Terrain Material: 4 bits (Bits 0-3)
     const MAT_TERRAIN_SHIFT: u64 = 0;
@@ -130,9 +124,7 @@ impl WorldCell {
     const ELEVATION_SHIFT: u64 = 20;
     const ELEVATION_MASK: u64 = 0xFFF;
 
-    // =======================================================================
     // WORD 1: Physics & State (Upper 32 bits)
-    // =======================================================================
 
     // Fluid Volume: 9 bits (Bits 32-40)
     const FLUID_VOL_SHIFT: u64 = 32;
@@ -154,9 +146,7 @@ impl WorldCell {
     const COMPASS_SHIFT: u64 = 60;
     const COMPASS_MASK: u64 = 0xF;
 
-    // =======================================================================
     // EXPOSED MAX VALUES
-    // =======================================================================
 
     pub const MAX_ELEVATION: u32 = Self::ELEVATION_MASK as u32; // 4,095
     pub const MAX_FLUID_VOL: u16 = Self::FLUID_VOL_MASK as u16; // 511
@@ -165,11 +155,9 @@ impl WorldCell {
     pub const MAX_TERRAIN_STATE: u8 = Self::TERRAIN_STATE_MASK as u8; // 63
     pub const MAX_VARIANTS: u8 = Self::VARIANTS_MASK as u8; // 31
 
-    // =======================================================================
     // GETTERS & SETTERS
-    // =======================================================================
 
-    // --- Terrain Mat ---
+    // Terrain Mat
     #[inline(always)]
     pub fn terrain_mat(&self) -> TerrainMat {
         TerrainMat(((self.0 >> Self::MAT_TERRAIN_SHIFT) & Self::MAT_TERRAIN_MASK) as u8)
@@ -180,7 +168,7 @@ impl WorldCell {
             | (((mat.0 as u64) & Self::MAT_TERRAIN_MASK) << Self::MAT_TERRAIN_SHIFT);
     }
 
-    // --- Surface Mat ---
+    // Surface Mat
     #[inline(always)]
     pub fn surface_mat(&self) -> SurfaceMat {
         SurfaceMat(((self.0 >> Self::MAT_SURFACE_SHIFT) & Self::MAT_SURFACE_MASK) as u8)
@@ -191,7 +179,7 @@ impl WorldCell {
             | (((mat.0 as u64) & Self::MAT_SURFACE_MASK) << Self::MAT_SURFACE_SHIFT);
     }
 
-    // --- Granular Mat ---
+    // Granular Mat
     #[inline(always)]
     pub fn granular_mat(&self) -> GranularMat {
         GranularMat(((self.0 >> Self::MAT_GRANULAR_SHIFT) & Self::MAT_GRANULAR_MASK) as u8)
@@ -202,7 +190,7 @@ impl WorldCell {
             | (((mat.0 as u64) & Self::MAT_GRANULAR_MASK) << Self::MAT_GRANULAR_SHIFT);
     }
 
-    // --- Fluid Mat ---
+    // Fluid Mat
     #[inline(always)]
     pub fn fluid_mat(&self) -> FluidMat {
         FluidMat(((self.0 >> Self::MAT_FLUID_SHIFT) & Self::MAT_FLUID_MASK) as u8)
@@ -213,7 +201,7 @@ impl WorldCell {
             | (((mat.0 as u64) & Self::MAT_FLUID_MASK) << Self::MAT_FLUID_SHIFT);
     }
 
-    // --- Variants ---
+    // Variants
     #[inline(always)]
     pub fn variants(&self) -> u8 {
         ((self.0 >> Self::VARIANTS_SHIFT) & Self::VARIANTS_MASK) as u8
@@ -224,7 +212,7 @@ impl WorldCell {
             | (((val as u64) & Self::VARIANTS_MASK) << Self::VARIANTS_SHIFT);
     }
 
-    // --- Elevation ---
+    // Elevation
     #[inline(always)]
     pub fn elevation(&self) -> u16 {
         ((self.0 >> Self::ELEVATION_SHIFT) & Self::ELEVATION_MASK) as u16
@@ -235,7 +223,7 @@ impl WorldCell {
             | (((val as u64) & Self::ELEVATION_MASK) << Self::ELEVATION_SHIFT);
     }
 
-    // --- Fluid Volume ---
+    // Fluid Volume
     #[inline(always)]
     pub fn fluid_vol(&self) -> u16 {
         ((self.0 >> Self::FLUID_VOL_SHIFT) & Self::FLUID_VOL_MASK) as u16
@@ -246,7 +234,7 @@ impl WorldCell {
             | (((val as u64) & Self::FLUID_VOL_MASK) << Self::FLUID_VOL_SHIFT);
     }
 
-    // --- Granular Volume & Compression ---
+    // Granular Volume & Compression
     #[inline(always)]
     pub fn granular_vol(&self) -> u16 {
         ((self.0 >> Self::GRANULAR_VOL_SHIFT) & Self::GRANULAR_VOL_MASK) as u16
@@ -279,7 +267,7 @@ impl WorldCell {
         }
     }
 
-    // --- Surface State ---
+    // Surface State
     #[inline(always)]
     pub fn surface_state(&self) -> u16 {
         ((self.0 >> Self::SURFACE_STATE_SHIFT) & Self::SURFACE_STATE_MASK) as u16
@@ -290,7 +278,7 @@ impl WorldCell {
             | (((val as u64) & Self::SURFACE_STATE_MASK) << Self::SURFACE_STATE_SHIFT);
     }
 
-    // --- Terrain State ---
+    // Terrain State
     #[inline(always)]
     pub fn terrain_state(&self) -> u8 {
         ((self.0 >> Self::TERRAIN_STATE_SHIFT) & Self::TERRAIN_STATE_MASK) as u8
@@ -301,7 +289,7 @@ impl WorldCell {
             | (((val as u64) & Self::TERRAIN_STATE_MASK) << Self::TERRAIN_STATE_SHIFT);
     }
 
-    // --- Compass / Momentum ---
+    // Compass / Momentum
     #[inline(always)]
     pub fn compass(&self) -> u8 {
         ((self.0 >> Self::COMPASS_SHIFT) & Self::COMPASS_MASK) as u8

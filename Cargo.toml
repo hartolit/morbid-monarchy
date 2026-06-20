@@ -3,6 +3,7 @@ members = [
     "crates/morbid-app",
     "crates/monarch-engine",
     "crates/spatial-lib",
+    "crates/cellular-landscape",
 ]
 resolver = "2"
 
@@ -23,3 +24,4 @@ glam = "0.30.7"
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
 spatial-lib = { path = "crates/spatial-lib" }
+cellular-landscape = { path = "crates/cellular-landscape" }

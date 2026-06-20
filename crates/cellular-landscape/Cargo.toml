@@ -1,5 +1,5 @@
 [package]
-name = "monarch-engine"
+name = "cellular-landscape"
 version = "0.1.0"
 edition = "2024"
 
@@ -14,4 +14,3 @@ bytemuck.workspace = true
 rayon.workspace = true
 flume.workspace = true
 spatial-lib.workspace = true
-cellular-landscape.workspace = true

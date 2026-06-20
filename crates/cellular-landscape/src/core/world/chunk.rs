@@ -1,7 +1,7 @@
 use bitcode::{Decode, Encode};
 use spatial_lib::chunk::Chunk;
 
-use crate::engine::world::cell::WorldCell;
+use crate::core::world::cell::WorldCell;
 
 pub const CHUNK_SIZE: usize = 64;
 pub const CHUNK_CELL_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE;

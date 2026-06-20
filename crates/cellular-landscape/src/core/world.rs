@@ -13,7 +13,7 @@ use spatial_lib::prelude::{
     math::ChunkKey,
 };
 
-use crate::engine::{
+use crate::core::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
     world::{
         cell::WorldCell,

@@ -1,4 +1,4 @@
-use crate::engine::{
+use crate::core::{
     entities::GlobalPhysicsConfig,
     world::{
         cell::{GranularMat, SurfaceMat, WorldCell},
