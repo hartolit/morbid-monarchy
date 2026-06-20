@@ -1,6 +1,7 @@
 use bevy::app::{App, Plugin};
 use cellular_landscape::CellularLandscapePlugin;
 
+pub mod engine;
 pub mod prelude;
 
 pub struct MonarchEnginePlugin;

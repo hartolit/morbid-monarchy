@@ -2,9 +2,9 @@ use bevy::{
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
-use monarch_engine::prelude::{
-    observer::{KinematicObserver, ObserverConfig, ObserverIntent},
-    *,
+use monarch_engine::{
+    engine::entities::observer::{KinematicObserver, ObserverConfig, ObserverIntent},
+    prelude::*,
 };
 
 #[derive(Component)]

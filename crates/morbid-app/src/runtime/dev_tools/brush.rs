@@ -1,6 +1,12 @@
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
-use monarch_engine::prelude::{spherical::DynamicRigidSphere, *};
+use monarch_engine::{
+    engine::entities::spherical::DynamicRigidSphere,
+    prelude::{
+        ActiveWorldGrid, FluidMat, GlobalPhysicsConfig, GranularMat, GridDeformer,
+        GridKinematicBody, SurfaceMat, WorldCell,
+    },
+};
 
 use crate::runtime::{
     dev_tools::{BrushSettings, GridBrush},
@@ -237,9 +243,9 @@ pub fn handle_brush_input(
                 ..default()
             })),
             Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
-            DynamicRigidSphere::new(SPHERE_SPAWN_MASS, SPHERE_SPAWN_RADIUS),
-            KinematicProfile::default(),
-            DeformationProfile::default(),
+            DynamicRigidSphere::default(),
+            GridKinematicBody::new(SPHERE_SPAWN_MASS, SPHERE_SPAWN_RADIUS),
+            GridDeformer::default(),
         ));
         return;
     }
@@ -338,7 +344,7 @@ pub fn attract_spheres_input(
     camera_q: Query<(&Camera, &GlobalTransform)>,
     grid: Res<ActiveWorldGrid>,
     global_config: Res<GlobalPhysicsConfig>,
-    mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
+    mut spheres: Query<(&Transform, &mut GridKinematicBody), With<DynamicRigidSphere>>,
     time: Res<Time>,
     mut egui_contexts: EguiContexts,
 ) {
@@ -358,13 +364,13 @@ pub fn attract_spheres_input(
 
     let dt = time.delta_secs();
 
-    for (transform, mut sphere) in spheres.iter_mut() {
+    for (transform, mut body) in spheres.iter_mut() {
         let to_target = hit_position - transform.translation;
         let dist_sq = to_target.length_squared();
 
         if dist_sq > EPSILON_DIST_SQ {
             let direction = to_target.normalize();
-            sphere.velocity += direction * ATTRACT_FORCE_MAGNITUDE * dt;
+            body.velocity += direction * ATTRACT_FORCE_MAGNITUDE * dt;
         }
     }
 }
@@ -375,7 +381,7 @@ pub fn lift_spheres_input(
     camera_query: Query<(&Camera, &GlobalTransform)>,
     grid: Res<ActiveWorldGrid>,
     global_config: Res<GlobalPhysicsConfig>,
-    mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
+    mut spheres: Query<(&Transform, &mut GridKinematicBody), With<DynamicRigidSphere>>,
     time: Res<Time>,
     mut egui_contexts: EguiContexts,
 ) {
@@ -395,17 +401,17 @@ pub fn lift_spheres_input(
 
     let delta_time = time.delta_secs();
 
-    for (transform, mut sphere) in spheres.iter_mut() {
+    for (transform, mut body) in spheres.iter_mut() {
         let vector_to_target = hit_position - transform.translation;
         let horizontal_offset = Vec3::new(vector_to_target.x, 0.0, vector_to_target.z);
         let distance_squared = horizontal_offset.length_squared();
 
         if distance_squared < LIFT_INFLUENCE_RADIUS_SQ {
-            sphere.velocity.y += LIFT_ACCELERATION * delta_time;
+            body.velocity.y += LIFT_ACCELERATION * delta_time;
 
             if distance_squared > EPSILON_DIST_SQ {
                 let horizontal_direction = horizontal_offset.normalize();
-                sphere.velocity += horizontal_direction * LIFT_CENTERING_FORCE * delta_time;
+                body.velocity += horizontal_direction * LIFT_CENTERING_FORCE * delta_time;
             }
         }
     }

@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, block_on, futures_lite::future},
 };
-use monarch_engine::prelude::*;
+use monarch_engine::prelude::{world_gen::WorldGenerator, *};
 use redb::Database;
 use spatial_lib::prelude::{
     math::ChunkKey,
