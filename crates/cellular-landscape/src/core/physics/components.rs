@@ -3,7 +3,6 @@ use bevy::{
     math::Vec3,
 };
 
-/// Universal thermodynamic constants binding the simulation space.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct GlobalPhysicsConfig {
     pub gravity: Vec3,
@@ -23,36 +22,40 @@ impl Default for GlobalPhysicsConfig {
     }
 }
 
-/// Isolated kinematic properties defining how an entity resolves momentum and collision.
+/// A generic capability component. Attach this to ANY entity in the orchestrator
+/// to grant it physical interactions, gravity, and CCD collision with the cellular grid.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct KinematicProfile {
+pub struct GridKinematicBody {
+    pub velocity: Vec3,
     pub mass: f32,
-    pub air_resistance: f32,
+    pub radius: f32,
     pub rolling_friction: f32,
     pub impact_restitution: f32,
 }
 
-impl Default for KinematicProfile {
-    fn default() -> Self {
+impl GridKinematicBody {
+    pub fn new(mass: f32, radius: f32) -> Self {
         Self {
-            mass: 1.0,
-            air_resistance: 0.99,
+            velocity: Vec3::ZERO,
+            mass,
+            radius,
             rolling_friction: 0.90,
             impact_restitution: 0.20,
         }
     }
 }
 
-/// Structural thresholds defining an entity's capacity to induce localized grid entropy (cratering).
+/// A generic capability component. Attach this to a GridKinematicBody to allow it
+/// to dynamically crater and excavate the landscape upon high-energy impact.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct DeformationProfile {
+pub struct GridDeformer {
     pub min_deformation_energy: f32,
     pub energy_to_deformation_scale: f32,
     pub cost_displace_granular: f32,
     pub cost_crush_terrain: f32,
 }
 
-impl Default for DeformationProfile {
+impl Default for GridDeformer {
     fn default() -> Self {
         Self {
             min_deformation_energy: 250.0,

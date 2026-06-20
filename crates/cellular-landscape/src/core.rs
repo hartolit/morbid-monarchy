@@ -5,7 +5,7 @@ use bevy::{
 
 use crate::core::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    physics::components::GlobalPhysicsConfig,
+    physics::{components::GlobalPhysicsConfig, systems::simulate_grid_kinematics},
     simulation::{SimulationConfig, SimulationEventQueue, simulate_world},
     world::{
         WorldFocus, WorldManager, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
@@ -43,6 +43,6 @@ impl Plugin for LandscapePlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, simulate_world);
+            .add_systems(Update, (simulate_world, simulate_grid_kinematics));
     }
 }
