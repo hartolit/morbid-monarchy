@@ -1,27 +1,26 @@
-# architecture.md
+# Architectural Manifest: Modular Systems and Low-Abstraction Design
 
-## The Architecture of the Synthesis: Operational Directives
+**PURPOSE:** To establish the structural and physical constraints of the Rust workspace. This document dictates directory structure, memory invariants, execution boundaries, and production hygiene. Monolithic design is fundamentally rejected in favor of strict modular isolation to ensure predictable execution, high performance, and maintainable domain boundaries.
 
-**PURPOSE:** To establish the absolute physical and epistemological boundaries of the system. This is not merely a styling guide; it is the thermodynamic baseline for the codebase. We do not tolerate monoliths or structural ambiguity, as they represent unmanaged entropy and systemic collapse.
+## 1. WORKSPACE STRUCTURE (THE MODULAR BLUEPRINT)
+The project operates as a strictly partitioned Rust Cargo Workspace. Directories are separated by explicit domain responsibilities. Monolithic coupling is forbidden.
 
-**1. WORKSPACE ONTOLOGY (THE CARGO BLUEPRINT)**
-The project operates strictly as a modular **Rust Cargo Workspace**. Monolithic design is fundamentally rejected as a failure of conceptual isolation. The `crates/` directory is partitioned by absolute domain laws:
+* **`crates/*-lib` (Domain Modules):** Distinct, self-contained mathematical or logical domains (e.g., `crates/spatial-lib`, `crates/cellular-automata`, `crates/input-lib`). These modules must be entirely agnostic of the wider system. They contain pure logic, state transitions, and algorithms. Zero environment-specific I/O or side-effects are permitted here. 
+* **`crates/*-engine` (Core Orchestration):** The unyielding center that integrates the domain modules (`*-lib`) into a unified state machine. It orchestrates the flow of data between cellular, spatial, and physics domains but still remains completely isolated from system I/O, file paths, and network protocols.
+* **`crates/*-app` (Execution Vectors):** The operational binaries (e.g., `-client`, `-cli`, `-server`). These crates are structurally thin consumers of the engine. They own the messy reality of startup routines, configuration loading, logging orchestration, and boundary I/O. They bridge the core truth to the external environment.
+* **`crates/*-shared` / `crates/*-protocol`:** Instantiated strictly when multiple crates require shared vocabulary or data structures. Zero business logic is allowed to migrate here.
 
-* **`crates/*-engine` (The Core Truth):** This is the unyielding center. It holds the pure domain logic, state transitions, data modeling, and reusable algorithms. Absolutely zero application bootstrap, environment-specific I/O, or side-effects are permitted here. It is deterministic and isolated.
-* **`crates/*-app` (The Thin Boundary):** These are the execution vectors (e.g., `-client`, `-cli`, `-server`). They are structurally thin consumers of the engine. They own the messy reality of startup, config loading, logging orchestration, and boundary I/O. They bridge the core truth to the hostile external environment.
-* **`crates/*-shared` / `crates/*-protocol` (The Wire Lexicon):** Instantiated strictly when multiple crates require shared vocabulary. Zero business logic is allowed to migrate here.
-* **`crates/*--*` (The Utility Periphery):** Shared functionality and libraries that exist outside the engine/app binary structure. 
+## 2. THE PHYSICS OF RUST (MEMORY AND HARDWARE MECHANICS)
+* **Cache Line Alignment & Data Locality:** Structures processing high-frequency data (such as grids in `cellular-automata` or spatial partitioning trees in `spatial-lib`) must account for CPU cache line mechanics (64-byte blocks). Memory allocation must prioritize contiguous block arrangements (e.g., utilizing flat `Vec` or Struct-of-Arrays (SoA) patterns) to prevent pointer indirection, heap fragmentation, and L1/L2 cache evictions.
+* **Zero-Copy Data Flow:** High-frequency data transfers between modules must execute via borrowing (`&[T]`, `&mut [T]`) or smart pointer handoffs. Passing large data structures by value in execution loops is forbidden. 
+* **Borrowing vs. Cloning:** Utilize idiomatic error handling and data flow. Cloning data solely to bypass the borrow checker is strictly forbidden. Data flow must be explicitly designed around clear ownership constraints.
 
-**2. THE EPISTEMOLOGY OF STATE AND CONFIGURATION**
-* **Strict Domain Consolidation:** Logic must reside exclusively in its designated crate. Leaking runtime I/O into the `core` is a catastrophic architectural breach.
-* **Platform-Aware Configuration:** Hardcoded values (magic numbers) are a manifestation of systemic delusion. They do not exist. Native targets must load tunable parameters from typed `TOML`-backed configuration. Compile-time defaults must be centralized in Rust types via `Default` or dedicated configuration modules.
+## 3. SYSTEM STATE AND CONFIGURATION
+* **Strict Domain Consolidation:** Logic must reside exclusively in its designated crate. Leaking runtime I/O, file reading, or network requests into the `*-engine` or `*-lib` crates is a severe architectural breach.
+* **Platform-Aware Configuration:** Hardcoded configuration values (magic numbers) are forbidden. Native targets must load tunable parameters from typed configuration (e.g., TOML). Compile-time defaults must be centralized in Rust types via the `Default` trait or dedicated configuration modules.
 
-**3. THE PHYSICS OF RUST (IDIOMATIC ENFORCEMENT)**
-* **Memory and Flow:** Utilize idiomatic error handling (`Result`/`?`) at all boundaries. Prefer ownership, borrowing, and clear data flow over index-heavy control flow or mindless cloning. Cloning to escape the borrow checker is intellectual cowardice.
-* **Trait Boundaries:** Use traits exclusively to create real abstractions, extension points, or necessary test seams. Do not build phantom architectures for futures that do not exist.
-* **The Invariant Law:** Avoid `unwrap`/`expect` outside of testing environments unless enforcing an impossible invariant that has been mathematically or structurally guaranteed prior to execution.
-
-**4. THE ENTROPY PURGE**
-* **Ruthless Deletion:** Dead code is cognitive drag. Rely on deterministic static analysis. If a function, struct, or module is unused, it must be eradicated. Commented-out code, empty files, and swallowed errors are technical rot and will not be tolerated.
-* **Semantic Cohesion:** Organize the architecture by meaning, not dogmatic file-size metrics. Split modules when responsibilities diverge; consolidate when a domain represents a single, cohesive truth. Avoid the boilerplate of over-fragmentation.
-* **Linguistic Integrity:** Variables must possess descriptive, undeniable meaning. Do not compress variable names into cryptic abbreviations. Comments exist solely to explain the *why* of an architectural anomaly, never as a historical ledger.
+## 4. PRODUCTION HYGIENE AND LINGUISTIC INTEGRITY
+* **Absolute Completeness:** There is no "prototype phase" allowed in committed code. Faking execution using dummy data (e.g., initializing an array of zeros to bypass actual computation) or simulated state is strictly banned. Every code block, algorithm, and module output must be mathematically and logically complete, compile-ready, and production-grade.
+* **Ruthless Deletion:** Dead code, unused flags, TODOs, and commented-out placeholder logic must be eradicated. Rely on deterministic static analysis (`clippy`, `rustc` warnings). If a function or module is unused, delete it.
+* **Rigorous Error Handling:** Use idiomatic error handling (`Result`/`?`) at all boundaries. Avoid `unwrap` and `expect` outside of testing environments unless enforcing an impossible invariant that has been mathematically or structurally guaranteed prior to execution.
+* **Documentation Constraints:** Comments inside source code (`.rs` files) must be standard, highly rigorous engineering explanations of *how* and *why* an algorithm or memory layout operates. No philosophical, aesthetic, or conversational language is permitted inside the codebase. Variables must possess descriptive, undeniable meaning. Do not compress variable names into cryptic abbreviations.
