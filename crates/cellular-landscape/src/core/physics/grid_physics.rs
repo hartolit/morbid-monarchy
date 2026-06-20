@@ -1,14 +1,13 @@
 use crate::core::{
-    entities::GlobalPhysicsConfig,
+    physics::components::GlobalPhysicsConfig,
     world::{
         cell::{GranularMat, SurfaceMat, WorldCell},
         grid::ActiveWorldGrid,
     },
 };
-use bevy::math::IVec2;
+use bevy::math::{IVec2, Vec3};
 
 /// A zero-allocation translation boundary for cellular topological physics.
-/// Executes deterministic memory reads/writes, strictly agnostic to the initiating entity.
 pub struct GridPhysicsApi<'a> {
     pub grid: &'a mut ActiveWorldGrid,
     pub global_config: &'a GlobalPhysicsConfig,
@@ -117,7 +116,6 @@ impl<'a> GridPhysicsApi<'a> {
         if valid_samples == 0 {
             return f32::MAX;
         }
-
         let baseline_average = accumulated_height / (valid_samples as f32);
         let depth_below_plateau = (baseline_average - center_height).max(0.0);
         1.0 + (depth_below_plateau * resistance_multiplier)
@@ -128,14 +126,12 @@ impl<'a> GridPhysicsApi<'a> {
             return;
         }
         let mut cell = self.grid.get_cell(cell_position);
-
         if cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE {
             let base_height =
                 (cell.elevation() as f32 + cell.granular_vol() as f32 + cell.fluid_vol() as f32)
                     * self.global_config.elevation_scale;
             let top_height = base_height
                 + (1.0f32.max(cell.surface_state() as f32)) * self.global_config.elevation_scale;
-
             if clearance_height < top_height {
                 cell.set_surface_mat(SurfaceMat::EMPTY);
                 cell.set_surface_state(0);
@@ -155,10 +151,8 @@ impl<'a> GridPhysicsApi<'a> {
         if available_energy <= 0.0 || !self.is_in_bounds(cell_position) {
             return (0, 0.0);
         }
-
         let mut cell = self.grid.get_cell(cell_position);
         let solid_height = cell.elevation() as f32 * self.global_config.elevation_scale;
-
         if solid_height <= effective_bottom_height || cell.elevation() == 0 {
             return (0, 0.0);
         }
@@ -191,7 +185,6 @@ impl<'a> GridPhysicsApi<'a> {
         if !self.is_in_bounds(cell_position) {
             return (0, None);
         }
-
         let mut cell = self.grid.get_cell(cell_position);
         let granular_volume = cell.granular_vol();
         if granular_volume == 0 {
@@ -214,12 +207,10 @@ impl<'a> GridPhysicsApi<'a> {
             if granular_volume > target_volume {
                 let extracted_volume = granular_volume - target_volume;
                 let primary_material = cell.granular_mat();
-
                 cell.set_granular_vol(granular_volume - extracted_volume);
                 if cell.granular_vol() == 0 {
                     cell.set_granular_mat(GranularMat::EMPTY);
                 }
-
                 self.grid.set_cell(cell_position, cell);
                 self.grid.wake_cell(cell_position);
                 return (extracted_volume as u32, Some(primary_material));
@@ -239,7 +230,6 @@ impl<'a> GridPhysicsApi<'a> {
         if attempt_amount == 0 || !self.is_in_bounds(cell_position) {
             return 0;
         }
-
         let mut cell = self.grid.get_cell(cell_position);
         let current_material = cell.granular_mat();
         if current_material != GranularMat::EMPTY && current_material != material {
@@ -254,11 +244,9 @@ impl<'a> GridPhysicsApi<'a> {
 
         let structural_allowance =
             ((ceiling_height - total_height) / self.global_config.elevation_scale).floor() as u16;
-
         let mathematical_allowance = ((WorldCell::MAX_ELEVATION as u16)
             .saturating_sub(cell.elevation()))
             + WorldCell::MAX_GRANULAR_VOL.saturating_sub(cell.granular_vol());
-
         let exact_deposit = attempt_amount
             .min(mathematical_allowance)
             .min(max_deposit_per_cell)
@@ -271,5 +259,86 @@ impl<'a> GridPhysicsApi<'a> {
             self.grid.wake_cell(cell_position);
         }
         exact_deposit
+    }
+
+    /// Executes a continuous collision detection (CCD) sweep using a 2.5D Digital Differential Analyzer (DDA).
+    /// Prevents high-velocity ballistic entities from tunneling through the discrete cellular topology.
+    #[inline]
+    pub fn sweep_trajectory(
+        &self,
+        start_pos: Vec3,
+        velocity: Vec3,
+        delta_time: f32,
+        radius: f32,
+    ) -> Option<(Vec3, Vec3)> {
+        let direction = velocity.normalize_or_zero();
+        if direction == Vec3::ZERO {
+            return None;
+        }
+
+        let max_distance = velocity.length() * delta_time;
+
+        let mut current_grid_x = start_pos.x.floor() as i32;
+        let mut current_grid_y = (-start_pos.z).floor() as i32;
+
+        let step_x = if direction.x > 0.0 { 1 } else { -1 };
+        let step_y = if direction.z < 0.0 { 1 } else { -1 };
+
+        let t_delta_x = if direction.x != 0.0 {
+            (1.0 / direction.x).abs()
+        } else {
+            f32::MAX
+        };
+        let t_delta_y = if direction.z != 0.0 {
+            (1.0 / direction.z).abs()
+        } else {
+            f32::MAX
+        };
+
+        let mut t_max_x = if direction.x > 0.0 {
+            (current_grid_x as f32 + 1.0 - start_pos.x) * t_delta_x
+        } else {
+            (start_pos.x - current_grid_x as f32) * t_delta_x
+        };
+
+        let mut t_max_y = if direction.z < 0.0 {
+            (current_grid_y as f32 + 1.0 - (-start_pos.z)) * t_delta_y
+        } else {
+            ((-start_pos.z) - current_grid_y as f32) * t_delta_y
+        };
+
+        let mut current_t = 0.0;
+        let mut last_normal = Vec3::Y;
+
+        while current_t <= max_distance {
+            let cell_pos = IVec2::new(current_grid_x, current_grid_y);
+
+            if !self.is_in_bounds(cell_pos) {
+                break;
+            }
+
+            if let Some(floor_height) = self.get_floor_height(cell_pos) {
+                let structural_boundary = floor_height + radius;
+                let current_y = start_pos.y + (direction.y * current_t);
+
+                if current_y <= structural_boundary {
+                    let hit_position = start_pos + (direction * current_t);
+                    return Some((hit_position, last_normal));
+                }
+            }
+
+            if t_max_x < t_max_y {
+                current_t = t_max_x;
+                t_max_x += t_delta_x;
+                current_grid_x += step_x;
+                last_normal = Vec3::new(-step_x as f32, 0.0, 0.0);
+            } else {
+                current_t = t_max_y;
+                t_max_y += t_delta_y;
+                current_grid_y += step_y;
+                last_normal = Vec3::new(0.0, 0.0, step_y as f32); // Mapped against -Z
+            }
+        }
+        None
     }
 }

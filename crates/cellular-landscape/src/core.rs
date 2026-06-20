@@ -4,12 +4,8 @@ use bevy::{
 };
 
 use crate::core::{
-    entities::{
-        GlobalPhysicsConfig,
-        observer::{ObserverConfig, resolve_observer_kinematics},
-        spherical::simulate_rigid_sphere_kinematics,
-    },
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
+    physics::components::GlobalPhysicsConfig,
     simulation::{SimulationConfig, SimulationEventQueue, simulate_world},
     world::{
         WorldFocus, WorldManager, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
@@ -17,9 +13,7 @@ use crate::core::{
     },
 };
 
-pub mod entities;
 pub mod events;
-pub mod generation;
 pub mod physics;
 pub mod simulation;
 pub mod utils;
@@ -35,7 +29,6 @@ impl Plugin for LandscapePlugin {
             .init_resource::<SimulationEventQueue>()
             .init_resource::<SimulationConfig>()
             .init_resource::<GlobalPhysicsConfig>()
-            .init_resource::<ObserverConfig>()
             .insert_resource(ActiveWorldGrid::default())
             .add_message::<ChunkLoadRequest>()
             .add_message::<ChunkLoadedEvent>()
@@ -50,13 +43,6 @@ impl Plugin for LandscapePlugin {
                 )
                     .chain(),
             )
-            .add_systems(
-                Update,
-                (
-                    simulate_world,
-                    simulate_rigid_sphere_kinematics,
-                    resolve_observer_kinematics,
-                ),
-            );
+            .add_systems(Update, simulate_world);
     }
 }

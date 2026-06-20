@@ -25,6 +25,7 @@ use crate::core::{
 pub mod cell;
 pub mod chunk;
 pub mod grid;
+pub mod world_gen;
 
 pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 6;
 pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 6;
