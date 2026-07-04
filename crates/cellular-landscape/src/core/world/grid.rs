@@ -77,14 +77,8 @@ impl ActiveWorldGrid {
 
     #[inline(always)]
     pub fn swap_buffers(&mut self) {
-        // Pointer exchange achieves O(1) instantaneous layout rotation because
-        // both boundaries are structurally guaranteed to be Box<[WorldCell]>.
         std::mem::swap(&mut self.spatial.cells, &mut self.back_buffer);
-
-        // Slices implement `copy_from_slice` directly. Memory sync completes
-        // without demanding ownership coercion.
         self.spatial.cells.copy_from_slice(&self.back_buffer);
-
         std::mem::swap(&mut self.wake_buffer, &mut self.next_wake_buffer);
 
         for val in self.next_wake_buffer.iter() {

@@ -39,9 +39,7 @@ pub fn run() {
             2.0,
             TimerMode::Repeating,
         )))
-        // Instantiate the physical intent buffer and sensory lens
         .add_systems(Startup, setup_observer)
-        // I/O Boundary: Harvest hardware deltas into the ObserverIntent membrane
         .add_systems(
             Update,
             (
@@ -51,9 +49,7 @@ pub fn run() {
             )
                 .chain(),
         )
-        // Engine Sync: Projects the post-integration physical state onto the thermodynamic grid
         .add_systems(Update, sync_world_focus.after(sync_lens_orientation))
-        // Persistence: independent of camera, runs every frame.
         .add_systems(
             Update,
             (

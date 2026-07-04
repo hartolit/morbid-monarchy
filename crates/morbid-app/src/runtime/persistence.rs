@@ -14,11 +14,9 @@ use std::{path::PathBuf, sync::Arc};
 const WORLD_DATA_DIR: &str = "../world_data";
 const DB_FILE: &str = "save.redb";
 
-/// Encapsulates the thread-safe spatial-lib DB backend.
 #[derive(Resource, Clone)]
 pub struct WorldDatabase(pub Arc<RedbChunkStorage>);
 
-/// An accumulator queue to batch disk writes per-frame.
 #[derive(Resource, Default)]
 pub struct ChunkSaveQueue {
     pub chunks: Vec<(ChunkKey, CellChunk)>,
@@ -45,7 +43,6 @@ pub fn initialize_database() -> WorldDatabase {
     let db_path = dir.join(DB_FILE);
     let db = Arc::new(Database::create(db_path).expect("Failed to initialize redb database"));
 
-    // Abstract the physical layout generation to the spatial-lib driver
     let storage = RedbChunkStorage::new(db).expect("Failed to initialize chunk storage backend");
 
     WorldDatabase(Arc::new(storage))
@@ -66,7 +63,6 @@ pub fn handle_load_requests(
         let storage_clone = db.0.clone();
 
         let task = io_pool.spawn(async move {
-            // Zero-copy decoding: bitcode operates directly on the redb mmap slice
             let cached_chunk =
                 match storage_clone.read_chunk(key, |bytes| bitcode::decode::<CellChunk>(bytes)) {
                     Ok(Some(Ok(data))) => Some(data),

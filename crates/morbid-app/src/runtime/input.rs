@@ -70,11 +70,10 @@ pub fn observer_hardware_ingest(
     tuning: Res<ObserverConfig>,
 ) {
     let Ok(mut intent) = query.single_mut() else {
-        for _ in motion.read() {} // Drain hardware queue to prevent event leakage
+        for _ in motion.read() {}
         return;
     };
 
-    // Erase prior translation vectors to guarantee frame-perfect decay
     intent.translation_vector = Vec3::ZERO;
     intent.yaw_delta = 0.0;
     intent.pitch_delta = 0.0;
@@ -82,7 +81,6 @@ pub fn observer_hardware_ingest(
     intent.toggle_noclip = keyboard.just_pressed(KeyCode::KeyN);
     intent.toggle_grid_attachment = keyboard.just_pressed(KeyCode::KeyG);
 
-    // Gated strictly behind explicit hardware intent
     let right_click_held = mouse.pressed(MouseButton::Right);
     for ev in motion.read() {
         if right_click_held {
@@ -91,7 +89,6 @@ pub fn observer_hardware_ingest(
         }
     }
 
-    // Processed unconditionally, allowing blind locomotion
     if keyboard.pressed(KeyCode::KeyW) {
         intent.translation_vector.z -= 1.0;
     }

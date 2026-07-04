@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy_egui::EguiContexts;
 use monarch_engine::prelude::{spherical::DynamicRigidSphere, *};
 
 use crate::runtime::{
@@ -32,10 +31,9 @@ fn extract_pointer_hit(
     camera_q: &Query<(&Camera, &GlobalTransform)>,
     grid: &ActiveWorldGrid,
     elevation_scale: f32,
-    egui_contexts: &mut EguiContexts,
+    egui_wants_input: &bevy_egui::input::EguiWantsInput,
 ) -> Option<Vec3> {
-    let ctx = egui_contexts.ctx_mut().ok()?;
-    if ctx.wants_pointer_input() {
+    if egui_wants_input.wants_pointer_input() {
         return None;
     }
 
@@ -49,8 +47,7 @@ fn extract_pointer_hit(
     raymarch_grid(&ray, grid, elevation_scale)
 }
 
-/// Volumetric raymarcher executing a pure 2D Digital Differential Analyzer (DDA)
-/// across the XZ plane to mathematically guarantee intersection with the dynamic thermodynamic floor.
+/// Volumetric raymarcher with 2D Digital Differential Analyzer (DDA) across the XZ plane.
 #[inline(always)]
 pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) -> Option<Vec3> {
     let start_pos = ray.origin;
@@ -63,7 +60,7 @@ pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) 
     let step_x = if ray.direction.x > 0.0 { 1 } else { -1 };
     let step_y = if ray.direction.z < 0.0 { 1 } else { -1 };
 
-    // Delta T: distance the ray must travel to cross exactly one full cell width/height
+    // Distance the ray must travel to cross exactly one full cell width/height
     let t_delta_x = if ray.direction.x != 0.0 {
         (1.0 / ray.direction.x).abs()
     } else {
@@ -75,7 +72,7 @@ pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) 
         f32::MAX
     };
 
-    // Max T: distance to the very first cellular boundary crossing
+    // Distance to the very first cellular boundary crossing
     let mut t_max_x = if ray.direction.x > 0.0 {
         (cx as f32 + 1.0 - start_pos.x) * t_delta_x
     } else {
@@ -145,7 +142,7 @@ pub fn update_brush_cursor(
     brush: Res<GridBrush>,
     settings: Res<BrushSettings>,
     mut materials: ResMut<Assets<WorldMaterial>>,
-    mut egui_contexts: EguiContexts,
+    egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
 ) {
     let is_active = *brush != GridBrush::None;
 
@@ -156,7 +153,7 @@ pub fn update_brush_cursor(
             &camera_q,
             &grid,
             global_config.elevation_scale,
-            &mut egui_contexts,
+            &egui_wants_input,
         )
     } else {
         None
@@ -186,7 +183,7 @@ pub fn handle_brush_input(
     brush: Res<GridBrush>,
     settings: Res<BrushSettings>,
     global_config: Res<GlobalPhysicsConfig>,
-    mut egui_contexts: EguiContexts,
+    egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -209,7 +206,7 @@ pub fn handle_brush_input(
         &camera_q,
         &grid,
         global_config.elevation_scale,
-        &mut egui_contexts,
+        &egui_wants_input,
     ) else {
         return;
     };
@@ -340,7 +337,7 @@ pub fn attract_spheres_input(
     global_config: Res<GlobalPhysicsConfig>,
     mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
     time: Res<Time>,
-    mut egui_contexts: EguiContexts,
+    egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
 ) {
     if !mouse.pressed(MouseButton::Back) && !mouse.pressed(MouseButton::Other(4)) {
         return;
@@ -351,7 +348,7 @@ pub fn attract_spheres_input(
         &camera_q,
         &grid,
         global_config.elevation_scale,
-        &mut egui_contexts,
+        &egui_wants_input,
     ) else {
         return;
     };
@@ -377,7 +374,7 @@ pub fn lift_spheres_input(
     global_config: Res<GlobalPhysicsConfig>,
     mut spheres: Query<(&Transform, &mut DynamicRigidSphere)>,
     time: Res<Time>,
-    mut egui_contexts: EguiContexts,
+    egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
 ) {
     if !mouse.pressed(MouseButton::Forward) && !mouse.pressed(MouseButton::Other(5)) {
         return;
@@ -388,7 +385,7 @@ pub fn lift_spheres_input(
         &camera_query,
         &grid,
         global_config.elevation_scale,
-        &mut egui_contexts,
+        &egui_wants_input,
     ) else {
         return;
     };

@@ -7,8 +7,6 @@ use crate::core::{
 };
 use bevy::math::IVec2;
 
-/// A zero-allocation translation boundary for cellular topological physics.
-/// Executes deterministic memory reads/writes, strictly agnostic to the initiating entity.
 pub struct GridPhysicsApi<'a> {
     pub grid: &'a mut ActiveWorldGrid,
     pub global_config: &'a GlobalPhysicsConfig,
@@ -55,7 +53,6 @@ impl<'a> GridPhysicsApi<'a> {
         )
     }
 
-    /// Fetches a bilinearly interpolated, continuous floor height to eliminate discrete cellular stepping.
     #[inline(always)]
     pub fn get_interpolated_floor_height(&self, pos_x: f32, pos_z: f32) -> Option<f32> {
         let gx = pos_x.floor() as i32;
@@ -81,7 +78,6 @@ impl<'a> GridPhysicsApi<'a> {
         Some(h0 * (1.0 - ty) + h1 * ty)
     }
 
-    /// Computes surrounding terrain resistance via sparse, outward cache-line aligned sampling.
     #[inline(always)]
     pub fn compute_outward_resistance(
         &self,

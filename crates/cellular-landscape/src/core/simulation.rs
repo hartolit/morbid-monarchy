@@ -173,7 +173,6 @@ pub fn simulate_world(
                         }
                     }
                 } else if wake_val > 1 {
-                    // No change this tick, but it has remaining TTL. Decrement it.
                     next_wake_buf[idx].fetch_max(wake_val - 1, Ordering::Relaxed);
                 }
 
@@ -189,7 +188,6 @@ pub fn simulate_world(
             },
         );
 
-    // Bulk flush the channel in the main thread
     for ev in events {
         let _ = global_tx.send(ev);
     }

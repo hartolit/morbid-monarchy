@@ -22,7 +22,6 @@ pub fn step_fire<R: Rng + ?Sized>(
     let surface = old_cell.surface_mat();
     let fluid = old_cell.fluid_mat();
 
-    // Extinguish immediately if submerged in a non-combustible fluid
     if fluid != FluidMat::EMPTY && fluid != FluidMat::FLUID_OIL {
         if surface == SurfaceMat::SURFACE_FIRE {
             cell.set_surface_mat(SurfaceMat::EMPTY);
@@ -31,7 +30,6 @@ pub fn step_fire<R: Rng + ?Sized>(
         return;
     }
 
-    // Ignition & Spread Phase structurally observes the combined surface and fluid matrix
     if is_combustible(surface, fluid) {
         let mut fire_neighbors = 0;
         for dy in -1..=1 {
@@ -52,9 +50,7 @@ pub fn step_fire<R: Rng + ?Sized>(
             cell.set_surface_mat(SurfaceMat::SURFACE_FIRE);
             cell.set_surface_state(0);
         }
-    }
-    // Active Burning Phase
-    else if surface == SurfaceMat::SURFACE_FIRE {
+    } else if surface == SurfaceMat::SURFACE_FIRE {
         let state = old_cell.surface_state();
 
         if state < 20 {

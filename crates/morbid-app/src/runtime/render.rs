@@ -1,14 +1,12 @@
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
+use bevy::render::storage::ShaderBuffer;
 use bevy::{
     asset::RenderAssetUsages,
     mesh::{MeshVertexBufferLayoutRef, PrimitiveTopology},
     prelude::*,
-    render::{
-        render_resource::{
-            AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
-        },
-        storage::ShaderStorageBuffer,
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
     },
     shader::ShaderRef,
 };
@@ -43,10 +41,10 @@ impl Default for WorldTuningConfig {
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct WorldMaterial {
     #[storage(10, read_only, visibility(vertex))]
-    pub grid_buffer: Handle<ShaderStorageBuffer>,
+    pub grid_buffer: Handle<ShaderBuffer>,
 
     #[storage(11, read_only, visibility(vertex))]
-    pub palette_buffer: Handle<ShaderStorageBuffer>,
+    pub palette_buffer: Handle<ShaderBuffer>,
 
     #[uniform(12, visibility(vertex))]
     pub window: WorldWindowUniform,
@@ -114,13 +112,10 @@ fn build_chunk_dummy(size: u32) -> Mesh {
 fn setup_rendering(
     mut commands: Commands,
     mut materials: ResMut<Assets<WorldMaterial>>,
-    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let grid_buffer = buffers.add(ShaderStorageBuffer::new(
-        &[0u8; 8],
-        RenderAssetUsages::all(),
-    ));
+    let grid_buffer = buffers.add(ShaderBuffer::new(&[0u8; 8], RenderAssetUsages::all()));
 
     let mut palette = vec![[0.0f32; 4]; 256];
     palette[0] = [0.00, 0.00, 0.00, 0.0];
@@ -165,7 +160,7 @@ fn setup_rendering(
     palette[(96 + SurfaceMat::SURFACE_GLASS.0) as usize] = [0.75, 0.88, 0.92, 0.6];
     palette[(96 + SurfaceMat::SURFACE_CORRUPTION.0) as usize] = [0.50, 0.10, 0.60, 1.0];
 
-    let palette_buffer = buffers.add(ShaderStorageBuffer::new(
+    let palette_buffer = buffers.add(ShaderBuffer::new(
         bytemuck::cast_slice(&palette),
         RenderAssetUsages::all(),
     ));
@@ -191,7 +186,7 @@ fn sync_grid_rendering(
     mut grid: ResMut<ActiveWorldGrid>,
     manager: Res<WorldManager>,
     mut materials: ResMut<Assets<WorldMaterial>>,
-    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     chunk_mesh: Res<ChunkMeshHandle>,
     global_material: Res<GlobalWorldMaterial>,
     tuning: Res<WorldTuningConfig>,
@@ -201,7 +196,7 @@ fn sync_grid_rendering(
 
     // Maintain ToroidalGrid SSBO memory projection
     if grid_ref.cells_dirty {
-        if let Some(material) = materials.get_mut(&global_material.0) {
+        if let Some(mut material) = materials.get_mut(&global_material.0) {
             material.window.origin_size = Vec4::new(
                 grid_ref.spatial.window_origin.x as f32,
                 grid_ref.spatial.window_origin.y as f32,
@@ -214,7 +209,7 @@ fn sync_grid_rendering(
             material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
             material.window.config.x = tuning.elevation_scale;
 
-            if let Some(buffer) = buffers.get_mut(&material.grid_buffer) {
+            if let Some(mut buffer) = buffers.get_mut(&material.grid_buffer) {
                 let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
                 match &mut buffer.data {
                     Some(dst) => {
@@ -251,8 +246,7 @@ fn sync_grid_rendering(
             commands.spawn((
                 Mesh3d(chunk_mesh.0.clone()),
                 MeshMaterial3d(global_material.0.clone()),
-                // Translate the chunk instance mapping mathematical X/Y to physical X/-Z
-                Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32)),
+                Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32)), // X/Y mapped to physical X/-Z
                 ChunkRenderMarker(key),
                 NoFrustumCulling,
             ));

@@ -35,7 +35,6 @@ fn calc_liquid_transfer(
     let diff = source_total - dest_total;
     let mut amount = diff / 2;
 
-    // Micro-sloshing: Ensure liquids settle completely flat by bypassing integer truncation
     if amount == 0 && diff >= 1 {
         if spatial_hash(world_pos, tick) % 2 == 0 {
             amount = 1;
@@ -187,7 +186,6 @@ pub fn step_liquid(
     // Donate liquid to the optimal outgoing destination
     if old_cell.fluid_mat() != FluidMat::EMPTY {
         if let Some((_, dest_pos)) = get_preferred_destination(world_pos, view, tick) {
-            // Verify we are the destination's optimal source
             if let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, tick) {
                 if winner_pos == world_pos {
                     if let Some((dest_idx, _)) = view.get_cell(dest_pos) {
@@ -209,7 +207,7 @@ pub fn step_liquid(
             cell.set_fluid_mat(incoming_mat);
         }
 
-        // Apply hydraulic momentum based on flow direction
+        // Apply momentum based on flow direction
         if let Some(sp) = source_pos_cache {
             let flow_dir = world_pos - sp;
             let mut new_flags = 0;

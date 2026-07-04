@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use monarch_engine::prelude::{GridEvent, SimulationEventQueue};
 
-pub fn process_grid_events(mut commands: Commands, event_queue: Res<SimulationEventQueue>) {
+// TODO - something
+pub fn _process_grid_events(mut commands: Commands, event_queue: Res<SimulationEventQueue>) {
     while let Ok(event) = event_queue.rx.try_recv() {
         match event {
             GridEvent::SpawnTerrainParticle { pos, material } => {

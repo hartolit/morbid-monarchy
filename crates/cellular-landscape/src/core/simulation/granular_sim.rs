@@ -27,12 +27,8 @@ fn calc_granular_transfer(
     let diff = source_total - dest_total;
     let mut amount = diff / 2;
 
-    // Kinetic Viscosity: Throttles the sheer displacement rate.
-    // Prevents rapid volumetric injections from instantly resolving into perfect mathematical plates.
     amount = amount.min(2);
 
-    // Micro-sloshing: Prevents perfect plateaus by probabilistically
-    // transferring remainder units when integer division halts flow.
     if amount == 0 && diff >= 1 {
         if spatial_hash(world_pos, tick) % 2 == 0 {
             amount = 1;
@@ -44,7 +40,6 @@ fn calc_granular_transfer(
 
     amount = amount.min(source_vol);
 
-    // Evaluate the true structural void combining both elevation ceiling and granular capacity
     let structural_void = ((WorldCell::MAX_ELEVATION as u32)
         .saturating_sub(dest_cell.elevation() as u32))
         + ((WorldCell::MAX_GRANULAR_VOL as u32).saturating_sub(dest_vol));
@@ -76,8 +71,6 @@ fn get_preferred_destination(
     let mut best_dest = None;
     let mut best_diff = 0;
 
-    // Static Friction / Interlocking: Randomly inject structural resistance based on localized entropy.
-    // This fractures the monolithic fluid flow into organic, jagged resting angles.
     let stiction = spatial_hash(world_pos, tick) % 3;
     let dynamic_repose = base_repose as u32 + stiction;
 
@@ -88,11 +81,9 @@ fn get_preferred_destination(
             let neighbor_total =
                 neighbor_cell.elevation() as u32 + neighbor_cell.granular_vol() as u32;
 
-            // Validate the angle of dynamic repose is exceeded
             if source_total.saturating_sub(neighbor_total) > dynamic_repose {
                 let diff = source_total - neighbor_total;
 
-                // Only flow into identical materials or empty granular slots
                 let is_empty = neighbor_cell.granular_mat() == GranularMat::EMPTY;
                 let is_same = neighbor_cell.granular_mat() == source_mat;
 

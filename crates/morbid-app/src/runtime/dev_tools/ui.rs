@@ -51,10 +51,20 @@ pub fn dev_tuning_ui(
         return;
     };
 
+    let mut root_ui = egui::Ui::new(
+        ctx.clone(),
+        egui::Id::new("primary_root_ui"),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(ctx.content_rect()),
+    );
+
     let current_size = pending_resize
         .get_or_insert_with(|| [manager.inner.active_radius_x, manager.inner.active_radius_y]);
 
-    egui::TopBottomPanel::top("dev_navbar").show(ctx, |ui| {
+    let _input = egui::RawInput::default();
+
+    egui::Panel::top("dev_navbar").show(&mut root_ui, |ui| {
         ui.horizontal_centered(|ui| {
             let add_separator = |ui: &mut egui::Ui| {
                 ui.add_space(16.0);

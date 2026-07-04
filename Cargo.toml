@@ -8,8 +8,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-bevy = { version = "0.18.1", features = ["serialize"] }
-bevy_egui = { version = "0.39.1" }
+bevy = { version = "0.19", features = ["serialize"] }
+bevy_egui = { version = "0.41.0" }
 bitcode = { version = "0.6.9", features = ["derive"] }
 bytemuck = { version = "1.25.0", features = ["derive"] }
 lru = "0.16.3"
@@ -19,7 +19,7 @@ redb = "4.0.0"
 noise = "0.9.0"
 rayon = "1.12.0"
 flume = "0.12.0"
-glam = "0.30.7"
+glam = "0.32.0"
 
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
