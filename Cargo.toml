@@ -3,9 +3,8 @@ members = [
     "crates/morbid-app",
     "crates/monarch-engine",
     "crates/spatial-lib",
-    "crates/cellular-landscape",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.dependencies]
 bevy = { version = "0.19", features = ["serialize"] }
@@ -24,4 +23,3 @@ glam = "0.32.0"
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
 spatial-lib = { path = "crates/spatial-lib" }
-cellular-landscape = { path = "crates/cellular-landscape" }

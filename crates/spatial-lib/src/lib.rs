@@ -1,5 +1,3 @@
-//! A spatial partitioning and storage library.
-
 pub mod chunk;
 pub mod grid;
 

@@ -5,15 +5,15 @@ use bevy::{
 
 use crate::core::{
     entities::{
-        GlobalPhysicsConfig,
-        observer::{ObserverConfig, resolve_observer_kinematics},
+        observer::{resolve_observer_kinematics, ObserverConfig},
         spherical::simulate_rigid_sphere_kinematics,
+        GlobalPhysicsConfig,
     },
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::{SimulationConfig, SimulationEventQueue, simulate_world},
+    simulation::{simulate_world, SimulationConfig, SimulationEventQueue},
     world::{
-        WorldFocus, WorldManager, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
-        handle_simulation_resize, manage_chunk_window,
+        grid::ActiveWorldGrid, handle_chunk_loaded, handle_simulation_resize, manage_chunk_window,
+        WorldFocus, WorldManager, WorldStore,
     },
 };
 
