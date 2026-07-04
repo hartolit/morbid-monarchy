@@ -26,8 +26,8 @@ pub struct BrushSettings {
 impl Default for BrushSettings {
     fn default() -> Self {
         Self {
-            radius: 2,
-            strength: 10,
+            radius: 5,
+            strength: 1,
         }
     }
 }

@@ -247,9 +247,11 @@ impl WorldCell {
             let current_elev = self.elevation();
 
             // Transmute the bedrock if we are compressing granular matter into a void
-            if self.terrain_mat() == TerrainMat::EMPTY {
-                self.set_terrain_mat(self.granular_mat().to_terrain());
-            }
+            // if self.terrain_mat() == TerrainMat::EMPTY {
+            //     self.set_terrain_mat(self.granular_mat().to_terrain());
+            // }
+
+            self.set_terrain_mat(self.granular_mat().to_terrain());
 
             // Physically compress the overflow directly into the baseline elevation.
             self.set_elevation(

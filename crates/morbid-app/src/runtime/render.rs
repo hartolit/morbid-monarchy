@@ -1,4 +1,5 @@
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::mesh::Indices;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::render::storage::ShaderBuffer;
 use bevy::{
@@ -101,11 +102,38 @@ pub struct ChunkRenderMarker(pub ChunkKey);
 /// Allocates an immutable, contiguous dummy mesh mapping exactly to a single physical chunk.
 /// Prevents catastrophic VRAM scaling by locking the footprint to ~5MB per instance.
 fn build_chunk_dummy(size: u32) -> Mesh {
-    let vertex_count = (size * size * 120) as usize;
-    let positions: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vertex_count];
+    let verts_across = size + 1;
+    let num_verts = (verts_across * verts_across) as usize;
+    let mut positions = Vec::with_capacity(num_verts);
+    let mut indices = Vec::with_capacity((size * size * 6) as usize);
+
+    // Generate grid mapping Y to -Z to match the engine's original layout
+    for z in 0..verts_across {
+        for x in 0..verts_across {
+            positions.push([x as f32, 0.0, -(z as f32)]);
+        }
+    }
+
+    // Connect triangles with a reversed winding order to fix backface culling
+    for z in 0..size {
+        for x in 0..size {
+            let i = z * verts_across + x;
+
+            // Triangle 1
+            indices.push(i);
+            indices.push(i + 1);
+            indices.push(i + verts_across);
+
+            // Triangle 2
+            indices.push(i + 1);
+            indices.push(i + verts_across + 1);
+            indices.push(i + verts_across);
+        }
+    }
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
     mesh
 }
 

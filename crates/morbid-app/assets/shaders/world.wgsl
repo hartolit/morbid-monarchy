@@ -19,12 +19,11 @@ fn calculate_heights_at(
     grid_width: i32, grid_height: i32,
     elevation_scale: f32
 ) -> vec4<f32> {
-    if cell_x < 0 || cell_x >= grid_width || cell_y < 0 || cell_y >= grid_height {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    let cx = clamp(cell_x, 0, grid_width - 1);
+    let cy = clamp(cell_y, 0, grid_height - 1);
 
-    let wrapped_x = ((cell_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
-    let wrapped_y = ((cell_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
+    let wrapped_x = ((cx + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
+    let wrapped_y = ((cy + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
 
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
     let word_0 = world_buffer[buffer_index];
@@ -72,173 +71,86 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let grid_height = i32(window.origin_size.w);
     let scale = window.config.x;
 
-    // Harvest the physical absolute origin from the ECS transform matrix
     let chunk_matrix = get_world_from_local(in.instance_index);
     let chunk_origin_x = i32(round(chunk_matrix[3].x));
     let chunk_origin_y = i32(round(-chunk_matrix[3].z));
 
-    let cell_index = in.vertex_index / VERTS_PER_CELL;
-    let index_within_cell = in.vertex_index % VERTS_PER_CELL;
-    let face_slot = index_within_cell / VERTS_PER_FACE;
-    let vertex_within_face = index_within_cell % VERTS_PER_FACE;
+    // Convert the negative Z back to positive Y for grid lookups
+    let local_x = i32(round(in._position.x));
+    let local_y = i32(round(-in._position.z));
 
-    // Bound to the local 64x64 chunk iteration, avoiding geometry expansion
-    let local_cell_x = i32(cell_index) % 64;
-    let local_cell_y = i32(cell_index) / 64;
+    let world_cell_x = chunk_origin_x + local_x;
+    let world_cell_y = chunk_origin_y + local_y;
 
-    // Resolve mathematical coordinate for SSBO retrieval
-    let world_cell_x = chunk_origin_x + local_cell_x;
-    let world_cell_y = chunk_origin_y + local_cell_y;
-
-    // Relative extraction boundaries mapped against the shifting window ToroidalGrid
     let local_grid_x = world_cell_x - i32(window.origin_size.x);
     let local_grid_y = world_cell_y - i32(window.origin_size.y);
 
+    // Get exact heights for this vertex and its 4 neighbors to calculate smooth normals
+    let h_center = calculate_heights_at(local_grid_x, local_grid_y, grid_width, grid_height, scale);
+    let h_left = calculate_heights_at(local_grid_x - 1, local_grid_y, grid_width, grid_height, scale);
+    let h_right = calculate_heights_at(local_grid_x + 1, local_grid_y, grid_width, grid_height, scale);
+    let h_up = calculate_heights_at(local_grid_x, local_grid_y - 1, grid_width, grid_height, scale);
+    let h_down = calculate_heights_at(local_grid_x, local_grid_y + 1, grid_width, grid_height, scale);
+
+    // Extract the topmost visual layer (Surface > Fluid > Granular > Terrain)
+    let top_h = max(h_center.w, max(h_center.z, max(h_center.y, h_center.x)));
+    let l_top = max(h_left.w, max(h_left.z, max(h_left.y, h_left.x)));
+    let r_top = max(h_right.w, max(h_right.z, max(h_right.y, h_right.x)));
+    let u_top = max(h_up.w, max(h_up.z, max(h_up.y, h_up.x)));
+    let d_top = max(h_down.w, max(h_down.z, max(h_down.y, h_down.x)));
+
+    // Calculate Central Difference Normal
+    // Cross product of X-gradient and Z-gradient vectors
+    let normal = normalize(vec3<f32>(l_top - r_top, 2.0, d_top - u_top));
+
+    // Calculate the actual 3D vertex position
+    let local_pos = vec3<f32>(in._position.x, top_h, in._position.z);
+
+    out.normal = normal;
+    out.clip_position = mesh_position_local_to_clip(chunk_matrix, vec4<f32>(local_pos, 1.0));
+
+    // Color Lookup (Using the base cell to determine material)
     let wrapped_x = ((local_grid_x + i32(window.head_cursor.x)) % grid_width + grid_width) % grid_width;
     let wrapped_y = ((local_grid_y + i32(window.head_cursor.y)) % grid_height + grid_height) % grid_height;
     let buffer_index = u32(wrapped_y * grid_width + wrapped_x) * 2u;
-
     let word_0 = world_buffer[buffer_index];
-    let word_1 = world_buffer[buffer_index + 1u];
 
-    // Decode Word 0 (Geometry)
     let mat_terrain = word_0 & 0xFu;
     let mat_surface = (word_0 >> 4u) & 0xFu;
     let mat_granular = (word_0 >> 8u) & 0x7u;
     let mat_fluid = (word_0 >> 11u) & 0xFu;
     let variants = (word_0 >> 15u) & 0x1Fu;
-    let elevation = f32((word_0 >> 20u) & 0xFFFu);
 
-    // Decode Word 1 (Physics)
-    let fluid_vol = f32(word_1 & 0x1FFu);
-    let granular_vol = f32((word_1 >> 9u) & 0xFu);
-    let surface_state = f32((word_1 >> 13u) & 0x1FFu);
-
-    // Absolute Stacked Heights
-    let t_height = elevation * scale;
-    let g_height = t_height + (granular_vol * scale);
-    let f_height = g_height + (fluid_vol * scale);
-    let s_height = g_height + max(1.0, surface_state) * scale; // Anchored to Ground
-
-    var local_pos = vec3<f32>(0.0, 0.0, 0.0);
-    var normal = vec3<f32>(0.0, 1.0, 0.0);
+    // Determine the topmost material index by checking which layer is physically highest
     var mat_lookup = mat_terrain;
-    var is_rendered = false;
+    var max_h = h_center.x;
 
-    // Offsets to neighbor cells for boundary occlusion
-    var n_dx = 0;
-    var n_dy = 0;
-
-    // Setup generic wall faces mapped to all 4 physical layers
-    if face_slot == 1u || face_slot == 6u || face_slot == 11u || face_slot == 16u { normal = vec3<f32>(0.0, 0.0, -1.0); n_dy = 1; }
-    if face_slot == 2u || face_slot == 7u || face_slot == 12u || face_slot == 17u { normal = vec3<f32>(0.0, 0.0, 1.0); n_dy = -1; }
-    if face_slot == 3u || face_slot == 8u || face_slot == 13u || face_slot == 18u { normal = vec3<f32>(1.0, 0.0, 0.0); n_dx = 1; }
-    if face_slot == 4u || face_slot == 9u || face_slot == 14u || face_slot == 19u { normal = vec3<f32>(-1.0, 0.0, 0.0); n_dx = -1; }
-
-    let neighbor_h = calculate_heights_at(local_grid_x + n_dx, local_grid_y + n_dy, grid_width, grid_height, scale);
-
-    switch face_slot {
-        // TERRAIN FACES (0-4)
-        case 0u: { // Cap
-            mat_lookup = mat_terrain;
-            if mat_terrain != 0u && t_height > 0.0 {
-                local_pos = get_quad_vertex(vertex_within_face, t_height, t_height, normal);
-                is_rendered = true;
-            }
-        }
-        case 1u, 2u, 3u, 4u: { // Walls
-            mat_lookup = mat_terrain;
-            if mat_terrain != 0u && t_height > neighbor_h.x {
-                local_pos = get_quad_vertex(vertex_within_face, neighbor_h.x, t_height, normal);
-                is_rendered = true;
-            }
-        }
-        // GRANULAR FACES (5-9)
-        case 5u: { // Cap
-            mat_lookup = mat_granular + 32u;
-            if mat_granular != 0u && granular_vol > 0.0 {
-                local_pos = get_quad_vertex(vertex_within_face, g_height, g_height, vec3<f32>(0.0, 1.0, 0.0));
-                is_rendered = true;
-            }
-        }
-        case 6u, 7u, 8u, 9u: { // Walls
-            mat_lookup = mat_granular + 32u;
-            let n_floor = max(neighbor_h.y, t_height);
-            if mat_granular != 0u && g_height > n_floor {
-                local_pos = get_quad_vertex(vertex_within_face, n_floor, g_height, normal);
-                is_rendered = true;
-            }
-        }
-        // FLUID FACES (10-14)
-        case 10u: { // Cap
-            mat_lookup = mat_fluid + 64u;
-            if mat_fluid != 0u && fluid_vol > 0.0 {
-                local_pos = get_quad_vertex(vertex_within_face, f_height, f_height, vec3<f32>(0.0, 1.0, 0.0));
-                is_rendered = true;
-            }
-        }
-        case 11u, 12u, 13u, 14u: { // Walls
-            mat_lookup = mat_fluid + 64u;
-            let n_floor = max(neighbor_h.z, g_height);
-            if mat_fluid != 0u && f_height > n_floor {
-                local_pos = get_quad_vertex(vertex_within_face, n_floor, f_height, normal);
-                is_rendered = true;
-            }
-        }
-        // SURFACE FACES (15-19)
-        case 15u: { // Cap
-            mat_lookup = mat_surface + 96u;
-            if mat_surface != 0u {
-                local_pos = get_quad_vertex(vertex_within_face, s_height, s_height, vec3<f32>(0.0, 1.0, 0.0));
-                is_rendered = true;
-            }
-        }
-        case 16u, 17u, 18u, 19u: { // Walls
-            mat_lookup = mat_surface + 96u;
-            // Floor is now bound to the local ground crust, not the fluid height
-            let n_floor = max(neighbor_h.w, g_height);
-            if mat_surface != 0u && s_height > n_floor {
-                local_pos = get_quad_vertex(vertex_within_face, n_floor, s_height, normal);
-                is_rendered = true;
-            }
-        }
-        default: {}
+    if mat_granular != 0u && h_center.y >= max_h {
+        mat_lookup = mat_granular + 32u;
+        max_h = h_center.y;
     }
 
-    if !is_rendered {
-        out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        return out;
+    // Surface is anchored to the crust. It wins if it's taller than the terrain/granular layer.
+    if mat_surface != 0u && h_center.w >= max_h {
+        mat_lookup = mat_surface + 96u;
+        max_h = h_center.w;
     }
 
-    // Bind local geometry shift to the exact instance coordinate bounds
-    let local_offset_x = f32(local_cell_x);
-    let local_offset_z = f32(-local_cell_y);
-    local_pos = local_pos + vec3<f32>(local_offset_x, 0.0, local_offset_z);
-
-    out.normal = normal;
-    // Map geometry to the active global matrix
-    out.clip_position = mesh_position_local_to_clip(chunk_matrix, vec4<f32>(local_pos, 1.0));
+    // Fluid is also anchored to the crust. If it is deeper than the surface is tall, it drowns the surface.
+    if mat_fluid != 0u && h_center.z > max_h {
+        mat_lookup = mat_fluid + 64u;
+        max_h = h_center.z;
+    }
 
     var base_color = palette[mat_lookup];
     let visual_shift = (f32(variants) - 16.0) / 16.0 * 0.10;
-
     base_color.r = saturate(base_color.r + visual_shift);
     base_color.g = saturate(base_color.g + visual_shift);
     base_color.b = saturate(base_color.b + visual_shift);
 
-    let true_world_x = f32(world_cell_x);
-    let true_world_y = f32(world_cell_y);
-
-    let dx = true_world_x - window.head_cursor.z;
-    let dy = true_world_y - window.head_cursor.w;
-    let dist_sq = dx * dx + dy * dy;
-
-    if window.config.y >= 0.0 && dist_sq <= (window.config.y * window.config.y) + 0.1 {
-        base_color = mix(base_color, vec4<f32>(1.0, 0.4, 0.4, 1.0), 0.35);
-    }
-
+    // Apply lighting
     let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
-    let ambient = select(0.3, 0.15, normal.y < 0.5);
+    let ambient = 0.3;
     let diffuse = max(dot(normal, light_dir), ambient);
 
     out.color = vec4<f32>(base_color.rgb * diffuse, base_color.a);
