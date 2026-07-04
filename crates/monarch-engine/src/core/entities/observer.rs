@@ -19,7 +19,7 @@ impl Default for ObserverConfig {
     fn default() -> Self {
         Self {
             base_speed: 50.0,
-            sprint_speed: 100.0,
+            sprint_speed: 200.0,
             jump_impulse: 20.0,
             look_sensitivity: 0.002,
             max_pitch: 1.54,

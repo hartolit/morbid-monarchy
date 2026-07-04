@@ -11,7 +11,7 @@ use spatial_lib::prelude::{
 };
 use std::{path::PathBuf, sync::Arc};
 
-const WORLD_DATA_DIR: &str = "../world_data";
+const WORLD_DATA_DIR: &str = "world_data";
 const DB_FILE: &str = "save.redb";
 
 #[derive(Resource, Clone)]
