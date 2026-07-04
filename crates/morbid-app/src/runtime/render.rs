@@ -1,6 +1,6 @@
 use bevy::camera::visibility::NoFrustumCulling;
-use bevy::mesh::Indices;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
+use bevy::render::mesh::Indices;
 use bevy::render::storage::ShaderBuffer;
 use bevy::{
     asset::RenderAssetUsages,
@@ -78,6 +78,10 @@ impl Material for WorldMaterial {
             .0
             .get_layout(&[Mesh::ATTRIBUTE_POSITION.at_shader_location(0)])?;
         descriptor.vertex.buffers = vec![vertex_layout];
+
+        // Disable backface culling directly on the primitive state
+        descriptor.primitive.cull_mode = None;
+
         Ok(())
     }
 }
@@ -87,20 +91,24 @@ impl Material for WorldMaterial {
 pub struct WorldWindowUniform {
     pub origin_size: Vec4, // x: origin.x, y: origin.y, z: size.x, w: size.y
     pub head_cursor: Vec4, // x: head.x,   y: head.y,   z: cursor.x, w: cursor.y
-    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: (pad), w: (pad)
+    pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: LAYER_INDEX, w: (pad)
 }
 
 #[derive(Resource)]
 pub struct ChunkMeshHandle(pub Handle<Mesh>);
 
 #[derive(Resource)]
-pub struct GlobalWorldMaterial(pub Handle<WorldMaterial>);
+pub struct GlobalWorldMaterials {
+    pub terrain: Handle<WorldMaterial>,
+    pub granular: Handle<WorldMaterial>,
+    pub fluid: Handle<WorldMaterial>,
+    pub surface: Handle<WorldMaterial>,
+}
 
 #[derive(Component)]
 pub struct ChunkRenderMarker(pub ChunkKey);
 
-/// Allocates an immutable, contiguous dummy mesh mapping exactly to a single physical chunk.
-/// Prevents catastrophic VRAM scaling by locking the footprint to ~5MB per instance.
+/// Allocates an immutable, continuous dummy mesh mapping exactly to a single physical chunk.
 fn build_chunk_dummy(size: u32) -> Mesh {
     let verts_across = size + 1;
     let num_verts = (verts_across * verts_across) as usize;
@@ -193,18 +201,50 @@ fn setup_rendering(
         RenderAssetUsages::all(),
     ));
 
-    let material = materials.add(WorldMaterial {
-        grid_buffer,
-        palette_buffer,
+    let mat_terrain = materials.add(WorldMaterial {
+        grid_buffer: grid_buffer.clone(),
+        palette_buffer: palette_buffer.clone(),
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // elev_scale, cursor_radius (hidden)
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // elev_scale, cursor_radius, LAYER_INDEX (0)
+            ..default()
+        },
+    });
+
+    let mat_granular = materials.add(WorldMaterial {
+        grid_buffer: grid_buffer.clone(),
+        palette_buffer: palette_buffer.clone(),
+        window: WorldWindowUniform {
+            config: Vec4::new(0.15, -1.0, 1.0, 0.0), // LAYER_INDEX (1)
+            ..default()
+        },
+    });
+
+    let mat_fluid = materials.add(WorldMaterial {
+        grid_buffer: grid_buffer.clone(),
+        palette_buffer: palette_buffer.clone(),
+        window: WorldWindowUniform {
+            config: Vec4::new(0.15, -1.0, 2.0, 0.0), // LAYER_INDEX (2)
+            ..default()
+        },
+    });
+
+    let mat_surface = materials.add(WorldMaterial {
+        grid_buffer: grid_buffer.clone(),
+        palette_buffer: palette_buffer.clone(),
+        window: WorldWindowUniform {
+            config: Vec4::new(0.15, -1.0, 3.0, 0.0), // LAYER_INDEX (3)
             ..default()
         },
     });
 
     let chunk_mesh = meshes.add(build_chunk_dummy(CHUNK_SIZE as u32));
 
-    commands.insert_resource(GlobalWorldMaterial(material));
+    commands.insert_resource(GlobalWorldMaterials {
+        terrain: mat_terrain,
+        granular: mat_granular,
+        fluid: mat_fluid,
+        surface: mat_surface,
+    });
     commands.insert_resource(ChunkMeshHandle(chunk_mesh));
 }
 
@@ -216,7 +256,7 @@ fn sync_grid_rendering(
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     chunk_mesh: Res<ChunkMeshHandle>,
-    global_material: Res<GlobalWorldMaterial>,
+    global_mats: Res<GlobalWorldMaterials>,
     tuning: Res<WorldTuningConfig>,
     chunk_query: Query<(Entity, &ChunkRenderMarker)>,
 ) {
@@ -224,27 +264,35 @@ fn sync_grid_rendering(
 
     // Maintain ToroidalGrid SSBO memory projection
     if grid_ref.cells_dirty {
-        if let Some(mut material) = materials.get_mut(&global_material.0) {
-            material.window.origin_size = Vec4::new(
-                grid_ref.spatial.window_origin.x as f32,
-                grid_ref.spatial.window_origin.y as f32,
-                grid_ref.spatial.width as f32,
-                grid_ref.spatial.height as f32,
-            );
+        let handles = [
+            &global_mats.terrain,
+            &global_mats.granular,
+            &global_mats.fluid,
+            &global_mats.surface,
+        ];
 
-            // Overwrite head positions; brush cursor coordinates (Z/W) are injected asynchronously
-            material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
-            material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
-            material.window.config.x = tuning.elevation_scale;
+        for handle in handles {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.window.origin_size = Vec4::new(
+                    grid_ref.spatial.window_origin.x as f32,
+                    grid_ref.spatial.window_origin.y as f32,
+                    grid_ref.spatial.width as f32,
+                    grid_ref.spatial.height as f32,
+                );
 
-            if let Some(mut buffer) = buffers.get_mut(&material.grid_buffer) {
-                let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
-                match &mut buffer.data {
-                    Some(dst) => {
-                        dst.resize(src.len(), 0);
-                        dst.copy_from_slice(src);
+                material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
+                material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
+                material.window.config.x = tuning.elevation_scale;
+
+                if let Some(mut buffer) = buffers.get_mut(&material.grid_buffer) {
+                    let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
+                    match &mut buffer.data {
+                        Some(dst) => {
+                            dst.resize(src.len(), 0);
+                            dst.copy_from_slice(src);
+                        }
+                        slot => *slot = Some(src.to_vec()),
                     }
-                    slot => *slot = Some(src.to_vec()),
                 }
             }
         }
@@ -270,11 +318,34 @@ fn sync_grid_rendering(
         if !existing_chunks.contains(&key) {
             let chunk_x = key.key.x * (CHUNK_SIZE as i32);
             let chunk_y = key.key.y * (CHUNK_SIZE as i32);
+            let pos = Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32));
 
+            // Spawn 4 overlapping layer meshes per chunk
             commands.spawn((
                 Mesh3d(chunk_mesh.0.clone()),
-                MeshMaterial3d(global_material.0.clone()),
-                Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32)), // X/Y mapped to physical X/-Z
+                MeshMaterial3d(global_mats.terrain.clone()),
+                pos,
+                ChunkRenderMarker(key),
+                NoFrustumCulling,
+            ));
+            commands.spawn((
+                Mesh3d(chunk_mesh.0.clone()),
+                MeshMaterial3d(global_mats.granular.clone()),
+                pos,
+                ChunkRenderMarker(key),
+                NoFrustumCulling,
+            ));
+            commands.spawn((
+                Mesh3d(chunk_mesh.0.clone()),
+                MeshMaterial3d(global_mats.fluid.clone()),
+                pos,
+                ChunkRenderMarker(key),
+                NoFrustumCulling,
+            ));
+            commands.spawn((
+                Mesh3d(chunk_mesh.0.clone()),
+                MeshMaterial3d(global_mats.surface.clone()),
+                pos,
                 ChunkRenderMarker(key),
                 NoFrustumCulling,
             ));
