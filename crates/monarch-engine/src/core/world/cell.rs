@@ -45,7 +45,7 @@ impl SurfaceMat {
 pub struct GranularMat(pub u8);
 
 impl GranularMat {
-    // 3 Bits (Max 7)
+    // 4 Bits (Max 15)
     pub const EMPTY: Self = Self(0);
     pub const GRANULAR_DIRT: Self = Self(1);
     pub const GRANULAR_SAND: Self = Self(2);
@@ -73,7 +73,7 @@ impl GranularMat {
 pub struct FluidMat(pub u8);
 
 impl FluidMat {
-    // 4 Bits (Max 15)
+    // 3 Bits (Max 7)
     pub const EMPTY: Self = Self(0);
     pub const FLUID_WATER: Self = Self(1);
     pub const FLUID_MAGMA: Self = Self(2);
@@ -108,13 +108,13 @@ impl WorldCell {
     const MAT_SURFACE_SHIFT: u64 = 4;
     const MAT_SURFACE_MASK: u64 = 0xF;
 
-    // Granular Material: 3 bits (Bits 8-10)
+    // Granular Material: 4 bits (Bits 8-11)
     const MAT_GRANULAR_SHIFT: u64 = 8;
-    const MAT_GRANULAR_MASK: u64 = 0x7;
+    const MAT_GRANULAR_MASK: u64 = 0xF;
 
-    // Fluid Material: 4 bits (Bits 11-14)
-    const MAT_FLUID_SHIFT: u64 = 11;
-    const MAT_FLUID_MASK: u64 = 0xF;
+    // Fluid Material: 3 bits (Bits 12-14)
+    const MAT_FLUID_SHIFT: u64 = 12;
+    const MAT_FLUID_MASK: u64 = 0x7;
 
     // Variants: 5 bits (Bits 15-19)
     const VARIANTS_SHIFT: u64 = 15;

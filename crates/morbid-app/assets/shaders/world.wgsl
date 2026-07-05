@@ -38,8 +38,8 @@ fn get_cell_data(
 
     data.terrain_mat = word_0 & 0xFu;
     data.surface_mat = (word_0 >> 4u) & 0xFu;
-    data.granular_mat = (word_0 >> 8u) & 0x7u;
-    data.fluid_mat = (word_0 >> 11u) & 0xFu;
+    data.granular_mat = (word_0 >> 8u) & 0xFu;
+    data.fluid_mat = (word_0 >> 12u) & 0x7u;
     data.variants = (word_0 >> 15u) & 0x1Fu;
 
     let elevation = f32((word_0 >> 20u) & 0xFFFu);
