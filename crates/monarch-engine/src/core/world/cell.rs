@@ -13,7 +13,7 @@ impl TerrainMat {
     pub const TERRAIN_STONE: Self = Self(1);
     pub const TERRAIN_DIRT: Self = Self(2);
     pub const TERRAIN_SANDSTONE: Self = Self(3);
-    pub const TERRAIN_ICE: Self = Self(4);
+    pub const TERRAIN_DENSE_SNOW: Self = Self(4);
     pub const TERRAIN_METAL: Self = Self(5);
     pub const TERRAIN_CORRUPTION: Self = Self(6);
 }
@@ -59,7 +59,7 @@ impl GranularMat {
     pub fn to_terrain(self) -> TerrainMat {
         match self {
             Self::GRANULAR_SAND => TerrainMat::TERRAIN_SANDSTONE,
-            Self::GRANULAR_SNOW => TerrainMat::TERRAIN_ICE,
+            Self::GRANULAR_SNOW => TerrainMat::TERRAIN_DENSE_SNOW,
             Self::GRANULAR_DIRT | Self::GRANULAR_MUD => TerrainMat::TERRAIN_DIRT,
             Self::GRANULAR_GRAVEL | Self::GRANULAR_LIQUID_METAL => TerrainMat::TERRAIN_STONE,
             Self::GRANULAR_CORRUPTION => TerrainMat::TERRAIN_CORRUPTION,

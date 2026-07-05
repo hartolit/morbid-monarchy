@@ -16,7 +16,7 @@ pub fn get_granular_repose(material: GranularMat) -> u16 {
 pub fn get_terrain_repose(material: TerrainMat) -> u16 {
     match material {
         TerrainMat::TERRAIN_SANDSTONE => 2,
-        TerrainMat::TERRAIN_ICE => 3,
+        TerrainMat::TERRAIN_DENSE_SNOW => 3,
         TerrainMat::TERRAIN_DIRT => 4,
         _ => u16::MAX,
     }

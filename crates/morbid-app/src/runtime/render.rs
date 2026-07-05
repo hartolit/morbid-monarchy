@@ -160,7 +160,7 @@ fn setup_rendering(
     palette[TerrainMat::TERRAIN_STONE.0 as usize] = [0.48, 0.46, 0.44, 1.0];
     palette[TerrainMat::TERRAIN_DIRT.0 as usize] = [0.40, 0.28, 0.15, 1.0];
     palette[TerrainMat::TERRAIN_SANDSTONE.0 as usize] = [0.65, 0.55, 0.35, 1.0];
-    palette[TerrainMat::TERRAIN_ICE.0 as usize] = [0.70, 0.85, 0.95, 1.0];
+    palette[TerrainMat::TERRAIN_DENSE_SNOW.0 as usize] = [0.70, 0.85, 0.95, 1.0];
     palette[TerrainMat::TERRAIN_METAL.0 as usize] = [0.60, 0.60, 0.65, 1.0];
     palette[TerrainMat::TERRAIN_CORRUPTION.0 as usize] = [0.35, 0.15, 0.40, 1.0];
 

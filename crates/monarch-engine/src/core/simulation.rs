@@ -116,7 +116,7 @@ pub fn simulate_world(
                     granular_sim::step_granular(cell, old_cell, view, world_pos, tick);
                 }
 
-                if run_liquid && tick % 2 == 0 {
+                if run_liquid {
                     liquid_sim::step_liquid(cell, old_cell, view, world_pos, tick);
                 }
 
