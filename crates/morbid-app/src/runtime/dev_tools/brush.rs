@@ -3,13 +3,15 @@ use monarch_engine::prelude::{spherical::DynamicRigidSphere, *};
 
 use crate::runtime::{
     dev_tools::{BrushSettings, GridBrush},
-    render::WorldMaterial,
+    render::{
+        FluidMaterial, GranularMaterial, SurfaceMaterial, TerrainMaterial, WorldWindowUniform,
+    },
 };
 
 const RAYMARCH_MAX_DIST: f32 = 1000.0;
 const SPHERE_SPAWN_OFFSET_Y: f32 = 10.0;
-const SPHERE_SPAWN_RADIUS: f32 = 5.0;
-const SPHERE_SPAWN_MASS: f32 = 5.0;
+const SPHERE_SPAWN_RADIUS: f32 = 4.0;
+const SPHERE_SPAWN_MASS: f32 = 4.0;
 const ATTRACT_FORCE_MAGNITUDE: f32 = 350.0;
 const LIFT_ACCELERATION: f32 = 250.0;
 const LIFT_CENTERING_FORCE: f32 = 40.0;
@@ -141,12 +143,14 @@ pub fn update_brush_cursor(
     global_config: Res<GlobalPhysicsConfig>,
     brush: Res<GridBrush>,
     settings: Res<BrushSettings>,
-    mut materials: ResMut<Assets<WorldMaterial>>,
+    mut terrain_mats: ResMut<Assets<TerrainMaterial>>,
+    mut granular_mats: ResMut<Assets<GranularMaterial>>,
+    mut fluid_mats: ResMut<Assets<FluidMaterial>>,
+    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
     egui_wants_input: Res<bevy_egui::input::EguiWantsInput>,
 ) {
     let is_active = *brush != GridBrush::None;
 
-    // Evaluate raycast extraction once, minimizing global lock contention
     let hit_pos = if is_active {
         extract_pointer_hit(
             &windows,
@@ -159,19 +163,33 @@ pub fn update_brush_cursor(
         None
     };
 
-    for (_, mat) in materials.iter_mut() {
+    let cursor_radius = if *brush == GridBrush::SpawnSphere {
+        0.0
+    } else {
+        settings.radius as f32
+    };
+
+    let update_mat = |mat: &mut WorldWindowUniform| {
         if let Some(pos) = hit_pos {
-            let cursor_radius = if *brush == GridBrush::SpawnSphere {
-                0.0
-            } else {
-                settings.radius as f32
-            };
-            mat.window.head_cursor.z = pos.x.floor();
-            mat.window.head_cursor.w = (-pos.z).floor();
-            mat.window.config.y = cursor_radius;
+            mat.head_cursor.z = pos.x.floor();
+            mat.head_cursor.w = (-pos.z).floor();
+            mat.config.y = cursor_radius;
         } else {
-            mat.window.config.y = -1.0;
+            mat.config.y = -1.0;
         }
+    };
+
+    for (_, mat) in terrain_mats.iter_mut() {
+        update_mat(&mut mat.window);
+    }
+    for (_, mat) in granular_mats.iter_mut() {
+        update_mat(&mut mat.window);
+    }
+    for (_, mat) in fluid_mats.iter_mut() {
+        update_mat(&mut mat.window);
+    }
+    for (_, mat) in surface_mats.iter_mut() {
+        update_mat(&mut mat.window);
     }
 }
 

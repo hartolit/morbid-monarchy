@@ -19,10 +19,15 @@ pub struct WorldRenderPlugin;
 
 impl Plugin for WorldRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<WorldMaterial>::default())
-            .init_resource::<WorldTuningConfig>()
-            .add_systems(Startup, setup_rendering)
-            .add_systems(Update, sync_grid_rendering);
+        app.add_plugins((
+            MaterialPlugin::<TerrainMaterial>::default(),
+            MaterialPlugin::<GranularMaterial>::default(),
+            MaterialPlugin::<FluidMaterial>::default(),
+            MaterialPlugin::<SurfaceMaterial>::default(),
+        ))
+        .init_resource::<WorldTuningConfig>()
+        .add_systems(Startup, setup_rendering)
+        .add_systems(Update, sync_grid_rendering);
     }
 }
 
@@ -39,53 +44,6 @@ impl Default for WorldTuningConfig {
     }
 }
 
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-pub struct WorldMaterial {
-    #[storage(10, read_only, visibility(vertex))]
-    pub grid_buffer: Handle<ShaderBuffer>,
-
-    #[storage(11, read_only, visibility(vertex))]
-    pub palette_buffer: Handle<ShaderBuffer>,
-
-    #[uniform(12, visibility(vertex))]
-    pub window: WorldWindowUniform,
-}
-
-impl Material for WorldMaterial {
-    fn vertex_shader() -> ShaderRef {
-        "shaders/world.wgsl".into()
-    }
-    fn fragment_shader() -> ShaderRef {
-        "shaders/world.wgsl".into()
-    }
-    fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Opaque
-    }
-    fn enable_prepass() -> bool {
-        false
-    }
-    fn enable_shadows() -> bool {
-        false
-    }
-
-    fn specialize(
-        _pipeline: &MaterialPipeline,
-        descriptor: &mut RenderPipelineDescriptor,
-        layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
-    ) -> Result<(), SpecializedMeshPipelineError> {
-        let vertex_layout = layout
-            .0
-            .get_layout(&[Mesh::ATTRIBUTE_POSITION.at_shader_location(0)])?;
-        descriptor.vertex.buffers = vec![vertex_layout];
-
-        // Disable backface culling directly on the primitive state
-        descriptor.primitive.cull_mode = None;
-
-        Ok(())
-    }
-}
-
 /// GPU boundary struct reflecting the active projection window and brush tuning.
 #[derive(Clone, Default, ShaderType, Debug)]
 pub struct WorldWindowUniform {
@@ -94,15 +52,70 @@ pub struct WorldWindowUniform {
     pub config: Vec4,      // x: elev_scale, y: cursor_radius, z: LAYER_INDEX, w: (pad)
 }
 
+macro_rules! define_landscape_material {
+    ($struct_name:ident, $shader_path:expr) => {
+        #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+        pub struct $struct_name {
+            #[storage(10, read_only, visibility(vertex))]
+            pub grid_buffer: Handle<ShaderBuffer>,
+
+            #[storage(11, read_only, visibility(vertex))]
+            pub palette_buffer: Handle<ShaderBuffer>,
+
+            #[uniform(12, visibility(vertex))]
+            pub window: WorldWindowUniform,
+        }
+
+        impl Material for $struct_name {
+            fn vertex_shader() -> ShaderRef {
+                $shader_path.into()
+            }
+            fn fragment_shader() -> ShaderRef {
+                $shader_path.into()
+            }
+
+            fn alpha_mode(&self) -> AlphaMode {
+                AlphaMode::Opaque
+            }
+
+            fn enable_prepass() -> bool {
+                false
+            }
+            fn enable_shadows() -> bool {
+                false
+            }
+
+            fn specialize(
+                _pipeline: &MaterialPipeline,
+                descriptor: &mut RenderPipelineDescriptor,
+                layout: &MeshVertexBufferLayoutRef,
+                _key: MaterialPipelineKey<Self>,
+            ) -> Result<(), SpecializedMeshPipelineError> {
+                let vertex_layout = layout
+                    .0
+                    .get_layout(&[Mesh::ATTRIBUTE_POSITION.at_shader_location(0)])?;
+                descriptor.vertex.buffers = vec![vertex_layout];
+                descriptor.primitive.cull_mode = None;
+                Ok(())
+            }
+        }
+    };
+}
+
+define_landscape_material!(TerrainMaterial, "shaders/landscape/terrain.wgsl");
+define_landscape_material!(GranularMaterial, "shaders/landscape/granular.wgsl");
+define_landscape_material!(FluidMaterial, "shaders/landscape/fluid.wgsl");
+define_landscape_material!(SurfaceMaterial, "shaders/landscape/surface.wgsl");
+
 #[derive(Resource)]
 pub struct ChunkMeshHandle(pub Handle<Mesh>);
 
 #[derive(Resource)]
 pub struct GlobalWorldMaterials {
-    pub terrain: Handle<WorldMaterial>,
-    pub granular: Handle<WorldMaterial>,
-    pub fluid: Handle<WorldMaterial>,
-    pub surface: Handle<WorldMaterial>,
+    pub terrain: Handle<TerrainMaterial>,
+    pub granular: Handle<GranularMaterial>,
+    pub fluid: Handle<FluidMaterial>,
+    pub surface: Handle<SurfaceMaterial>,
 }
 
 #[derive(Component)]
@@ -147,7 +160,10 @@ fn build_chunk_dummy(size: u32) -> Mesh {
 
 fn setup_rendering(
     mut commands: Commands,
-    mut materials: ResMut<Assets<WorldMaterial>>,
+    mut terrain_mats: ResMut<Assets<TerrainMaterial>>,
+    mut granular_mats: ResMut<Assets<GranularMaterial>>,
+    mut fluid_mats: ResMut<Assets<FluidMaterial>>,
+    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -201,38 +217,38 @@ fn setup_rendering(
         RenderAssetUsages::all(),
     ));
 
-    let mat_terrain = materials.add(WorldMaterial {
+    let mat_terrain = terrain_mats.add(TerrainMaterial {
         grid_buffer: grid_buffer.clone(),
         palette_buffer: palette_buffer.clone(),
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 0.0, 0.0), // elev_scale, cursor_radius, LAYER_INDEX (0)
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0),
             ..default()
         },
     });
 
-    let mat_granular = materials.add(WorldMaterial {
+    let mat_granular = granular_mats.add(GranularMaterial {
         grid_buffer: grid_buffer.clone(),
         palette_buffer: palette_buffer.clone(),
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 1.0, 0.0), // LAYER_INDEX (1)
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0),
             ..default()
         },
     });
 
-    let mat_fluid = materials.add(WorldMaterial {
+    let mat_fluid = fluid_mats.add(FluidMaterial {
         grid_buffer: grid_buffer.clone(),
         palette_buffer: palette_buffer.clone(),
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 2.0, 0.0), // LAYER_INDEX (2)
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0),
             ..default()
         },
     });
 
-    let mat_surface = materials.add(WorldMaterial {
+    let mat_surface = surface_mats.add(SurfaceMaterial {
         grid_buffer: grid_buffer.clone(),
         palette_buffer: palette_buffer.clone(),
         window: WorldWindowUniform {
-            config: Vec4::new(0.15, -1.0, 3.0, 0.0), // LAYER_INDEX (3)
+            config: Vec4::new(0.15, -1.0, 0.0, 0.0),
             ..default()
         },
     });
@@ -253,7 +269,10 @@ fn sync_grid_rendering(
     mut commands: Commands,
     mut grid: ResMut<ActiveWorldGrid>,
     manager: Res<WorldManager>,
-    mut materials: ResMut<Assets<WorldMaterial>>,
+    mut terrain_mats: ResMut<Assets<TerrainMaterial>>,
+    mut granular_mats: ResMut<Assets<GranularMaterial>>,
+    mut fluid_mats: ResMut<Assets<FluidMaterial>>,
+    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     chunk_mesh: Res<ChunkMeshHandle>,
     global_mats: Res<GlobalWorldMaterials>,
@@ -262,40 +281,40 @@ fn sync_grid_rendering(
 ) {
     let grid_ref = grid.bypass_change_detection();
 
-    // Maintain ToroidalGrid SSBO memory projection
     if grid_ref.cells_dirty {
-        let handles = [
-            &global_mats.terrain,
-            &global_mats.granular,
-            &global_mats.fluid,
-            &global_mats.surface,
-        ];
+        macro_rules! sync_material {
+            ($assets:ident, $handle:expr) => {
+                if let Some(mut material) = $assets.get_mut($handle) {
+                    material.window.origin_size = Vec4::new(
+                        grid_ref.spatial.window_origin.x as f32,
+                        grid_ref.spatial.window_origin.y as f32,
+                        grid_ref.spatial.width as f32,
+                        grid_ref.spatial.height as f32,
+                    );
 
-        for handle in handles {
-            if let Some(mut material) = materials.get_mut(handle) {
-                material.window.origin_size = Vec4::new(
-                    grid_ref.spatial.window_origin.x as f32,
-                    grid_ref.spatial.window_origin.y as f32,
-                    grid_ref.spatial.width as f32,
-                    grid_ref.spatial.height as f32,
-                );
+                    material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
+                    material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
+                    material.window.config.x = tuning.elevation_scale;
 
-                material.window.head_cursor.x = grid_ref.spatial.buffer_head.x as f32;
-                material.window.head_cursor.y = grid_ref.spatial.buffer_head.y as f32;
-                material.window.config.x = tuning.elevation_scale;
-
-                if let Some(mut buffer) = buffers.get_mut(&material.grid_buffer) {
-                    let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
-                    match &mut buffer.data {
-                        Some(dst) => {
-                            dst.resize(src.len(), 0);
-                            dst.copy_from_slice(src);
+                    if let Some(mut buffer) = buffers.get_mut(&material.grid_buffer) {
+                        let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
+                        match &mut buffer.data {
+                            Some(dst) => {
+                                dst.resize(src.len(), 0);
+                                dst.copy_from_slice(src);
+                            }
+                            slot => *slot = Some(src.to_vec()),
                         }
-                        slot => *slot = Some(src.to_vec()),
                     }
                 }
-            }
+            };
         }
+
+        sync_material!(terrain_mats, &global_mats.terrain);
+        sync_material!(granular_mats, &global_mats.granular);
+        sync_material!(fluid_mats, &global_mats.fluid);
+        sync_material!(surface_mats, &global_mats.surface);
+
         grid.cells_dirty = false;
     }
 
@@ -320,7 +339,6 @@ fn sync_grid_rendering(
             let chunk_y = key.key.y * (CHUNK_SIZE as i32);
             let pos = Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32));
 
-            // Spawn 4 overlapping layer meshes per chunk
             commands.spawn((
                 Mesh3d(chunk_mesh.0.clone()),
                 MeshMaterial3d(global_mats.terrain.clone()),
