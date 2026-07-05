@@ -1,11 +1,12 @@
 use bevy::prelude::*;
-use monarch_engine::prelude::*;
+use monarch_engine::{core::entities::observer::resolve_observer_kinematics, prelude::*};
 
 use crate::runtime::{
     dev_tools::DevToolsPlugin,
     input::{
-        manage_os_cursor_boundary, observer_hardware_ingest, setup_observer, sync_lens_orientation,
-        sync_world_focus,
+        drive_possessed_sphere, handle_possession_toggle, manage_os_cursor_boundary,
+        observer_hardware_ingest, setup_observer, sync_lens_orientation, sync_world_focus,
+        update_camera_tether_and_zoom,
     },
     persistence,
     render::WorldRenderPlugin,
@@ -44,12 +45,20 @@ pub fn run() {
             Update,
             (
                 manage_os_cursor_boundary,
+                handle_possession_toggle,
+                drive_possessed_sphere,
                 observer_hardware_ingest,
                 sync_lens_orientation,
             )
                 .chain(),
         )
-        .add_systems(Update, sync_world_focus.after(sync_lens_orientation))
+        .add_systems(
+            Update,
+            (
+                sync_world_focus.after(sync_lens_orientation),
+                update_camera_tether_and_zoom.after(resolve_observer_kinematics),
+            ),
+        )
         .add_systems(
             Update,
             (
