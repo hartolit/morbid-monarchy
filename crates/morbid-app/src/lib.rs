@@ -16,7 +16,7 @@ mod runtime;
 
 pub fn run() {
     let world_db = persistence::initialize_database();
-    let startup_seed = 42;
+    let startup_seed = 69;
 
     App::new()
         .add_plugins(
