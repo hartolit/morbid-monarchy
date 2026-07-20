@@ -2,7 +2,8 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::{diagnostic::DiagnosticsStore, ecs::message::MessageWriter, prelude::*};
 use bevy_egui::{EguiContexts, egui};
 use monarch_engine::prelude::{
-    ActiveWorldGrid, FluidMat, ResizeSimulationEvent, SimulationConfig, WorldManager,
+    ActiveWorldGrid, FluidMat, GlobalPhysicsConfig, ResizeSimulationEvent, SimulationConfig,
+    WorldManager,
 };
 
 use crate::runtime::{
@@ -26,7 +27,7 @@ const UI_RADIUS_MAX: u32 = 32;
 const UI_STATS_OFFSET_X: f32 = -10.0;
 const UI_STATS_OFFSET_Y: f32 = 40.0;
 
-const UI_FPS_THRESHOLD_GOOD: f64 = 32.0;
+const UI_FPS_THRESHOLD_GOOD: f64 = 55.0;
 
 const BRUSH_OPTIONS: [(GridBrush, &str); 7] = [
     (GridBrush::None, "None"),
@@ -41,6 +42,7 @@ const BRUSH_OPTIONS: [(GridBrush, &str); 7] = [
 pub fn dev_tuning_ui(
     mut contexts: EguiContexts,
     mut world_config: ResMut<WorldTuningConfig>,
+    mut global_config: ResMut<GlobalPhysicsConfig>,
     mut sim_config: ResMut<SimulationConfig>,
     mut brush: ResMut<GridBrush>,
     mut brush_settings: ResMut<BrushSettings>,
@@ -103,11 +105,21 @@ pub fn dev_tuning_ui(
             add_separator(ui);
 
             ui.label(egui::RichText::new("Elevation Scale:").color(egui::Color32::LIGHT_GRAY));
-            ui.add(
-                egui::DragValue::new(&mut world_config.elevation_scale)
-                    .range(UI_ELEVATION_MIN..=UI_ELEVATION_MAX)
-                    .speed(UI_ELEVATION_SPEED),
-            );
+
+            // TODO: Fix
+            let mut scale = world_config.elevation_scale;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut scale)
+                        .range(UI_ELEVATION_MIN..=UI_ELEVATION_MAX)
+                        .speed(UI_ELEVATION_SPEED),
+                )
+                .changed()
+            {
+                world_config.elevation_scale = scale;
+                global_config.elevation_scale = scale;
+            }
+
             add_separator(ui);
 
             ui.label(egui::RichText::new("Active Radius (X/Y):").color(egui::Color32::LIGHT_GRAY));
