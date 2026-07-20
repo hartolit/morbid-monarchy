@@ -14,6 +14,9 @@ use std::{path::PathBuf, sync::Arc};
 const WORLD_DATA_DIR: &str = "world_data";
 const DB_FILE: &str = "save.redb";
 
+// Batch threshold size for flushing chunks to disk.
+const SAVE_BATCH_SIZE_THRESHOLD: usize = 64;
+
 #[derive(Resource, Clone)]
 pub struct WorldDatabase(pub Arc<RedbChunkStorage>);
 
@@ -116,18 +119,18 @@ pub fn process_save_queue(
 
     timer.0.tick(time.delta());
 
-    if timer.0.is_finished() || save_queue.chunks.len() >= 50 {
+    if timer.0.is_finished() || save_queue.chunks.len() >= SAVE_BATCH_SIZE_THRESHOLD {
         let chunks_to_save = std::mem::take(&mut save_queue.chunks);
         let storage_clone = db.0.clone();
         let pool = IoTaskPool::get();
 
         let task = pool.spawn(async move {
-            let encoded_payloads: Vec<(ChunkKey, Vec<u8>)> = chunks_to_save
+            let encoded_payloads: Vec<_> = chunks_to_save
                 .into_iter()
                 .map(|(k, data)| (k, bitcode::encode(&data)))
                 .collect();
 
-            let batch_refs: Vec<(ChunkKey, &[u8])> = encoded_payloads
+            let batch_refs: Vec<_> = encoded_payloads
                 .iter()
                 .map(|(k, bytes)| (*k, bytes.as_slice()))
                 .collect();
@@ -161,12 +164,13 @@ pub fn emergency_flush_on_exit(
     );
 
     let chunks_to_save = std::mem::take(&mut queue.chunks);
-    let encoded_payloads: Vec<(ChunkKey, Vec<u8>)> = chunks_to_save
+
+    let encoded_payloads: Vec<_> = chunks_to_save
         .into_iter()
         .map(|(k, data)| (k, bitcode::encode(&data)))
         .collect();
 
-    let batch_refs: Vec<(ChunkKey, &[u8])> = encoded_payloads
+    let batch_refs: Vec<_> = encoded_payloads
         .iter()
         .map(|(k, bytes)| (*k, bytes.as_slice()))
         .collect();

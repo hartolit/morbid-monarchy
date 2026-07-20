@@ -9,6 +9,29 @@ use monarch_engine::prelude::{
     *,
 };
 
+// TODO: Make this a resource
+const DEFAULT_TETHER_DISTANCE: f32 = 15.0;
+const OBSERVER_START_Y: f32 = 150.0;
+const OBSERVER_MESH_RADIUS: f32 = 1.0;
+const OBSERVER_MESH_HEIGHT: f32 = 1.8;
+const OBSERVER_LENS_OFFSET_Y: f32 = 0.7;
+const OBSERVER_FOV_DEGREES: f32 = 85.0;
+
+const OBSERVER_COLOR_R: f32 = 0.2;
+const OBSERVER_COLOR_G: f32 = 0.2;
+const OBSERVER_COLOR_B: f32 = 0.25;
+const OBSERVER_METALLIC: f32 = 0.5;
+const OBSERVER_ROUGHNESS: f32 = 0.5;
+
+const INPUT_MOVEMENT_UNIT: f32 = 1.0;
+const ZOOM_SPEED_MULTIPLIER: f32 = 3.0;
+const MIN_ZOOM_DISTANCE: f32 = 5.0;
+const MAX_ZOOM_DISTANCE: f32 = 100.0;
+
+const SPHERE_ACCELERATION: f32 = 250.0;
+const SPHERE_JUMP_THRESHOLD: f32 = 1.0;
+const SPHERE_JUMP_IMPULSE: f32 = 35.0;
+
 #[derive(Component)]
 pub struct ObserverLens;
 
@@ -22,7 +45,9 @@ pub struct CameraTether {
 
 impl Default for CameraTether {
     fn default() -> Self {
-        Self { distance: 15.0 }
+        Self {
+            distance: DEFAULT_TETHER_DISTANCE,
+        }
     }
 }
 
@@ -31,7 +56,11 @@ pub fn setup_observer(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let start_pos = Vec3::new(CHUNK_SIZE as f32 / 2.0, 150.0, -(CHUNK_SIZE as f32) / 2.0);
+    let start_pos = Vec3::new(
+        CHUNK_SIZE as f32 / 2.0,
+        OBSERVER_START_Y,
+        -(CHUNK_SIZE as f32) / 2.0,
+    );
 
     commands
         .spawn((
@@ -39,11 +68,11 @@ pub fn setup_observer(
             ObserverIntent::default(),
             CameraTether::default(),
             Transform::from_translation(start_pos),
-            Mesh3d(meshes.add(Cylinder::new(1.0, 1.8))),
+            Mesh3d(meshes.add(Cylinder::new(OBSERVER_MESH_RADIUS, OBSERVER_MESH_HEIGHT))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.2, 0.25),
-                metallic: 0.5,
-                perceptual_roughness: 0.5,
+                base_color: Color::srgb(OBSERVER_COLOR_R, OBSERVER_COLOR_G, OBSERVER_COLOR_B),
+                metallic: OBSERVER_METALLIC,
+                perceptual_roughness: OBSERVER_ROUGHNESS,
                 ..default()
             })),
             Visibility::default(),
@@ -53,10 +82,10 @@ pub fn setup_observer(
                 ObserverLens,
                 Camera3d::default(),
                 Projection::Perspective(PerspectiveProjection {
-                    fov: 85.0_f32.to_radians(),
+                    fov: OBSERVER_FOV_DEGREES.to_radians(),
                     ..default()
                 }),
-                Transform::from_xyz(0.0, 0.7, 0.0),
+                Transform::from_xyz(0.0, OBSERVER_LENS_OFFSET_Y, 0.0),
             ));
         });
 }
@@ -69,7 +98,6 @@ pub fn manage_os_cursor_boundary(
         return;
     };
 
-    // Traps and releases the OS cursor
     if mouse.just_pressed(MouseButton::Right) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -109,26 +137,25 @@ pub fn observer_hardware_ingest(
 
     let is_possessing = !possessed_query.is_empty();
 
-    // Disable standard camera movement if possessing a sphere
     if !is_possessing {
         if keyboard.pressed(KeyCode::KeyW) {
-            intent.translation_vector.z -= 1.0;
+            intent.translation_vector.z -= INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyS) {
-            intent.translation_vector.z += 1.0;
+            intent.translation_vector.z += INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyA) {
-            intent.translation_vector.x -= 1.0;
+            intent.translation_vector.x -= INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyD) {
-            intent.translation_vector.x += 1.0;
+            intent.translation_vector.x += INPUT_MOVEMENT_UNIT;
         }
 
         if keyboard.pressed(KeyCode::Space) {
-            intent.translation_vector.y += 1.0;
+            intent.translation_vector.y += INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::ControlLeft) {
-            intent.translation_vector.y -= 1.0;
+            intent.translation_vector.y -= INPUT_MOVEMENT_UNIT;
         }
 
         intent.is_sprinting = keyboard.pressed(KeyCode::ShiftLeft);
@@ -179,13 +206,11 @@ pub fn handle_possession_toggle(
     }
 
     if let Ok(possessed_entity) = possessed_query.single() {
-        // Detach from current sphere
         commands
             .entity(possessed_entity)
             .remove::<PossessedSphere>();
         info!("Detached from sphere.");
     } else {
-        // Find closest sphere and possess it
         let Ok(obs_transform) = observer_query.single() else {
             return;
         };
@@ -220,8 +245,8 @@ pub fn update_camera_tether_and_zoom(
     };
 
     for ev in mouse_wheel.read() {
-        tether.distance -= ev.y * 3.0; // Zoom speed multiplier
-        tether.distance = tether.distance.clamp(5.0, 100.0);
+        tether.distance -= ev.y * ZOOM_SPEED_MULTIPLIER;
+        tether.distance = tether.distance.clamp(MIN_ZOOM_DISTANCE, MAX_ZOOM_DISTANCE);
     }
 
     if let Ok(sphere_transform) = possessed_query.single() {
@@ -237,6 +262,10 @@ pub fn drive_possessed_sphere(
     camera_query: Query<&KinematicObserver>,
     time: Res<Time>,
 ) {
+    if spheres.is_empty() {
+        return;
+    }
+
     let Ok(camera) = camera_query.single() else {
         return;
     };
@@ -245,16 +274,16 @@ pub fn drive_possessed_sphere(
         let mut input_dir = Vec3::ZERO;
 
         if keyboard.pressed(KeyCode::KeyW) {
-            input_dir.z -= 1.0;
+            input_dir.z -= INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyS) {
-            input_dir.z += 1.0;
+            input_dir.z += INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyA) {
-            input_dir.x -= 1.0;
+            input_dir.x -= INPUT_MOVEMENT_UNIT;
         }
         if keyboard.pressed(KeyCode::KeyD) {
-            input_dir.x += 1.0;
+            input_dir.x += INPUT_MOVEMENT_UNIT;
         }
 
         if input_dir.length_squared() > 0.0 {
@@ -263,15 +292,15 @@ pub fn drive_possessed_sphere(
             let rot = Quat::from_rotation_y(camera.yaw);
             let move_dir = rot * input_dir;
 
-            let accel = 250.0;
-            sphere.velocity.x += move_dir.x * accel * time.delta_secs();
-            sphere.velocity.z += move_dir.z * accel * time.delta_secs();
+            sphere.velocity.x += move_dir.x * SPHERE_ACCELERATION * time.delta_secs();
+            sphere.velocity.z += move_dir.z * SPHERE_ACCELERATION * time.delta_secs();
 
             sphere.is_granular_inactive = false;
         }
 
-        if keyboard.just_pressed(KeyCode::Space) && sphere.velocity.y.abs() < 1.0 {
-            sphere.velocity.y = 35.0;
+        if keyboard.just_pressed(KeyCode::Space) && sphere.velocity.y.abs() < SPHERE_JUMP_THRESHOLD
+        {
+            sphere.velocity.y = SPHERE_JUMP_IMPULSE;
             sphere.is_granular_inactive = false;
         }
     }
