@@ -27,7 +27,7 @@ const UI_RADIUS_MAX: u32 = 32;
 const UI_STATS_OFFSET_X: f32 = -10.0;
 const UI_STATS_OFFSET_Y: f32 = 40.0;
 
-const UI_FPS_THRESHOLD_GOOD: f64 = 55.0;
+const UI_FPS_THRESHOLD_GOOD: f64 = 32.0;
 
 const BRUSH_OPTIONS: [(GridBrush, &str); 7] = [
     (GridBrush::None, "None"),
