@@ -12,11 +12,20 @@ const RAYMARCH_MAX_DIST: f32 = 1000.0;
 const SPHERE_SPAWN_OFFSET_Y: f32 = 10.0;
 const SPHERE_SPAWN_RADIUS: f32 = 4.0;
 const SPHERE_SPAWN_MASS: f32 = 4.0;
+
+const SPHERE_COLOR_R: f32 = 0.6;
+const SPHERE_COLOR_G: f32 = 0.6;
+const SPHERE_COLOR_B: f32 = 0.65;
+const SPHERE_METALLIC: f32 = 0.8;
+const SPHERE_ROUGHNESS: f32 = 0.2;
+
 const ATTRACT_FORCE_MAGNITUDE: f32 = 350.0;
 const LIFT_ACCELERATION: f32 = 250.0;
 const LIFT_CENTERING_FORCE: f32 = 40.0;
 const LIFT_INFLUENCE_RADIUS_SQ: f32 = 22500.0;
 const EPSILON_DIST_SQ: f32 = 0.0001;
+
+const MAX_FLUID_VOL: u16 = 1023;
 
 /// Validates absolute mathematical grid inclusion to prevent memory panics.
 #[inline(always)]
@@ -246,9 +255,9 @@ pub fn handle_brush_input(
         commands.spawn((
             Mesh3d(meshes.add(Sphere::new(SPHERE_SPAWN_RADIUS))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.6, 0.6, 0.65),
-                metallic: 0.8,
-                perceptual_roughness: 0.2,
+                base_color: Color::srgb(SPHERE_COLOR_R, SPHERE_COLOR_G, SPHERE_COLOR_B),
+                metallic: SPHERE_METALLIC,
+                perceptual_roughness: SPHERE_ROUGHNESS,
                 ..default()
             })),
             Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
@@ -281,8 +290,9 @@ pub fn handle_brush_input(
                         } else {
                             0
                         };
-                        let new_state =
-                            old_state.saturating_add(settings.strength as u16).min(1023);
+                        let new_state = old_state
+                            .saturating_add(settings.strength as u16)
+                            .min(MAX_FLUID_VOL);
 
                         if cell.fluid_mat() != FluidMat::FLUID_WATER
                             || cell.fluid_vol() != new_state

@@ -13,6 +13,21 @@ use crate::runtime::{
 const BRUSH_STRENGTH_RANGE: std::ops::RangeInclusive<u8> = 1..=255;
 const BRUSH_RADIUS_RANGE: std::ops::RangeInclusive<i32> = 0..=64;
 
+const UI_FONT_SIZE_HEADING: f32 = 15.0;
+const UI_SPACING_DEFAULT: f32 = 16.0;
+
+const UI_ELEVATION_MIN: f32 = 0.01;
+const UI_ELEVATION_MAX: f32 = 5.0;
+const UI_ELEVATION_SPEED: f32 = 0.05;
+
+const UI_RADIUS_MIN: u32 = 1;
+const UI_RADIUS_MAX: u32 = 32;
+
+const UI_STATS_OFFSET_X: f32 = -10.0;
+const UI_STATS_OFFSET_Y: f32 = 40.0;
+
+const UI_FPS_THRESHOLD_GOOD: f64 = 32.0;
+
 const BRUSH_OPTIONS: [(GridBrush, &str); 7] = [
     (GridBrush::None, "None"),
     (GridBrush::Water, "Spawn Water"),
@@ -67,13 +82,17 @@ pub fn dev_tuning_ui(
     egui::Panel::top("dev_navbar").show(&mut root_ui, |ui| {
         ui.horizontal_centered(|ui| {
             let add_separator = |ui: &mut egui::Ui| {
-                ui.add_space(16.0);
+                ui.add_space(UI_SPACING_DEFAULT);
                 ui.separator();
-                ui.add_space(16.0);
+                ui.add_space(UI_SPACING_DEFAULT);
             };
 
-            ui.label(egui::RichText::new("Tools").strong().size(15.0));
-            ui.add_space(16.0);
+            ui.label(
+                egui::RichText::new("Tools")
+                    .strong()
+                    .size(UI_FONT_SIZE_HEADING),
+            );
+            ui.add_space(UI_SPACING_DEFAULT);
 
             ui.checkbox(&mut *show_stats, "Statistics");
             add_separator(ui);
@@ -86,17 +105,17 @@ pub fn dev_tuning_ui(
             ui.label(egui::RichText::new("Elevation Scale:").color(egui::Color32::LIGHT_GRAY));
             ui.add(
                 egui::DragValue::new(&mut world_config.elevation_scale)
-                    .range(0.01..=5.0)
-                    .speed(0.05),
+                    .range(UI_ELEVATION_MIN..=UI_ELEVATION_MAX)
+                    .speed(UI_ELEVATION_SPEED),
             );
             add_separator(ui);
 
             ui.label(egui::RichText::new("Active Radius (X/Y):").color(egui::Color32::LIGHT_GRAY));
-            ui.add(egui::DragValue::new(&mut current_size[0]).range(1..=32));
+            ui.add(egui::DragValue::new(&mut current_size[0]).range(UI_RADIUS_MIN..=UI_RADIUS_MAX));
             ui.label("x");
-            ui.add(egui::DragValue::new(&mut current_size[1]).range(1..=32));
+            ui.add(egui::DragValue::new(&mut current_size[1]).range(UI_RADIUS_MIN..=UI_RADIUS_MAX));
 
-            ui.add_space(16.0);
+            ui.add_space(UI_SPACING_DEFAULT);
 
             if ui.button("Apply Resize").clicked() {
                 if current_size[0] != manager.inner.active_radius_x
@@ -148,7 +167,7 @@ pub fn dev_tuning_ui(
                     ui.label(
                         egui::RichText::new(format!("FPS: {:.0}", fps))
                             .strong()
-                            .color(if fps > 55.0 {
+                            .color(if fps > UI_FPS_THRESHOLD_GOOD {
                                 egui::Color32::GREEN
                             } else {
                                 egui::Color32::RED
@@ -161,7 +180,10 @@ pub fn dev_tuning_ui(
 
     if *show_stats {
         egui::Window::new("World Statistics")
-            .anchor(egui::Align2::RIGHT_TOP, [-10.0, 40.0])
+            .anchor(
+                egui::Align2::RIGHT_TOP,
+                [UI_STATS_OFFSET_X, UI_STATS_OFFSET_Y],
+            )
             .resizable(false)
             .collapsible(false)
             .show(ctx, |ui| {
