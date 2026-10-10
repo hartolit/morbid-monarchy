@@ -4,7 +4,25 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## Current boundary
+## 01 progress
+
+**Assigned:** 01, by the user, on 2026-10-10. **Checkpoint A is complete.**
+
+- `eea8652` pins rustc 1.99.0 (`b940084d7`) in `rust-toolchain.toml` and tracks the existing
+  `Cargo.lock`, which is now verified. `cargo fetch --locked` and `cargo build --locked
+  --workspace --all-targets` both succeed, with no compiler warnings. `cargo test --locked -p
+  monarch-engine` passes 28/28, and 25 repeated runs had no failure. `spatial-lib` has no tests.
+- The baseline is not lint-clean. `cargo fmt --check` reports 3 import-order diffs (in
+  `monarch-engine` `core.rs` and `prelude.rs`). Warning-denying Clippy finds 31 warnings, all in
+  the three legacy crates. `RUSTDOCFLAGS='-D warnings' cargo doc` passes.
+- `58e9648` adds old-writer fixtures in `crates/morbid-app/tests/fixtures/legacy-v0/`. They were
+  captured from a scratch directory, and the user's save was not opened.
+- Hardware: this machine is the nominated Ryzen 9 5950X + RTX 5070 Ti (driver 615.71.09, KDE
+  Wayland). Only the compositor and Discord use the GPU.
+
+**Next:** Checkpoint B, starting with the `tools/evidence` runner.
+
+## 00 boundary
 
 **State:** 00 complete (2026-10-10). This was a documentation-only adoption. No runtime code,
 manifest, dependency, toolchain or saved-world byte changed. Nothing was built, tested, run on a
@@ -22,8 +40,8 @@ standalone `bevy_ecs` and drops the Bevy engine. This authorizes a transition sp
 or physics feature set. The package map, exact algorithms and initial numeric budgets are proposed
 engineering choices, not measured outcomes.
 
-**Next action:** assign [01-baseline-contracts-and-seams.md](01-baseline-contracts-and-seams.md)
-as a new task, starting at Checkpoint A. Do not start 01 automatically.
+**Next action at the end of 00:** assign
+[01-baseline-contracts-and-seams.md](01-baseline-contracts-and-seams.md); that has since happened (see above).
 
 ## 00 record
 
@@ -38,7 +56,7 @@ as a new task, starting at Checkpoint A. Do not start 01 automatically.
 | Acceptance | A01–A15 not run. |
 | Data safety | The user's `world_data/save.redb` (8,074,563,584 bytes, git-ignored) was neither opened nor modified. No application was launched. |
 | Blockers | None for 01. |
-| Next action / stop | 00 is stopped. The next step is 01, which needs a new assignment. |
+| Next action / stop | 00 stopped; 01 was then assigned. |
 
 ### Deviations requiring 01 attention
 
