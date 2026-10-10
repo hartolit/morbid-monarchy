@@ -1,0 +1,6 @@
+# Tested toolchain for this workspace (prompt 01 baseline). Change it only together with a
+# successful `cargo build --locked` and the evidence checks on the new version.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
