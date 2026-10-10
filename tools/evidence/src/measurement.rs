@@ -211,6 +211,78 @@ pub fn distribution(values: impl IntoIterator<Item = f64>) -> Distribution {
     }
 }
 
+/// Display refresh intervals a compositor may pace a window to, in milliseconds.
+const REFRESH_INTERVALS_MS: [f64; 5] = [
+    1000.0 / 60.0,
+    1000.0 / 120.0,
+    1000.0 / 144.0,
+    1000.0 / 165.0,
+    1000.0 / 240.0,
+];
+/// Half-width of the band around a refresh interval, in milliseconds.
+const PACING_BAND_MS: f64 = 0.15;
+/// Unbroken frames on one interval that cannot be coincidence.
+const PACED_STRETCH_FRAMES: usize = 30;
+/// A spike must hold this share of frames and exceed its neighbourhood this many times.
+const PACED_SPIKE_SHARE: f64 = 0.01;
+const PACED_SPIKE_RATIO: usize = 4;
+
+/// Evidence that a compositor, not the application's work, set the frame times.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Pacing {
+    pub interval_ms: f64,
+    /// Frames within ±0.15 ms of the interval.
+    pub frames_on_interval: usize,
+    /// Frames 0.45-0.75 ms either side of it: twice the band's width, so an unpaced, smooth
+    /// distribution puts about twice as many frames here as on the interval.
+    pub frames_beside_interval: usize,
+    pub longest_stretch: usize,
+}
+
+/// Detects presentation pacing in measured frames. Uncapped presentation produces a smooth
+/// frame-time distribution; a compositor that throttles a covered or unfocused window produces
+/// long runs of frames on one refresh interval and a spike there. Isolated frames that happen to
+/// match an interval are expected and do not count.
+pub fn presentation_pacing(samples: &[FrameSample]) -> Option<Pacing> {
+    let frames: Vec<f64> = samples
+        .iter()
+        .filter(|sample| sample.measured)
+        .map(|sample| sample.frame_ms)
+        .collect();
+    REFRESH_INTERVALS_MS
+        .iter()
+        .map(|&interval| {
+            let mut longest_stretch = 0;
+            let mut stretch = 0;
+            for frame in &frames {
+                stretch = if (frame - interval).abs() < PACING_BAND_MS {
+                    stretch + 1
+                } else {
+                    0
+                };
+                longest_stretch = longest_stretch.max(stretch);
+            }
+            let distance = |frame: &&f64| (**frame - interval).abs();
+            Pacing {
+                interval_ms: interval,
+                frames_on_interval: frames
+                    .iter()
+                    .filter(|f| distance(f) < PACING_BAND_MS)
+                    .count(),
+                frames_beside_interval: frames
+                    .iter()
+                    .filter(|f| (3.0 * PACING_BAND_MS..5.0 * PACING_BAND_MS).contains(&distance(f)))
+                    .count(),
+                longest_stretch,
+            }
+        })
+        .find(|pacing| {
+            let spike = pacing.frames_on_interval as f64 >= PACED_SPIKE_SHARE * frames.len() as f64
+                && pacing.frames_on_interval > PACED_SPIKE_RATIO * pacing.frames_beside_interval;
+            pacing.longest_stretch >= PACED_STRETCH_FRAMES || spike
+        })
+}
+
 /// Measured-window summary of one run.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunStatistics {
@@ -218,6 +290,8 @@ pub struct RunStatistics {
     pub measured_seconds: f64,
     pub frame_ms: Distribution,
     pub frames_over_16_67_ms: usize,
+    /// Set when the compositor, not the work, paced the frames; see [`presentation_pacing`].
+    pub presentation_pacing: Option<Pacing>,
     pub frames_over_25_ms: usize,
     pub frames_without_tick: usize,
     pub frames_with_several_ticks: usize,
@@ -268,6 +342,7 @@ pub fn run_statistics(samples: &[FrameSample]) -> RunStatistics {
         measured_frames: measured.len(),
         measured_seconds: seconds,
         frame_ms: distribution(measured.iter().map(|sample| sample.frame_ms)),
+        presentation_pacing: presentation_pacing(samples),
         frames_over_16_67_ms: measured
             .iter()
             .filter(|sample| sample.frame_ms > 1000.0 / 60.0)
@@ -367,6 +442,31 @@ mod tests {
             (spread.count, spread.min, spread.median, spread.max),
             (3, 1.0, 3.0, 5.0)
         );
+    }
+
+    #[test]
+    fn compositor_pacing_is_told_apart_from_coincidental_frame_times() {
+        let frames = |times: &[f64]| -> Vec<FrameSample> {
+            times
+                .iter()
+                .map(|&frame_ms| FrameSample {
+                    measured: true,
+                    frame_ms,
+                    ..FrameSample::default()
+                })
+                .collect()
+        };
+        // A smooth uncapped run: frame times spread over 2-10 ms, some near 4.17 by chance.
+        let smooth: Vec<f64> = (0..2000)
+            .map(|i| 2.0 + (i as f64 * 0.6180339).fract() * 8.0)
+            .collect();
+        assert_eq!(presentation_pacing(&frames(&smooth)), None);
+        // The same run with 100 consecutive frames held to 60 Hz.
+        let mut throttled = smooth.clone();
+        throttled.splice(500..600, std::iter::repeat_n(16.667, 100));
+        let pacing = presentation_pacing(&frames(&throttled)).expect("pacing detected");
+        assert_eq!(pacing.longest_stretch, 100);
+        assert!((pacing.interval_ms - 1000.0 / 60.0).abs() < 1e-9);
     }
 
     #[test]

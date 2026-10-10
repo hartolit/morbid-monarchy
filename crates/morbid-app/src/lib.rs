@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use bevy::{
     prelude::*,
-    window::{PresentMode, WindowResolution},
+    window::{PresentMode, WindowLevel, WindowResolution},
 };
 use monarch_engine::{core::entities::observer::resolve_observer_kinematics, prelude::*};
 
@@ -37,6 +37,9 @@ pub struct AppOptions {
 pub struct WindowRequest {
     pub physical_size: [u32; 2],
     pub vsync: bool,
+    /// Keeps the window above others. Measurement runs use it because a compositor throttles
+    /// the presentation of a covered window, which would be timed as the application's work.
+    pub always_on_top: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +82,9 @@ pub fn build_app(options: AppOptions) -> App {
         } else {
             PresentMode::AutoNoVsync
         };
+        if request.always_on_top {
+            window.window_level = WindowLevel::AlwaysOnTop;
+        }
     }
     let mut asset_plugin = AssetPlugin::default();
     if let Some(dir) = &options.asset_dir {

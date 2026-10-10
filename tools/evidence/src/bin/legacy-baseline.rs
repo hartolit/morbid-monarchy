@@ -154,6 +154,7 @@ fn compose(scenario: &Scenario, arguments: &Arguments) -> App {
         window: Some(WindowRequest {
             physical_size: scenario.presentation.resolution,
             vsync: scenario.presentation.present_mode == PresentMode::Vsync,
+            always_on_top: true,
         }),
         input: InputMode::Scripted,
     });

@@ -520,6 +520,15 @@ fn validate_run(
                 ));
             }
             result.below_frame_protocol = statistics.measured_frames < PROTOCOL_MEASURED_FRAMES;
+            if let Some(pacing) = statistics.presentation_pacing {
+                result.problems.push(format!(
+                    "the compositor paced presentation at {:.2} ms ({} frames on it, {} beside, longest stretch {}); keep the window visible",
+                    pacing.interval_ms,
+                    pacing.frames_on_interval,
+                    pacing.frames_beside_interval,
+                    pacing.longest_stretch
+                ));
+            }
             if result.problems.is_empty() {
                 result.statistics = Some(statistics);
             }
