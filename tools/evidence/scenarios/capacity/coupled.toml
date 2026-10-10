@@ -33,8 +33,8 @@ cells_per_tick = 0.25
 
 [run]
 runs = 3
-warmup_frames = 120
-measured_frames = 600
+warmup_ticks = 120
+measured_ticks = 600
 residency_timeout_seconds = 1800.0
 
 [[bodies]]

@@ -4,7 +4,8 @@
 //! A scenario file fixes everything a run depends on: seed, active-world size, simulation
 //! settings, presentation, camera, bodies and ordered actions. Physical actions are scheduled
 //! by logical simulation tick rather than by frame, so what a run simulates does not depend on
-//! how fast it renders. The measurement window is counted in presented frames.
+//! how fast it renders. The measurement window is counted in ticks too: every implementation
+//! measures the same simulated content, and renders however many frames it can in that time.
 //!
 //! Files live at `tools/evidence/scenarios/<profile>/<case>.toml`. Validation rejects a file
 //! whose world size, resolution, tick rate or body count differs from its profile, so a case
@@ -149,8 +150,10 @@ pub struct Camera {
 pub struct RunPlan {
     /// Independent repetitions of the case.
     pub runs: u32,
-    pub warmup_frames: u32,
-    pub measured_frames: u32,
+    /// Simulation ticks run after the active window is resident and before measurement starts.
+    pub warmup_ticks: u64,
+    /// Simulation ticks in the measured window (60 ticks are one simulated second).
+    pub measured_ticks: u64,
     /// Longest wait for the initial active window to become resident.
     pub residency_timeout_seconds: f64,
 }
@@ -409,8 +412,8 @@ pub fn validate(
     let run = &scenario.run;
     check((1..=20).contains(&run.runs), "runs must be 1–20".to_owned());
     check(
-        run.measured_frames >= 60,
-        "measured_frames must be at least 60".to_owned(),
+        run.measured_ticks >= 60,
+        "measured_ticks must be at least 60".to_owned(),
     );
     check(
         run.residency_timeout_seconds.is_finite() && run.residency_timeout_seconds > 0.0,
@@ -546,8 +549,8 @@ pitch_degrees = -50.0
 
 [run]
 runs = 5
-warmup_frames = 300
-measured_frames = 1800
+warmup_ticks = 300
+measured_ticks = 1800
 residency_timeout_seconds = 120.0
 
 [[actions]]

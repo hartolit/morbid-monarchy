@@ -237,6 +237,10 @@ struct Driver {
     residency_seconds: Option<f64>,
     /// Last logical tick whose actions were applied.
     applied_tick: Option<u64>,
+    /// World tick at which the timeline started.
+    timeline_start_tick: u64,
+    /// Timeline tick when the current frame started, before it simulated.
+    frame_start_tick: u64,
     driven_body: Option<Entity>,
     previous: CounterSnapshot,
     /// The frame recorded in `Last`, completed with its duration at the next `First`.
@@ -264,6 +268,8 @@ impl Driver {
             first_frame_seconds: None,
             residency_seconds: None,
             applied_tick: None,
+            timeline_start_tick: 0,
+            frame_start_tick: 0,
             driven_body: None,
             previous: CounterSnapshot::default(),
             pending: None,
@@ -277,8 +283,9 @@ impl Driver {
         }
     }
 
-    fn total_frames(&self) -> u64 {
-        u64::from(self.scenario.run.warmup_frames) + u64::from(self.scenario.run.measured_frames)
+    /// Timeline tick at which the measured window closes.
+    fn final_tick(&self) -> u64 {
+        self.scenario.run.warmup_ticks + self.scenario.run.measured_ticks
     }
 
     fn tick_seconds(&self) -> f32 {
@@ -300,7 +307,10 @@ fn begin_frame(mut driver: ResMut<Driver>, mut exit: MessageWriter<AppExit>) {
         driver.first_frame_seconds = Some(driver.process_started.elapsed().as_secs_f64());
     }
 
-    let full = driver.samples.len() as u64 >= driver.total_frames();
+    let full = driver
+        .samples
+        .last()
+        .is_some_and(|sample| sample.tick >= driver.final_tick());
     if full && driver.stage != Stage::Finished {
         driver.stage = Stage::Finished;
         write_outputs(&driver, "completed");
@@ -479,6 +489,8 @@ fn advance_timeline(
         }
     }
     driver.applied_tick = Some(tick);
+    driver.timeline_start_tick = start_tick;
+    driver.frame_start_tick = tick;
 
     let camera = &driver.scenario.camera;
     let position = camera_position(camera, path_cell(camera, tick));
@@ -679,8 +691,9 @@ fn record_frame(world: &mut World) {
         .unwrap_or_default();
 
     let mut driver = world.resource_mut::<Driver>();
-    let warmup = u64::from(driver.scenario.run.warmup_frames);
-    let measured = frame_in_timeline >= warmup;
+    // A frame belongs to the measured window when it starts at or after the warm-up ticks.
+    let measured = driver.frame_start_tick >= driver.scenario.run.warmup_ticks;
+    let timeline_tick = tick.wrapping_sub(driver.timeline_start_tick);
     let previous = driver.previous;
     let delta = |now: u64, before: u64| now.saturating_sub(before);
     let engine = snapshot.engine;
@@ -691,7 +704,7 @@ fn record_frame(world: &mut World) {
         frame_ms: 0.0,
         main_cpu_us,
         ticks: delta(engine.ticks, before.ticks),
-        tick,
+        tick: timeline_tick,
         simulation_us: delta(engine.simulation_nanos, before.simulation_nanos) as f64 / 1000.0,
         discarded_simulation_us: delta(
             engine.discarded_simulation_nanos,
@@ -737,7 +750,7 @@ fn record_frame(world: &mut World) {
     };
     driver.previous = snapshot;
     driver.pending = Some(sample);
-    driver.ticks_at_end = Some(tick);
+    driver.ticks_at_end = Some(timeline_tick);
 
     if let Some(size) = window {
         let requested = driver.scenario.presentation.resolution;
@@ -824,8 +837,8 @@ fn write_outputs(driver: &Driver, status: &str) {
         "first_frame_seconds": driver.first_frame_seconds,
         "residency_seconds": driver.residency_seconds,
         "samples": driver.samples.len(),
-        "warmup_frames": driver.scenario.run.warmup_frames,
-        "measured_frames": driver.scenario.run.measured_frames,
+        "warmup_ticks": driver.scenario.run.warmup_ticks,
+        "measured_ticks": driver.scenario.run.measured_ticks,
         "final_tick": driver.ticks_at_end,
         "gpu_pass_elapsed_ms": gpu_passes,
     });

@@ -32,8 +32,11 @@ const DRIVER_BINARY: &str = "legacy-baseline";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Interval between GPU memory samples of a running driver.
 const GPU_MEMORY_INTERVAL: Duration = Duration::from_secs(2);
-/// Slowest frame rate a run may fall to before it is considered hung, in frames per second.
-const HUNG_FRAMES_PER_SECOND: f64 = 2.0;
+/// Slowest simulation rate a run may fall to before it is considered hung, in ticks per second.
+const HUNG_TICKS_PER_SECOND: f64 = 2.0;
+/// Frames the measurement protocol expects in a window, enough for stable 99th percentiles.
+/// A slower run still counts, and is marked as below the protocol.
+pub const PROTOCOL_MEASURED_FRAMES: usize = 1800;
 /// Host CPU utilization below which a run may start uncontended, in percent of all cores.
 const QUIET_CPU_BUSY_PERCENT: f64 = 15.0;
 /// Longest wait for a quiet host before a run starts anyway and is marked contended.
@@ -150,6 +153,10 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
         let diagnostic = execute_run(root, run_dir, &driver, loaded, &adapter, "diagnostic", true);
 
         let contended = results.iter().filter(|result| result.contended).count();
+        let few_frames = results
+            .iter()
+            .filter(|result| result.below_frame_protocol)
+            .count();
         let problems: Vec<String> = results
             .iter()
             .flat_map(|result| {
@@ -174,7 +181,7 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
                 format!("bench.{case}"),
                 state,
                 format!(
-                    "{}/{runs} valid runs ({contended} contended); frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
+                    "{}/{runs} valid runs ({contended} contended, {few_frames} below {PROTOCOL_MEASURED_FRAMES} frames); frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
                     valid.len(),
                     summary.median_of_medians_ms,
                     summary.worst_p95_ms,
@@ -307,6 +314,8 @@ pub struct RunResult {
     /// Largest GPU memory nvidia-smi attributed to the driver process, in MiB.
     pub gpu_memory_mib_max: Option<u64>,
     pub gpu_passes_recorded: usize,
+    /// True when the window held fewer than [`PROTOCOL_MEASURED_FRAMES`] frames.
+    pub below_frame_protocol: bool,
     /// Seconds spent waiting for the host to become quiet before starting.
     pub quiet_wait_seconds: f64,
     /// True when the host never fell below the quiet threshold; the run still counts, but its
@@ -336,6 +345,7 @@ fn execute_run(
         driver_summary: Value::Null,
         gpu_memory_mib_max: None,
         gpu_passes_recorded: 0,
+        below_frame_protocol: false,
         quiet_wait_seconds: 0.0,
         contended: false,
         contention_before: Contention::default(),
@@ -399,9 +409,9 @@ fn execute_run(
         }
     };
     let plan = &loaded.scenario.run;
-    let frames = f64::from(plan.warmup_frames) + f64::from(plan.measured_frames);
+    let ticks = (plan.warmup_ticks + plan.measured_ticks) as f64;
     let limit = Duration::from_secs_f64(
-        plan.residency_timeout_seconds + frames / HUNG_FRAMES_PER_SECOND + 60.0,
+        plan.residency_timeout_seconds + ticks / HUNG_TICKS_PER_SECOND + 60.0,
     );
     let mut last_memory_sample = Instant::now() - GPU_MEMORY_INTERVAL;
     let status = loop {
@@ -497,19 +507,21 @@ fn validate_run(
     match samples {
         Ok(samples) => {
             let plan = &loaded.scenario.run;
-            let measured = samples.iter().filter(|sample| sample.measured).count();
-            if samples.len() != (plan.warmup_frames + plan.measured_frames) as usize
-                || measured != plan.measured_frames as usize
+            let statistics = measurement::run_statistics(&samples);
+            let final_tick = samples.last().map_or(0, |sample| sample.tick);
+            if statistics.ticks < plan.measured_ticks
+                || final_tick < plan.warmup_ticks + plan.measured_ticks
             {
                 result.problems.push(format!(
-                    "{} samples ({measured} measured); expected {} ({} measured)",
-                    samples.len(),
-                    plan.warmup_frames + plan.measured_frames,
-                    plan.measured_frames
+                    "measured {} ticks ending at tick {final_tick}; the window is {} ticks ending at {}",
+                    statistics.ticks,
+                    plan.measured_ticks,
+                    plan.warmup_ticks + plan.measured_ticks
                 ));
             }
+            result.below_frame_protocol = statistics.measured_frames < PROTOCOL_MEASURED_FRAMES;
             if result.problems.is_empty() {
-                result.statistics = Some(measurement::run_statistics(&samples));
+                result.statistics = Some(statistics);
             }
         }
         Err(error) => result.problems.push(format!("samples: {error}")),

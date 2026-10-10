@@ -31,8 +31,8 @@ pitch_degrees = -40.0
 
 [run]
 runs = 5
-warmup_frames = 300
-measured_frames = 1800
+warmup_ticks = 300
+measured_ticks = 1800
 residency_timeout_seconds = 600.0
 
 [[actions]]
