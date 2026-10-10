@@ -1,14 +1,179 @@
-# Architectural Blueprint: The Modular Philosophy
+# Architecture
 
-**CORE IDEOLOGY: DEFEATING THE MONOLITH**
-This project strictly rejects monolithic structures. We do not build massive, tightly coupled "engine" or "core" crates where logic is tangled. We operate on a highly modular, decoupled architecture. Every distinct feature, system, or domain must exist as its own independent crate within a Cargo workspace.
+**Target architecture for the GPU transition.** The supplied implementation differs; see
+[status](product/status.md). Package names below are the proposed implementation map, not claims
+that directories already exist. Prompt 00 adopts the direction; 01 confirms actual consumers and
+records any justified boundary adjustment before creating packages.
 
-**1. CRATE ONTOLOGY**
-* **Feature Crates (The Building Blocks):** Isolated, heavily confined modules (e.g., `os-vga`, `game-water`). These must NEVER depend upward on the main engine or horizontally on unrelated feature crates. Design every crate as if it will be published to `crates.io` and used by an entirely different project tomorrow.
-* **Engine/Core Crates (The Glue):** These crates do NOT implement core features. Instead, they consume Feature Crates and provide the orchestration, ECS integration, or state management to link them together cleanly.
-* **App/Runner Crates (The Boundary):** Thin execution vectors (e.g., `kernel-runner`, `server-cli`). They handle initialization, config loading, and environment I/O, then pass control to the Engine.
+## One physical world, several consumers
 
-**2. API BOUNDARIES & COUPLING LAWS**
-* **Explicit Public APIs:** A crate's internals must be heavily encapsulated. Internal logic, state, and helper functions must remain strictly private. Expose only what is strictly necessary through a stable, well-documented API.
-* **Dependency Injection:** Crates should not assume the existence of a global state. Pass necessary contexts, traits, or data down into the crate via its API.
-* **Acyclic Dependencies:** Crates must form a clean, directed acyclic graph. Circular dependencies or "God objects" that weave crates back together are architectural failures.
+The GPU owns resident cells, body state and their physical updates. Rendering consumes that state
+on the same device. The CPU owns intent, residency policy and durable I/O, receiving only selected
+observations or explicit snapshots. A saved chunk is an immutable revision, not another mutable
+copy of the live chunk.
+
+| Responsibility | Owner | What does not belong there |
+| --- | --- | --- |
+| Cell meanings, material identities, coordinates, units, command/observation values | `world-model` | Bevy/wgpu types, threads, database transactions. |
+| Fixed-tick admission, gameplay intent, residency/checkpoint state machines, bounded worker policy | `world-runtime` | Per-cell CPU simulation, shader dispatch details, redb access. |
+| GPU allocations, layouts, physical kernels, command execution, readback pools and submission lifetimes | `gpu-world` | Window/input policy, save durability decisions, ECS entity identities. |
+| Rendering passes and derived visual data | `world-render` | Physical mutation, CPU terrain replicas, a second GPU device. |
+| Versioned saved-world encoding and redb transactions | `world-store` | Live-world decisions, regeneration on an I/O error, renderer state. |
+| Window/input/UI, asset loading and concrete composition | `morbid-app` | Duplicate physics, storage protocols or authority checks. |
+| Scenario execution, CPU test references, contract checks and benchmark reports | `monarchy-evidence` | Production fallback simulation or test-only shortcuts in normal execution. |
+
+Ownership does not require every named algorithm to become a crate. Material flows, thermal rules,
+body contacts and terrain displacement are modules under the GPU physical owner. They share memory
+and an ordered physical tick; separating them behind per-cell traits would obscure the real work.
+
+## Proposed workspace
+
+```text
+apps/morbid/                     package morbid-app; native composition
+  src/{main,application,input,ui,assets}.rs
+  assets/                       runtime art, fonts, UI and imported assets
+crates/world-model/             framework-free semantic values and generation
+  src/{cell,material,spatial,units,command,observation,generation}.rs
+crates/world-runtime/           CPU orchestration and consumer-owned ports
+  src/{clock,commands,residency,checkpoint,workers,ports}.rs
+adapters/gpu-world/             GPU execution of the physical world
+  src/{context,layout,resources,commands,simulation,readback}.rs
+  shaders/{shared,cells,bodies,queries}/
+  tests/                        layout, production shader and lifecycle contracts
+adapters/world-store/           saved-world format and redb mechanism
+  src/{format,store,legacy}.rs
+  tests/fixtures/               small supported-format and legacy byte fixtures
+crates/world-render/            native rendering of GPU-owned state
+  src/{renderer,terrain,bodies,lighting,visibility}.rs
+  shaders/
+tools/evidence/                 Rust-only development leaf
+  src/{main,checks,scenarios,reference,measurement}.rs
+  scenarios/                    versioned input/configuration documents
+  tests/                        runner/parser and evidence-policy checks
+docs/                          maintained explanations and active assignments
+```
+
+The listed modules communicate intended cohesion; they are not a file-count quota. Introduce each
+package only when its first real consumer adopts it. Reuse existing sound code before moving it.
+Generic spatial math from `spatial-lib` can move into `world-model::spatial`; its CPU-grid-dependent
+chunk manager must be replaced by the residency policy, not renamed as a GPU abstraction. Keep a
+separate spatial crate only if 01 demonstrates an independent consumer and a meaningful boundary.
+
+### Dependency direction
+
+`A -> B` means A imports B, not that data flows only in that direction.
+
+```text
+world-runtime -> world-model
+world-runtime -> bevy_ecs
+gpu-world     -> world-runtime (execution port), world-model, wgpu
+world-store   -> world-runtime (storage port), world-model, redb/codec
+world-render  -> gpu-world (read-only presentation view), world-model, wgpu
+morbid-app    -> world-runtime, gpu-world, world-store, world-render, window/UI
+monarchy-evidence -> the owners under test (never the reverse)
+```
+
+A GPU boundary may expose wgpu types: GPU memory is precisely its subject. Do not wrap every wgpu
+handle to appear mechanism-neutral. The runtime's intent, residency and persistence ports must not
+expose those types. Ports operate on batches, tickets and snapshots, not virtual calls per cell.
+The GPU adapter's runtime dependency may bring the ECS library transitively; GPU kernels and
+adapter interfaces still must not depend on ECS entities or scheduling behavior.
+
+`world-render` reads the GPU adapter's view; `gpu-world` never imports the renderer. The application
+constructs them with one context. The context owns one submission timeline. Compute and render
+encoders may be separate, but their submission order and resource lifetimes are not independent.
+
+## State and identity
+
+CPU ECS entities hold logical game identity, configuration and a generation-bearing `BodyHandle`.
+The GPU holds positions, velocities, physical flags and solver state. A selected CPU observation
+includes its world/session generation and tick; it is not a writable authoritative transform.
+
+World keys are absolute discrete identities. GPU coordinates are local to a declared origin, with
+explicit conversion to the renderer's axes. Preserve the current horizontal-cell/elevation-scale
+meaning until a tested conversion decision changes it. Do not encode large absolute coordinates
+as float shader uniforms or use a toroidal slot as a permanent world key.
+
+Keep logical epoch, submitted tick, GPU-completed tick, observed tick, chunk revision and durable
+checkpoint distinct. They answer different questions. A tick encoded for later execution is not
+already completed, and an observed edit is not already on disk.
+
+## One physical tick
+
+The runtime owns fixed-step admission and a bounded catch-up policy. Cells and bodies participate
+in one documented tick schedule; body substeps subdivide that fixed interval, not arbitrary frame
+time. Input is converted into tick commands before physical updates.
+
+The GPU owner orders command application, material transfers/reactions, body integration/contact,
+shared deformation/displacement, activity propagation and observation production. The exact order,
+read versions and substep coupling are specified in the [GPU contract](reference/gpu-contract.md).
+A phase may read an earlier immutable cell view while producing a later version, but this must be
+intentional. CPU ECS order does not establish cross-dispatch memory dependencies.
+
+Rendering consumes the ordered physical output without waiting for the CPU to observe completion.
+Presentation interpolation or prediction is permitted only as derived visual state. It cannot
+write back into physical authority or be used as a secretly different collision model.
+
+## Residency and persistence
+
+The runtime decides which world keys should be resident and how much loading/saving work may be
+admitted. The GPU adapter executes upload, activation, freeze/snapshot and slot-retirement commands.
+The storage adapter commits immutable versioned payloads. Worker results return through bounded
+queues and are accepted only if world identity, request generation and revision still match.
+
+A slot is not reusable merely because its chunk left the camera window. Required outgoing state
+must first be captured independently, and all earlier GPU uses must be completed or ordered safely
+before reuse. A storage failure retains the payload and prevents false durable acknowledgement.
+
+The [world format](reference/world-format.md) owns checkpoint consistency, format compatibility,
+missing-versus-corrupt reads and the reload decision. Retained CPU snapshots are bounded by bytes
+and obligations. Normal residency metadata does not contain a permanent full cell array.
+
+Bodies crossing the resident boundary must have an explicit policy: request/pin needed chunks,
+clamp supported travel, or suspend/snapshot bodies with the region. They must not disappear or
+collide with an unrelated recycled slot. Prompt 04 chooses the body boundary policy; 05 completes
+its storage lifecycle. Unloaded regions do not secretly continue simulation in this sprint.
+
+## Assets and shaders
+
+Author simulation shaders beside `gpu-world`; rendering shaders beside `world-render`. Shared
+packed-layout declarations have one owner in `gpu-world`, exported by an explicit source assembly
+or generated declaration step. This is build-time dependency, not a global shader namespace.
+
+Keep runtime art, UI assets and their provenance in `apps/morbid/assets/`; authoring inputs, when
+retained, belong in clearly separate `assets-src/` directories. GPU-generated normals, visibility
+lists, body instances and other derived data belong to the renderer, not disk assets or physical
+state. Fixtures belong beside their tests. Generated shader assembly, captures, caches and large
+logs belong under ignored `target/` or retained external artifacts.
+
+The packaged application must locate its assets independently of the developer's current working
+directory. Keep licensing/provenance with imported assets. Do not duplicate Bevy material imports
+inside a new string preprocessor and call the engine dependency removed.
+
+## Composition and failure
+
+`morbid-app` parses strict configuration and constructs validated owner-specific plans, one GPU
+context, runtime, storage workers and renderer. Device limits are checked against the complete
+allocation plan before work is admitted. Headless scenarios construct the same physical owner
+without a surface; they do not construct an imitation simulator.
+
+Handle surface resize/loss separately from device loss. A lost device invalidates every live GPU
+handle in that session. Stop admission and report the latest durable checkpoint; do not claim
+unsnapshotted GPU state was recovered. Checkpoint reconstruction may create a new session epoch,
+with stale callbacks and command results rejected.
+
+Shutdown closes new commands, reaches a defined tick boundary, captures required dirty state,
+joins/finishes owned work, and reports save success or failure. A normal interactive frame must
+not block on a readback or database write. Explicit maintenance/shutdown may wait with bounded
+progress/error reporting; those waits are not hidden in performance results.
+
+## Migration boundaries
+
+The original Bevy app is a temporary baseline through 05. GPU stages are independently exercised
+headlessly; a temporary visual bridge is optional and must share the same device if used. Never
+create two devices and copy the world between them for a demo.
+
+06 makes the native client the sole normal application and removes engine-specific plugins,
+materials, task pools and the CPU authority path. 07 verifies dependency/removal and qualification.
+Small CPU reference algorithms can remain in the development evidence leaf; the old application
+cannot remain behind a fallback flag. Historical source remains in Git or a baseline artifact.
