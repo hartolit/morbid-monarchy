@@ -79,7 +79,18 @@ pub fn execute(invocation: &Invocation, raw_args: &[String], root: &Path) -> i32
         return 1;
     }
 
-    let (items, data) = run_command(&invocation.command, root, &run_dir);
+    // Identity describes the source the lane ran against, so it is taken before the work. A
+    // source change during a long run would make the results unattributable.
+    let identity = identity::Identity::collect(root);
+    let (mut items, data) = run_command(&invocation.command, root, &run_dir);
+    let after = identity::Identity::collect(root).source;
+    if after != identity.source {
+        items.push(Item::new(
+            "identity.stable",
+            State::Failed,
+            "the source changed while the command ran; its results describe no single revision",
+        ));
+    }
     let result = report::overall(&items);
     let finished = identity::now_unix_seconds();
     let report = Report {
@@ -89,7 +100,7 @@ pub fn execute(invocation: &Invocation, raw_args: &[String], root: &Path) -> i32
         started_at: identity::rfc3339_utc(started),
         finished_at: identity::rfc3339_utc(finished),
         duration_seconds: finished - started,
-        identity: identity::Identity::collect(root),
+        identity,
         items,
         data,
     };

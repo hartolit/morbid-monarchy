@@ -7,7 +7,7 @@
 schema = 1
 profile = "capacity"
 case = "streaming"
-description = "The observer travels a closed loop of about ten by five chunks at one cell per tick, so chunks load, generate, leave the window, are evicted and saved, and come back."
+description = "The observer flies 64 chunks east and back at 3 cells per tick (near sprint speed), so chunks load and generate, overflow the 1,152-chunk cache, are evicted and saved, and are read back from the store on return."
 
 [world]
 seed = 69
@@ -28,8 +28,8 @@ start_cell = [200, 230]
 height = 150.0
 yaw_degrees = 30.0
 pitch_degrees = -40.0
-path = [[200, 230], [840, 230], [840, 550], [200, 550]]
-cells_per_tick = 1.0
+path = [[200, 230], [4296, 230]]
+cells_per_tick = 3.0
 
 [run]
 runs = 3

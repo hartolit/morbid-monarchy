@@ -21,7 +21,7 @@ pub struct Identity {
     pub host: HostIdentity,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SourceIdentity {
     pub commit: Option<String>,
     pub branch: Option<String>,

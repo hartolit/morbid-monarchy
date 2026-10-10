@@ -34,6 +34,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GPU_MEMORY_INTERVAL: Duration = Duration::from_secs(2);
 /// Slowest frame rate a run may fall to before it is considered hung, in frames per second.
 const HUNG_FRAMES_PER_SECOND: f64 = 2.0;
+/// Host CPU utilization below which a run may start uncontended, in percent of all cores.
+const QUIET_CPU_BUSY_PERCENT: f64 = 15.0;
+/// Longest wait for a quiet host before a run starts anyway and is marked contended.
+const QUIET_WAIT_LIMIT: Duration = Duration::from_secs(120);
 
 pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, Value) {
     let Some(profile) = scenario::profile(&request.profile) else {
@@ -145,6 +149,7 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
         );
         let diagnostic = execute_run(root, run_dir, &driver, loaded, &adapter, "diagnostic", true);
 
+        let contended = results.iter().filter(|result| result.contended).count();
         let problems: Vec<String> = results
             .iter()
             .flat_map(|result| {
@@ -169,7 +174,7 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
                 format!("bench.{case}"),
                 state,
                 format!(
-                    "{}/{runs} valid runs; frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
+                    "{}/{runs} valid runs ({contended} contended); frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
                     valid.len(),
                     summary.median_of_medians_ms,
                     summary.worst_p95_ms,
@@ -302,6 +307,11 @@ pub struct RunResult {
     /// Largest GPU memory nvidia-smi attributed to the driver process, in MiB.
     pub gpu_memory_mib_max: Option<u64>,
     pub gpu_passes_recorded: usize,
+    /// Seconds spent waiting for the host to become quiet before starting.
+    pub quiet_wait_seconds: f64,
+    /// True when the host never fell below the quiet threshold; the run still counts, but its
+    /// timings include other work.
+    pub contended: bool,
     pub contention_before: Contention,
     pub contention_after: Contention,
 }
@@ -326,9 +336,21 @@ fn execute_run(
         driver_summary: Value::Null,
         gpu_memory_mib_max: None,
         gpu_passes_recorded: 0,
-        contention_before: Contention::sample(),
+        quiet_wait_seconds: 0.0,
+        contended: false,
+        contention_before: Contention::default(),
         contention_after: Contention::default(),
     };
+    let waited = Instant::now();
+    let mut busy = cpu_busy_percent(Duration::from_secs(1));
+    while busy.is_some_and(|busy| busy >= QUIET_CPU_BUSY_PERCENT)
+        && waited.elapsed() < QUIET_WAIT_LIMIT
+    {
+        busy = cpu_busy_percent(Duration::from_secs(1));
+    }
+    result.quiet_wait_seconds = waited.elapsed().as_secs_f64();
+    result.contended = busy.is_none_or(|busy| busy >= QUIET_CPU_BUSY_PERCENT);
+    result.contention_before = Contention::sample();
     if let Err(error) = fs::create_dir_all(&directory) {
         result
             .problems
@@ -498,6 +520,8 @@ fn validate_run(
 /// Load on the host and the GPU around a run, so contended runs can be identified.
 #[derive(Debug, Default, Serialize)]
 pub struct Contention {
+    /// Share of all cores busy over one second, from `/proc/stat`.
+    pub cpu_busy_percent: Option<f64>,
     pub load_average: Option<String>,
     pub gpu_utilization_percent: Option<u64>,
     pub gpu_memory_used_mib: Option<u64>,
@@ -525,6 +549,7 @@ impl Contention {
                 .and_then(|fields| fields.get(index).copied().flatten())
         };
         Self {
+            cpu_busy_percent: cpu_busy_percent(Duration::from_secs(1)),
             load_average: fs::read_to_string("/proc/loadavg")
                 .ok()
                 .map(|text| text.trim().to_owned()),
@@ -543,6 +568,29 @@ impl Contention {
             .unwrap_or_default(),
         }
     }
+}
+
+/// Aggregate CPU busy share over `window`: non-idle jiffies over all jiffies on the `cpu` line.
+fn cpu_busy_percent(window: Duration) -> Option<f64> {
+    let read = || -> Option<(u64, u64)> {
+        let stat = fs::read_to_string("/proc/stat").ok()?;
+        let fields: Vec<u64> = stat
+            .lines()
+            .next()?
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|field| field.parse().ok())
+            .collect();
+        // user nice system idle iowait irq softirq steal; idle and iowait count as idle.
+        let idle = fields.get(3)? + fields.get(4).copied().unwrap_or(0);
+        Some((fields.iter().take(8).sum(), idle))
+    };
+    let (total_before, idle_before) = read()?;
+    std::thread::sleep(window);
+    let (total_after, idle_after) = read()?;
+    let total = total_after.checked_sub(total_before)?;
+    let idle = idle_after.checked_sub(idle_before)?;
+    (total > 0).then(|| 100.0 * total.saturating_sub(idle) as f64 / total as f64)
 }
 
 fn nvidia_smi(args: &[&str]) -> Option<String> {
