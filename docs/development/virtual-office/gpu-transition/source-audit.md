@@ -1,21 +1,33 @@
 # Supplied-source audit and preservation map
 
-**Evidence class: source inspection only.** Prepared on 2026-10-10 from the uploaded archives. No
-Rust build, gameplay execution, GPU capture or performance benchmark was performed for this package.
-Paths/symbols below identify the reviewed source; 00 must reconcile a newer checkout before editing.
-The archives contained no Git history from which to establish a source commit.
+**Evidence class: source inspection only.** Prepared on 2026-10-10 from the uploaded archives, then
+reconciled against the working checkout by prompt 00 on the same date. No Rust build, test run,
+gameplay execution, GPU capture or performance benchmark was performed for either review.
+Paths/symbols below identify the reviewed source.
 
 ## Provenance
 
-| Input | SHA-256 |
+| Input | Identity |
 | --- | --- |
-| `morbid-monarchy-experimental.zip` | `3c677631e2419d7fd92afbd99818fba5fe18b8a1ba00ce12f8980d44ca871439` |
-| `docs(2).zip` | `2f99afd0b6c45d8f9b92fccc74f59c90c2134a590b6d7f2601125367d0ff2f26` |
+| `morbid-monarchy-experimental.zip` | SHA-256 `3c677631e2419d7fd92afbd99818fba5fe18b8a1ba00ce12f8980d44ca871439` |
+| `docs(2).zip` | SHA-256 `2f99afd0b6c45d8f9b92fccc74f59c90c2134a590b6d7f2601125367d0ff2f26` |
+| Working checkout reconciled in 00 | Branch `experimental`, commit `a9c1539`, clean tree. Source and shaders last changed in `e1fa1d2`; `a9c1539` changed only `AGENTS.md` and `docs/`. |
 
-The source workspace contains `monarch-engine`, `morbid-app` and `spatial-lib`; its manifest requests
-Bevy 0.19 and `bevy_egui` 0.41.0. These are source declarations, not verified compatible resolutions.
-No tracked lockfile, pinned Rust toolchain or CI configuration was supplied. `.gitignore` explicitly
-ignores `Cargo.lock`. The rewritten docs require 01 to resolve/pin a real supported baseline.
+The archives are not in the repository, so their digests cannot be compared with the checkout.
+00 instead re-checked every symbol and test named below against `a9c1539`, and all of them are
+present. 00 made one correction: the renderer has four layer entities per active chunk, not four
+in total. It also extended the render-sync, chunk-manager and exit-flush rows. It added the rows
+for stale reload, database open, CPU live-grid readers, focus attachment, elevation scale, clock
+controls, axis mapping and `hooks.rs`.
+
+The workspace contains `monarch-engine`, `morbid-app` and `spatial-lib`; its manifest requests
+Bevy 0.19 and `bevy_egui` 0.41.0. The checkout tracks no lockfile, toolchain pin, `.cargo/` or CI
+configuration, and `.gitignore` ignores `Cargo.lock`. An untracked local `Cargo.lock` resolves
+Bevy 0.19.0, `bevy_egui` 0.41.0 (egui 0.35.0), wgpu 29.0.4, redb 4.1.0 and bitcode 0.6.9. That is
+untested local state, not a pin. `cargo metadata --locked --offline` stopped because some locked
+packages were not in the local cache, so whether the lockfile is consistent with the manifests
+has not been checked. The active toolchain is stable rustc/cargo 1.99.0. 01 resolves and pins a
+real supported baseline.
 
 ## Source observations and destination
 
@@ -29,21 +41,29 @@ stable throughout extraction.
 | `core/world/chunk.rs`: 64×64-cell chunks. `core/world.rs`: initial active radius 6 per axis. | Preserve geometry in baseline fixtures and explicit resource formulas. |
 | `core/world/grid.rs`, `swap_buffers`: swaps then copies the entire cell slice; wake buffers also swap/clear. | 03 establishes valid untouched output without recurring full-cell copy; cannot just delete the copy from partial ping-pong. |
 | `core/simulation.rs`, `run_simulation_tick`: full traversal skips sleeping cell rules, then unconditionally sets `cells_dirty`. | 03 separates correct sparse scheduling from physical changes and actual renderer consumption. |
-| `runtime/render.rs`, `sync_grid_rendering`: dirty grid is copied into `ShaderBuffer.data`. All four material layers share that buffer. | 06 removes whole-grid CPU upload. This is one shared update, not four full uploads. |
-| `crates/spatial-lib/src/chunk/manager.rs`, active chunks and window movement: retained chunk payloads coexist with the grid; outbound extraction is synchronous CPU access. | 05 replaces payload ownership with residency metadata, ordered GPU capture, generations and bounded retained snapshots. |
+| `runtime/render.rs`, `sync_grid_rendering`: whenever `cells_dirty` is set (every frame that ran a tick, and after edits) the whole grid is copied into `ShaderBuffer.data` for Bevy to upload. All four material layers share that buffer. | 06 removes whole-grid CPU upload. This is one shared update, not four full uploads. |
+| `crates/spatial-lib/src/chunk/manager.rs`, active chunks and window movement: retained chunk payloads coexist with the grid; outbound extraction is synchronous CPU access. Chunks leaving the active window move into an LRU cache (`CACHE_CHUNK_SIZE`, 1,152 chunks, computed from the default radii) and are queued for save only when evicted from it. There is no dirty flag, so unmodified generated chunks are saved as well. | 05 replaces payload ownership with residency metadata, ordered GPU capture, generations and bounded retained snapshots. Dirty means changed since the last acknowledged durable or captured revision. |
 | `core/simulation/liquid_sim.rs` and `granular_sim.rs`: receiver/donor choices repeatedly reconstruct neighbours' preferences and transfer quantities. | 03 compares proposed/accepted/committed work with the current behavior; speed benefit remains to be measured. |
 | `core/world/cell.rs`, `quench`: drains magma, then calls capacity-limited `raise_bedrock` without retaining the unconverted remainder. | 03 adds a conservative ceiling rule/fixture. Ordinary low-elevation tests do not cover this capacity boundary. |
 | `core/simulation.rs`: fixed terrain ticks, but thread-seeded `SmallRng` for stochastic rules. | 03 retains cadence, makes keyed randomness explicit and documents changed reproducibility. |
 | `core/entities/spherical.rs`, `simulate_rigid_sphere_kinematics`: integrates frame delta through a capped number of substeps; `resolve_sphere_pairs` visits all combinations. | 04 moves bodies to the shared physical clock and complete bounded spatial candidates; source timing/candidate evidence is preserved in 01. |
 | `core.rs`: terrain/body/observer Update systems are listed without an explicit semantic chain. | 03–04 define physical pass order; mutual resource exclusion alone is not the intended schedule contract. |
 | `core/physics/grid_physics.rs` and `core/entities/spherical.rs`: heightfield triangle contacts, buoyancy, sand ruts/craters and liquid displacement directly mutate the CPU grid. | 04 retains the column-based geometry and test intentions while resolving shared GPU writes collectively. |
-| `crates/morbid-app/assets/shaders/landscape/common.wgsl` and `runtime/render.rs`: Bevy shader imports, repeated terrain sampling for lighting, four layer entities with `NoFrustumCulling`. | 06 replaces engine plumbing and measures derived visibility/lighting alternatives. No current measured bottleneck ranking is implied. |
+| `crates/morbid-app/assets/shaders/landscape/common.wgsl` and `runtime/render.rs`: Bevy PBR shader imports (mesh/view bindings, directional shadow fetch, fog); heightfield-marched terrain shadows and ambient occlusion that resample terrain. Four layer entities are spawned **per active chunk** (676 at radius 6), each with `NoFrustumCulling` and one shared chunk mesh. | 06 replaces engine plumbing and measures derived visibility/lighting alternatives. No current measured bottleneck ranking is implied. |
 | `runtime/persistence.rs`, `handle_load_requests`: errors/decoding failures become `None`, then trigger terrain generation. | 05 separates absent from corrupt/unavailable reads and preserves existing data. |
+| `runtime/persistence.rs`, `handle_load_requests`: a load does not check `ChunkSaveQueue` or in-flight `ChunkSaveTask`s. A chunk that is evicted and then requested again before its save commits is read stale or absent (and then generated), and the stale copy can later overwrite the newer save. This is inferred from source; it has not been observed in a run. | 01 records it as baseline behavior in a temporary-store fixture; 05 makes the newest retained revision win (A08). |
 | `runtime/persistence.rs`, `process_save_queue`: removes queued payloads, saves in `Task<()>`, logs write failure without returning retry state. | 05 retains snapshot/payload obligations until durable acknowledgement. |
-| `runtime/persistence.rs`, `emergency_flush_on_exit`: flushes the current queue, not a complete capture of resident state and outstanding save tasks. | 05 implements complete checkpoint and close ownership; distinguish orderly save from crash recovery. |
+| `runtime/persistence.rs`, `emergency_flush_on_exit`: flushes only the save queue. Active chunks, LRU-cached chunks and in-flight save tasks are not captured, yet it logs "Safe to terminate". | 05 implements complete checkpoint and close ownership; distinguish orderly save from crash recovery. |
+| `runtime/persistence.rs`, `initialize_database`: at startup, before any window, `Database::create` opens or creates `world_data/save.redb` relative to the working directory, and panics on failure. | Experiments use a scratch working directory and temporary stores. 05–06 add explicit world selection and typed open errors. |
 | `crates/spatial-lib/src/chunk/storage.rs`: redb `spatial_chunks` table keyed by three signed coordinates, with app-encoded chunk bytes. Startup uses seed 69. | 01 captures old-writer fixtures; 05 versions semantic data and imports with explicit missing-metadata interpretation. |
 | `core/simulation.rs`, `SimulationEventQueue`: unbounded channel exists; fire/biology local-event arguments are unused and `runtime/hooks.rs` consumer is commented out. | 02/04 deliver actual bounded outcomes and a CPU consumer. Do not claim the baseline currently floods the queue or has implemented gameplay events. |
 | `runtime/input.rs`, `dev_tools.rs`, renderer/UI: brushes, body presets/control, camera, attract/lift, climate/lighting and grid resize. | 01 freezes the real feature inventory; 06 proves native tool behavior, not just menu presence. |
+| CPU reads of the live grid outside the solvers: `runtime/dev_tools/brush.rs` `raymarch_grid` (cursor preview, edit target, sphere spawn height, attract/lift target) and `handle_brush_input` (`set_cell`/`wake_cell`). `runtime/dev_tools/ui.rs` sums fluid volume and elevation over every cell on each frame the statistics panel is shown. `core/entities/observer.rs` samples floor height every frame in walking (non-noclip) mode. | 04 provides GPU ray/query/edit commands and observer ground queries (or a GPU-side observer rule); 06 computes the statistics as GPU reductions. None of these may use a full-grid fetch. |
+| `runtime/input.rs`, `sync_world_focus`: the residency focus follows the observer only while it is grid-attached (toggled with G), so detaching freezes streaming in place. | Preserve as a supported control in 05–06, or record an explicit scope change. |
+| `runtime/dev_tools/ui.rs`: the elevation-scale control writes `GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime. Body contact, spawn height and rendering all use it, and it is not saved. | Open conflict with fixed units; see [acceptance](acceptance.md#open-conflicts-with-existing-behavior). 01 decides its meaning. |
+| `runtime/dev_tools/ui.rs`: tick rate 10–240 Hz and catch-up 1–16 ticks/frame are live controls; body substeps (≤1/120 s, at most 8 per frame) ignore them. | 01 sets the supported tick range and the rule by which body substeps divide a tick; 04 implements it. |
+| Axis mapping: `sync_world_focus` and `ChunkKey::from_world`/`to_ivec2`. The mapping is recorded in [world format](../../../reference/world-format.md#existing-packed-cell). | 01 captures it in fixtures; 05 import decides how to handle rows with nonzero `z`. |
+| `runtime/hooks.rs`: a compiled module that contains only comments. | Remove it, or replace it with the real consumer when 02/04 deliver one; do not keep a dead module. |
 
 ### Calculated scale, not measured traffic
 
@@ -71,16 +91,41 @@ bounded session mechanics, not a durable workflow event log. The rewritten pract
 units/invariants, pass/data ownership, device limits, shader ABI/lifetimes, numerical error,
 resource/latency budgets, fair measurement and storage consistency because this project needs them.
 
-The original game docs also need reconciliation. `docs/architecture.md` promotes a crate for every
-feature; `docs/knowledge/rust_knowledge.md` forbids manual SoA in favour of ECS and includes blanket
-low-level prescriptions. Preserve modular intent, complete implementations and readable code, but
-replace unmeasured rules with explicit ownership and evidence. `const fn` permits const evaluation;
-it does not make every call a precomputed value. Blanket `inline(always)` is not a performance gate.
-00 retires the superseded rule/persona files instead of leaving contradictory instructions active.
+The original game docs also needed reconciliation. The original `docs/architecture.md` promoted a
+crate for every feature, and `docs/knowledge/rust_knowledge.md` forbade manual SoA in favour of ECS
+and included blanket low-level prescriptions. Preserve modular intent, complete implementations and
+readable code, but replace unmeasured rules with explicit ownership and evidence. `const fn` permits
+const evaluation; it does not make every call a precomputed value. Blanket `inline(always)` is not
+a performance gate.
+
+### Retired rule files
+
+`docs/persona.md`, `docs/rules.md` and `docs/knowledge/rust_knowledge.md` were deleted in
+`a9c1539`, before 00 ran. 00 checked where each of their useful rules now lives. No
+`docs/knowledge/` directory remains, and no active link refers to these files.
+
+| Retired rule | Disposition |
+| --- | --- |
+| Plain technical language; argue with evidence rather than agree | `AGENTS.md` (challenge a design with an alternative and a discriminating test; separate source, evidence, inference and choice); documentation practice, *Evidence language*. |
+| Load architecture and rules before acting | `AGENTS.md`, *Read before changing the repository*. |
+| Rust 1.96.1 stable / 1.98.0 nightly | Dropped as never-tested pins; 01 commits a tested `rust-toolchain.toml`. |
+| Complete compile-ready code; no placeholders, mocks or TODO bypasses | `AGENTS.md` completion rule; implementation practice. |
+| No magic numbers | Implementation practice, *Configuration, units and bounds*: a named source, unit and range for each bound, without a switch for every literal. |
+| Why/how comments; no changelog or conversational comments; semantic naming | Documentation practice, *Comments*; implementation practice (00 added an explicit naming rule). |
+| `unwrap`/`expect` only for a proven invariant; enum errors, not strings | Implementation practice (00 made typed error variants explicit). |
+| `unsafe` kept tiny, each with a `// SAFETY:` proof | Implementation practice (00 made the `// SAFETY:` comment explicit). |
+| Zero-allocation hot paths; trust iterators/LLVM first; readable cold paths | Performance practice, *Bound hot work*; implementation practice, *Hot paths* (00 added the cold-path rule). |
+| Atomics ordering; minimal lock scope | Implementation practice. The preference for lock-free and spin locks was removed. |
+| Type-state; no `dyn` inside hot loops | Implementation practice, *Keep interfaces narrow*. |
+| ECS manages all SoA | Removed: layout follows access and measured cost. |
+| `#[inline(always)]`, `#[cold]`, branch hints and `const fn` as speedups | Removed as blanket rules; they need a measured profile. |
+| MMIO/volatile, inline/naked asm, kernel FPU state, `no_std`, ABI register limits | Dropped: bare-metal guidance that nothing in this application uses. |
+| One crate per feature (old architecture) | Replaced by `AGENTS.md`, implementation practice and ADR 0002. |
 
 ## Existing test inventory
 
-These **28 test functions are present in source, not reported passing**. 01 reads their assertions,
+These **28 test functions are present in source, not reported passing**. 00 confirmed the same 28
+names in `a9c1539`; `crates/spatial-lib` has none. 01 reads their assertions,
 records failed baseline behavior honestly and maps each to a stable behavior ID and destination.
 Names containing “mass” do not independently establish calibrated physical units. Keep original
 intent plus independent corrected-limit tests; do not mechanically freeze known bad behavior.

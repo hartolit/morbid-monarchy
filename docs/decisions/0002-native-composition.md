@@ -1,6 +1,8 @@
 # 0002 — Native composition and meaningful boundaries
 
-**Date:** 2026-10-10. **State:** requested native/ECS direction; concrete package map is proposed.
+**Date:** 2026-10-10. **State:** the native application and standalone `bevy_ecs` are the
+user-requested direction, adopted in prompt 00. The concrete package map is still a proposal,
+which 01 checks against actual consumers.
 
 ## Decision
 

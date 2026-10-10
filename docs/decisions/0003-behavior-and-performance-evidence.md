@@ -1,6 +1,9 @@
 # 0003 — Behavioral and performance evidence
 
-**Date:** 2026-10-10. **State:** proposed policy for adoption in 00; numerical profiles freeze in 01.
+**Date:** 2026-10-10. **State:** engineering policy adopted in prompt 00. This was not a user
+requirement. The numerical profiles and budgets in
+[performance budgets](../reference/performance-budgets.md) are still proposed values until 01
+calibrates and freezes them against the measured baseline.
 
 ## Decision
 

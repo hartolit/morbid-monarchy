@@ -45,5 +45,6 @@ relationship between occupancy, latency, register/resource limits and observed p
 architecture-specific guidance is useful for choosing measurements; it does not establish a
 universal workgroup size or prove that maximizing occupancy improves this project.
 
-The uploaded code is the primary source for current project behavior. Its archive digest, source
-locations and test inventory are recorded separately in the active sprint's source audit.
+The checked-out source is the primary source for current project behavior. Its commit, the
+original archive digest, source locations and test inventory are recorded separately in the
+active sprint's source audit.

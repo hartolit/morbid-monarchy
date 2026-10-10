@@ -1,6 +1,7 @@
 # 0001 — GPU physical authority
 
-**Date:** 2026-10-10. **State:** user-requested direction; target detailed here for sprint adoption.
+**Date:** 2026-10-10. **State:** user-requested direction, adopted for the GPU transition in
+prompt 00 (2026-10-10). Not yet implemented; see [status](../product/status.md).
 
 ## Context
 

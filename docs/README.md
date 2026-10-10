@@ -27,9 +27,9 @@ GPU guidance; executable code and tests will own exact selected versions and lay
 
 ## Current assignment
 
-[GPU transition](development/virtual-office/gpu-transition/README.md) contains prompt 00 and seven
-sequential implementation stages. Its source audit records the supplied baseline; it does not
-replace current status. The [virtual office](development/virtual-office/README.md) owns temporary
-assignments, and the [whiteboard](development/virtual-office/whiteboard/README.md) keeps unresolved
-cross-assignment questions. Adopt lasting outcomes into the maintained owners before removing a
-completed sprint.
+[GPU transition](development/virtual-office/gpu-transition/README.md) contains prompt 00 (complete)
+and seven sequential implementation stages. Its source audit records the baseline source and its
+reconciliation with the checkout; it does not replace current status. The
+[virtual office](development/virtual-office/README.md) owns temporary assignments, and the
+[whiteboard](development/virtual-office/whiteboard/README.md) keeps unresolved cross-assignment
+questions. Adopt lasting outcomes into the maintained owners before removing a completed sprint.

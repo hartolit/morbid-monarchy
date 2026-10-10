@@ -1,14 +1,16 @@
 # GPU transition sprint
 
-**Prepared against the supplied archive; not executed.** Deliver GPU-authoritative material/body
-simulation and an independently usable native application, retaining `bevy_ecs` for CPU orchestration.
-This is an implementation sprint, not a planning-only program or an instruction to port one shader.
+**00 executed on 2026-10-10:** documentation adopted and reconciled against checkout `a9c1539`.
+01–07 have not started. Deliver GPU-authoritative material/body simulation and an independently
+usable native application, retaining `bevy_ecs` for CPU orchestration. This is an implementation
+sprint, not a planning-only program or an instruction to port one shader.
 
 ## Start here
 
-Execute [00](00-first-execution-prompt.md) only when assigned. It adopts/reconciles the docs and stops.
-Then assign the seven stages below individually. Read [source audit](source-audit.md),
-[acceptance](acceptance.md) and the current [handoff](handoff.md) before continuing a stage.
+[00](00-first-execution-prompt.md) is complete; it adopted and reconciled the docs and stopped.
+Assign the seven stages below individually, starting with 01. Read the
+[source audit](source-audit.md), [acceptance](acceptance.md) and the current [handoff](handoff.md)
+before continuing a stage.
 
 | Stage | Complete outcome |
 | --- | --- |

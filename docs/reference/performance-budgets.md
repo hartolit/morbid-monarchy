@@ -1,7 +1,9 @@
 # Performance budgets
 
-**Proposed qualification contract, not benchmark results.** 01 measures the baseline and freezes
-profile inputs and concrete resource capacities before optimizing. Values below establish the
+**Proposed qualification contract, not benchmark results.** 00 adopted the evidence policy in
+[ADR 0003](../decisions/0003-behavior-and-performance-evidence.md), but none of the values below.
+01 measures the baseline and freezes profile inputs and concrete resource capacities before
+optimizing. Values below establish the
 initial engineering target; they are not prior promises from the user or measured device limits.
 A material change needs a recorded rationale before candidate tuning, not a post-failure rewrite.
 

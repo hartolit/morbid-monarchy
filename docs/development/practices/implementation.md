@@ -34,7 +34,9 @@ is a valid pool; using it does not imply allocating per tick.
 Use private fields, validated constructors, enums and typed IDs. Separate raw input, validated
 configuration, live resources and observations. A caller must not need a later `validate()` to
 make an internal value usable. Failure types distinguish invalid input, unsupported capability,
-capacity pressure, stale identity, corrupt data, failed I/O and lost device.
+capacity pressure, stale identity, corrupt data, failed I/O and lost device, as typed variants a
+caller can match rather than strings. Name types, fields and functions by their meaning and unit;
+avoid cryptic abbreviations.
 
 Functions are the first abstraction. Use closures for local variation, enums for closed choices,
 and consumer-owned traits for genuinely replaceable boundaries. Dynamic dispatch belongs at a
@@ -64,9 +66,9 @@ why a typed failure is not useful. Tests may use them for setup and assertions. 
 exceptions, swallowed `Result`s, unbounded retries and detached shutdown work.
 
 Safe Rust is the default. Do not introduce `unsafe` to bypass profiling or API design. Any required
-unsafe boundary needs a small implementation, a specific safety proof, tests of its assumptions,
-and review of aliasing, alignment, initialization and lifetime. A `Pod` derive alone does not prove
-Rust/WGSL layout compatibility; see the GPU practice.
+unsafe boundary needs a small implementation, a specific proof in a `// SAFETY:` comment beside
+it, tests of its assumptions, and review of aliasing, alignment, initialization and lifetime. A
+`Pod` derive alone does not prove Rust/WGSL layout compatibility; see the GPU practice.
 
 ## Configuration, units and bounds
 
@@ -88,7 +90,8 @@ clamped while reports retain the requested value.
 Recurring work must follow the [performance practice](performance.md). Reuse storage after warm-up;
 move formatting, diagnostics and asset work out of tight loops. Do not equate fewer Rust lines,
 more iterators, `#[inline(always)]`, `const fn` or SoA with an established speedup. A `const fn`
-permits compile-time evaluation; it does not guarantee every call is precomputed.
+permits compile-time evaluation; it does not guarantee every call is precomputed. Startup,
+configuration and other cold paths favour clear idiomatic code over micro-optimization.
 
 Organize modules by cohesive algorithms, state machines or interfaces. A large solver may require
 splitting contact generation, response and deformation, not arbitrary `part1` files. Review a

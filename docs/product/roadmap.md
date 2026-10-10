@@ -7,7 +7,7 @@ current qualification lives in [status](status.md). A roadmap entry is not evide
 
 | Order | Outcome | Assignment |
 | --- | --- | --- |
-| 0 | Adopt the project-specific rules and reconcile the actual checkout without changing runtime behavior. | GPU transition 00 |
+| 0 | Adopt the project-specific rules and reconcile the actual checkout without changing runtime behavior. | GPU transition 00 — complete (documentation only) |
 | 1 | Preserve source/behavior evidence, establish repeatable measurements and extract framework-free contracts. | 01 |
 | 2 | Establish one shared GPU context, bounded commands/readbacks, executable layout and lifecycle contracts. | 02 |
 | 3 | Move all existing cell/material simulation to GPU authority, including correct sparse work scheduling. | 03 |

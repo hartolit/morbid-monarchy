@@ -2,10 +2,17 @@
 
 ## Baseline versus target
 
-The supplied archive's application package is `morbid-app` at `crates/morbid-app`; its startup entry
-is `morbid_app::run`. Its manifest currently requests Bevy and it opens `world_data/save.redb`
-relative to the working directory. The baseline has no versioned world CLI, locked dependency set
-or verified setup recipe. Work on a copy of user saves, not the only database.
+In the current checkout the application package is `morbid-app` at `crates/morbid-app`, with startup
+entry `morbid_app::run`. Its manifest requests Bevy. On startup, before the window opens, it opens
+`world_data/save.redb` relative to the working directory, and `Database::create` creates the file
+if it is missing. The baseline has no versioned world CLI, tracked dependency lock or verified
+setup recipe.
+
+The `world_data/save.redb` at the repository root is the user's only world. Never launch an
+experiment, fixture capture or benchmark from the repository root. Run the baseline from a scratch
+working directory, so that it opens a disposable `world_data/`, and capture old-writer fixtures
+into temporary stores. If a task genuinely needs the user's data, work on a copy; never open or
+write the original.
 
 The target keeps the application package name but moves its composition to `apps/morbid`.
 `world-runtime` coordinates CPU intent/I/O; `gpu-world` simulates; `world-render` displays the same
@@ -14,9 +21,10 @@ GPU state. The package README and actual parser will own exact runtime options a
 ## Establish the toolchain
 
 Prompt 01 checks the available Rust toolchain and dependencies, selects compatible supported
-versions and commits `rust-toolchain.toml` and `Cargo.lock`. Do not follow version numbers from the
-old persona/rules files as though they were tested pins. Inspect the dependency tree before
-choosing wgpu/window/UI versions: all GPU consumers must share compatible device types.
+versions and commits `rust-toolchain.toml` and `Cargo.lock`. Do not treat the version numbers from
+the retired rule files (removed in `a9c1539`) or the untracked local lockfile as tested pins.
+Inspect the dependency tree before choosing wgpu/window/UI versions: all GPU consumers must share
+compatible device types.
 
 The maintained checks are in [workflow](../development/workflow.md). The planned `cargo evidence`
 commands are not present until 01 implements them. Run `inspect-adapter` after that implementation,
@@ -43,10 +51,12 @@ mirror. The UI distinguishes submitted edits, applied results and durable saves.
 
 ## Inspect one operation
 
-Trace a brush through input validation, command admission, GPU ray resolution, ordered cell edit,
-reactivation, returned result, rendered change and dirty revision. Read the source owner at each
-boundary rather than starting from every crate's type inventory. The connected `resident-world`
-scenario provides automated coverage of that same physical/storage route.
+In the baseline, a brush runs `handle_brush_input`, then `raymarch_grid` against the CPU grid, then
+`set_cell`/`wake_cell`; the next render sync uploads the whole grid. The target route (04–06) is
+input validation, command admission, GPU ray resolution, ordered cell edit, reactivation, returned
+result, rendered change and dirty revision. Read the source owner at each boundary rather than
+starting from every crate's type inventory. The connected `resident-world` scenario, built up from
+01 through 07, will automate that physical/storage route; it does not exist yet.
 
 For performance, select a frozen profile and follow [the evidence protocol](../development/verification-evidence.md).
 Use pass timings to locate a limit, then confirm the complete application. Keep profiler capture
@@ -61,4 +71,4 @@ payload; corrupt data is not treated as an absent chunk. After device/process fa
 states the last completed durable checkpoint and possible loss since it.
 
 The exact import/recovery commands are delivered with the storage/app parser in 05–06 and must be
-added here with tested examples then. They are intentionally not invented in this package.
+added here with tested examples then. They are intentionally not invented in these docs.

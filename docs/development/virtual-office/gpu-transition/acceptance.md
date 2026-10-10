@@ -1,8 +1,11 @@
 # GPU transition acceptance
 
-**All items are initially not run.** This is the shared outcome matrix, not a second implementation
-prompt or a substitute for the canonical contracts. A stage records concrete evidence in its handoff;
-01 creates the machine-readable behavior registry in `monarchy-evidence`. 07 requalifies integration.
+**All items are not run.** 00 reviewed this matrix against checkout `a9c1539` and found no
+existing test intention or tool missing from it. The feature inventory below adds the controls it
+had left implicit, and one conflict is recorded under it. This is the shared outcome matrix, not a
+second implementation prompt or a substitute for the canonical contracts. A stage records concrete
+evidence in its handoff; 01 creates the machine-readable behavior registry in `monarchy-evidence`.
+07 requalifies integration.
 
 ## Acceptance matrix
 
@@ -31,21 +34,33 @@ ordinary qualification profile. Known failures remain attached to their owner un
 
 ## Feature preservation inventory
 
-01 compares this source-derived inventory with the current checkout, captures the baseline settings
-and records additions/corrections. 06 proves each through the native consumer. Intentional visual
-changes are documented; removal of a required behavior needs explicit scope change, not a new label.
+00 reconciled this inventory with checkout `a9c1539`. The ranges shown are the current UI
+limits, not frozen support limits. 01 captures the baseline settings and visual reference and
+records any later corrections. 06 proves each feature through the native consumer. Intentional
+visual changes are documented; removing a required behavior needs an explicit scope change, not a
+new label.
 
 | Feature group | Required usable behavior | Important boundary |
 | --- | --- | --- |
-| Physical terrain | Packed columns, granular movement/erosion, water/oil/magma, ice phase behavior, combustion and biological growth. | The GPU rules are authoritative; display is not a substitute for physical accounting. |
-| Simulation controls | Existing family toggles, ambient temperature and meaningful time/configuration controls. | Toggling a rule/climate invalidates/wakes the required state; no hidden second clock. |
-| Brushes | Water, lava, oil, ice, fire, sand, raise terrain, lower terrain; existing brush controls. | Actual GPU ray/hit/edit result, capacity outcome and visible target; no full-grid CPU fetch. |
-| Bodies | Metal and wood sphere spawning; terrain contact/rolling/crater/rut, buoyancy and fluid displacement. | Shared-cell/body conflicts are resolved, not overwritten by independent writes. |
-| Direct control | Observer movement, possession/release, driven motion, grounded jump, attract and lift. | Normal commands and observed/GPU presentation state; no writable CPU physical transform. |
-| Camera/input | Existing zoom, tether/cursor and tool input; sensible native focus/resize behavior. | Camera following cannot require a same-frame blocking body readback. |
-| Presentation | Terrain/material layers and spheres; source directional/ambient lighting, shadows, fog/bloom and their useful controls. | Comparable quality documented; no obligation for pixel-identical Bevy output. |
-| Inspection | Useful statistics/compass/overlay and selected physical debugging. | Real physical data plus resource/tick/observation pressure, not fabricated telemetry. |
-| World controls | Active-world resize, normal streaming, safe save/exit/reopen and explicit import/recovery. | Failure preserves current valid state or reports the documented loss boundary. |
+| Physical terrain | Packed columns, granular movement/erosion, water/oil/magma flow, thermal freeze/thaw at ambient temperature, magma quench and boiling, combustion and biological growth. | The GPU rules are authoritative; display is not a substitute for physical accounting. |
+| Simulation controls | Toggles for liquid, granular, thermal, fire and biology; ambient temperature (−30 to 40 °C); tick rate (10–240 Hz); catch-up limit (1–16 ticks/frame); elevation scale. | Toggling a rule/climate invalidates/wakes the required state; no hidden second clock. Body substeps divide the selected tick. Elevation scale is an open conflict (below). |
+| Brushes | Water, lava, oil, ice, fire, sand, raise terrain, lower terrain; radius 0–64, strength 1–255; cursor preview. | Actual GPU ray/hit/edit result, capacity outcome and visible target; no full-grid CPU fetch. The preview may be provisional. |
+| Bodies | Metal (relative density 7.8) and wood (0.6) sphere spawning at the picked surface; terrain contact/rolling/crater/rut, buoyancy and fluid displacement. | Shared-cell/body conflicts are resolved, not overwritten by independent writes. |
+| Direct control | Observer flight and walking (noclip toggle, terrain-following walk, sprint); attaching/detaching the residency focus; possession/release of the nearest sphere, driven motion, grounded jump, attract and lift. | Normal commands and observed/GPU presentation state; no writable CPU physical transform. Walking and target picking use GPU queries or observations, not CPU terrain reads. |
+| Camera/input | Existing zoom, tether, right-button look/cursor capture and tool input; sensible native focus/resize behavior. | Camera following cannot require a same-frame blocking body readback. |
+| Presentation | Terrain/material layers and spheres; sun azimuth/elevation, sky brightness, heightfield terrain shadows and ambient occlusion with their controls; directional shadow maps, distance fog and bloom. | Comparable quality documented; no obligation for pixel-identical Bevy output. |
+| Inspection | Statistics (FPS, total liquid volume, total elevation), a compass showing heading, pitch and sun, an overlay toggle, and selected physical debugging. | Totals come from exact GPU integer reductions, not a full-grid CPU fetch; add resource/tick/observation pressure; no fabricated telemetry. |
+| World controls | Active-world resize (radius 1–32 per axis), normal streaming, safe save/exit/reopen and explicit import/recovery. | Failure preserves current valid state or reports the documented loss boundary. At this cell size, radius 32 exceeds a default 128 MiB storage binding, so it is supported or visibly refused. |
+
+### Open conflicts with existing behavior
+
+**Live elevation scale.** Source (`runtime/dev_tools/ui.rs`) shows the UI writing
+`GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime. Body contact heights, sphere spawn
+placement and rendering all read it, and the value is not saved with the world. A live physical
+scale conflicts with fixed physical units and with the saved-world coordinate/scale convention.
+In Checkpoint C, 01 chooses one meaning and tests it: a physical setting applied at a tick
+boundary, a world-creation parameter, or a presentation-only vertical exaggeration. Until then the
+control remains in this inventory. It is not removed silently.
 
 New audio/damage systems, arbitrary rigid shapes/joints, multi-species fluid fields, networking and
 unloaded-region catch-up are not implied by this inventory. Preserve existing behavior and deliver
@@ -68,7 +83,11 @@ native client. Freeze concrete values in 01; do not allow each stage to choose a
    application/runtime/store objects, reopen independently and verify promised state and identities.
 6. Repeat with delayed mapping/consumers, reordered loads, a failed write, overlapping resize and
    a controlled interruption/loss. Recover from the actual last complete checkpoint, not a fictional
-   command replay. Retain a separate real interactive trace for the native tools/presentation.
+   command replay.
+
+The trace grows through 04–05. 06 runs this same trace visibly, through the native client, its
+renderer and its tools. 07 repeats it in the integrated run. Interactive checks of individual
+tools extend this trace; they do not replace it, and a headless run alone does not complete it.
 
 The trace is an integration obligation, not the entire test suite. Fine-grained golden tests must
 locate errors and adversarial scenarios must distinguish queue policy, numerical failure and data

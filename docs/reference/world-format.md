@@ -25,10 +25,15 @@ Do not rely on native host byte order for persisted bytes or portable interchang
 | 60–63 | Compass/momentum flags | 4 bits |
 
 Material IDs and scales retain their existing meanings until changed through a tested decision.
-Chunks have 64×64 cells. CPU world keys in the baseline are three signed components; the active
-2.5D view uses a planar mapping. 01 records the actual axis mapping and import handling for the
-unused/unsupported dimension; do not infer it from misleading comments. New GPU slots use local
-indices plus absolute-key metadata, never float absolute-world IDs.
+Chunks have 64×64 cells. CPU world keys in the baseline have three signed components, and the
+active 2.5D view uses a planar mapping. Source at `a9c1539` shows that mapping. A grid-attached
+observer sets the focus to `(x, −z, 0)` from its Bevy translation (`sync_world_focus`), so keys
+written through the normal path have `z = 0`. A cell's `y` is the renderer's `−z` (also used by
+`spherical.rs` and the render chunk transforms). The redb key and the generator seed still include
+`z`. The comment on `ChunkKey::to_ivec2` says "XZ plane", but the code returns `(x, y)`; do not
+rely on the comment. 01 confirms this with old-writer fixtures. Import records how it handles
+rows with nonzero `z`. New GPU slots use local indices plus absolute-key metadata, never float
+absolute-world IDs.
 
 Keep saved packed words distinct from GPU scratch, padding and handles. A cell-format change needs
 an explicit version and conversion. Invalid IDs, lengths, overflows or non-finite body values are
@@ -38,8 +43,12 @@ rejected at the owning input boundary.
 
 The baseline redb table is `spatial_chunks`, keyed by `[i32; 3]`, with bitcode-encoded `CellChunk`
 bytes. There is no complete versioned world/checkpoint envelope. The application uses startup seed
-69 in code. Existing `last_simulated` metadata is not proof of a consistent world snapshot or a
-portable simulation-clock contract. Preserve original bytes for any import investigation.
+69 in code. Existing `last_simulated` metadata holds session-relative elapsed seconds at load time.
+It is not proof of a consistent world snapshot or a portable simulation-clock contract. Only
+chunks evicted from the LRU cache are ever written, either by the periodic save batch or by the
+exit flush, and there is no dirty flag. A legacy store therefore mixes modified chunks with
+unmodified generated ones, and it can be missing changes that were still resident or cached when
+the process stopped. Preserve original bytes for any import investigation.
 
 A database/table error or undecodable existing row is different from a key that does not exist.
 Only a genuine absent key permits deterministic terrain generation. A corrupt/unsupported row must

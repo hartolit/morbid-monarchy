@@ -3,7 +3,7 @@
 This document owns how evidence is collected and what it establishes. Commands are defined in
 [workflow](workflow.md); timing/resource values are owned by
 [performance budgets](../reference/performance-budgets.md). All new tools/suites are pending in the
-supplied baseline. An unimplemented or unavailable suite cannot return success.
+current checkout. An unimplemented or unavailable suite cannot return success.
 
 ## Evidence lanes
 

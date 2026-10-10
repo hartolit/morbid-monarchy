@@ -43,11 +43,12 @@ the last tested commit, uncommitted changes and exact next action in the current
 
 ## Verification commands and availability
 
-The uploaded baseline has no evidence runner or pinned toolchain. Prompt 01 must establish those.
-Until then, use available source/document checks and accurately report unavailable compilation.
-Existing package test commands are `cargo test -p monarch-engine` and
-`cargo test -p spatial-lib --all-features`; these are source-derived entry points, not evidence
-that dependency resolution or tests have succeeded.
+The current checkout has no evidence runner, tracked lockfile or pinned toolchain, and prompt 01
+must establish them. Until then, use available source/document checks and accurately report
+unavailable compilation. Existing package test commands are `cargo test -p monarch-engine` and
+`cargo test -p spatial-lib --all-features`. `spatial-lib` has no tests, so the second command only
+compiles it. These are entry points read from source, not evidence that dependency resolution or
+tests have succeeded.
 
 ### Planned common entry point — delivered in 01
 

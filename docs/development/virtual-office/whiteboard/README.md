@@ -6,8 +6,9 @@ duplicate every acceptance item here.
 
 ## Overview
 
-No unassigned topics are opened by this package. Relevant findings discovered during execution can
-be added to [issues](issues/README.md) or [discussions](discussions/README.md).
+No topics are open. 00 found nothing outside the active sprint's scope. Relevant findings
+discovered during execution can be added to [issues](issues/README.md) or
+[discussions](discussions/README.md).
 
 When a topic exists, this overview alone records its state (`open`, `assigned`, `parked`), next
 action, real assignment and last evaluated date. Topic files own evidence/assessment, not duplicate

@@ -1,9 +1,12 @@
 # Architecture
 
-**Target architecture for the GPU transition.** The supplied implementation differs; see
-[status](product/status.md). Package names below are the proposed implementation map, not claims
-that directories already exist. Prompt 00 adopts the direction; 01 confirms actual consumers and
-records any justified boundary adjustment before creating packages.
+**Target architecture for the GPU transition, adopted in prompt 00.** The checkout still runs the
+CPU-authoritative Bevy baseline described under [current baseline](#current-baseline), and
+[status](product/status.md) owns what is implemented and verified. Everything else on this page
+is the target. Package names are the proposed implementation map; those directories do not exist
+yet. 00 creates no packages. 01 checks each proposed boundary against its actual consumers. Where
+none justifies a crate, 01 uses a module instead and records that here and in
+[ADR 0002](decisions/0002-native-composition.md).
 
 ## One physical world, several consumers
 
@@ -25,6 +28,28 @@ copy of the live chunk.
 Ownership does not require every named algorithm to become a crate. Material flows, thermal rules,
 body contacts and terrain displacement are modules under the GPU physical owner. They share memory
 and an ordered physical tick; separating them behind per-cell traits would obscure the real work.
+
+## Current baseline
+
+This is the source at `a9c1539`; the sprint
+[source audit](development/virtual-office/gpu-transition/source-audit.md) lists the symbols. Each
+row describes current behavior that the target replaces. None of it is a second supported path.
+
+| Responsibility | Current owner and behavior | Target owner |
+| --- | --- | --- |
+| Cell meaning, materials, generation | `monarch-engine` `core/world/{cell,chunk}.rs`, `core/generation` | `world-model` |
+| Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update` | `gpu-world` |
+| Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid | `gpu-world`; ECS keeps identity and a `BodyHandle` |
+| Observer, brushes, picking, statistics | `core/entities/observer.rs` and `morbid-app` `runtime/{input,dev_tools}` read and write the CPU grid directly | Intent in `world-runtime`; queries, edits and reductions in `gpu-world`; UI in `morbid-app` |
+| Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs`; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
+| Persistence | `morbid-app` `runtime/persistence.rs` over `spatial-lib` `chunk/storage.rs` (redb, bitcode) | `world-store` |
+| Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
+| Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
+| Evidence | In-crate `#[test]` functions only | `monarchy-evidence` |
+
+Cells, bodies and the observer are unordered `Update` systems. The only thing that serializes them
+is that each takes `ResMut<ActiveWorldGrid>`. The [one physical tick](#one-physical-tick) below
+replaces that arrangement; documenting the old order is not enough.
 
 ## Proposed workspace
 
@@ -56,8 +81,9 @@ docs/                          maintained explanations and active assignments
 The listed modules communicate intended cohesion; they are not a file-count quota. Introduce each
 package only when its first real consumer adopts it. Reuse existing sound code before moving it.
 Generic spatial math from `spatial-lib` can move into `world-model::spatial`; its CPU-grid-dependent
-chunk manager must be replaced by the residency policy, not renamed as a GPU abstraction. Keep a
-separate spatial crate only if 01 demonstrates an independent consumer and a meaningful boundary.
+chunk manager must be replaced by the residency policy, not renamed as a GPU abstraction, and its
+redb backend belongs to `world-store`. Keep a separate spatial crate only if 01 demonstrates an
+independent consumer and a meaningful boundary.
 
 ### Dependency direction
 
