@@ -1,0 +1,32 @@
+# Finite lint exceptions for code that predates the evidence runner (prompt 01).
+#
+# `cargo evidence check static` runs Clippy with all features and fails on any warning not
+# listed here, and on any entry whose warnings have since been fixed, so the list can only
+# shrink. New and migrated code gets no entry. Each entry names the owner and the stage that
+# removes the code or fixes the warning.
+#
+# Prompt 01 applied Clippy's machine-applicable fixes to the legacy crates (collapsible `if`,
+# `map_or`, a redundant cast and an explicit deref). What remains are Bevy systems whose
+# parameter lists are the system's data access; splitting them would restructure code that 06
+# deletes.
+
+[[exception]]
+file = "crates/morbid-app/src/runtime/dev_tools/brush.rs"
+lint = "clippy::too_many_arguments"
+count = 4
+owner = "morbid-app Bevy baseline: pointer tool systems"
+removal = "06 replaces the Bevy application and its tool systems"
+
+[[exception]]
+file = "crates/morbid-app/src/runtime/dev_tools/ui.rs"
+lint = "clippy::too_many_arguments"
+count = 1
+owner = "morbid-app Bevy baseline: developer UI system"
+removal = "06 replaces the Bevy application and its UI"
+
+[[exception]]
+file = "crates/morbid-app/src/runtime/render.rs"
+lint = "clippy::too_many_arguments"
+count = 2
+owner = "morbid-app Bevy baseline: renderer setup and grid sync systems"
+removal = "06 replaces the Bevy renderer"

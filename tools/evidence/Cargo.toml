@@ -1,0 +1,30 @@
+[package]
+name = "monarchy-evidence"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "monarchy-evidence"
+description = "Development evidence runner: repository checks, CPU tests, adapter inspection and baseline measurement."
+
+[features]
+default = []
+# Builds the `legacy-baseline` scenario driver, which links the Bevy baseline application.
+# The runner builds it on demand for `bench`; ordinary checks do not compile Bevy for it.
+legacy-baseline = ["dep:bevy", "dep:monarch-engine", "dep:morbid-app", "dep:spatial-lib"]
+
+[dependencies]
+futures-lite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+wgpu.workspace = true
+
+bevy = { workspace = true, optional = true }
+monarch-engine = { workspace = true, optional = true }
+morbid-app = { workspace = true, optional = true }
+spatial-lib = { workspace = true, optional = true }
+
+[[bin]]
+name = "legacy-baseline"
+required-features = ["legacy-baseline"]

@@ -180,11 +180,11 @@ impl<'a> GridPhysicsApi<'a> {
             ];
 
             for point in points {
-                if let Some(sampled_height) = self.get_floor_height(point) {
-                    if (sampled_height - center_height).abs() <= cliff_threshold {
-                        accumulated_height += sampled_height;
-                        valid_samples += 1;
-                    }
+                if let Some(sampled_height) = self.get_floor_height(point)
+                    && (sampled_height - center_height).abs() <= cliff_threshold
+                {
+                    accumulated_height += sampled_height;
+                    valid_samples += 1;
                 }
             }
         }

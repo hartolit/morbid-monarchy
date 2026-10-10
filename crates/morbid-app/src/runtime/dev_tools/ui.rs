@@ -115,7 +115,7 @@ pub fn dev_tuning_ui(
             ui.add_space(UI_SPACING_DEFAULT);
 
             let [show_simulation, show_lighting] = &mut *show_panels;
-            ui.checkbox(&mut *show_stats, "Statistics");
+            ui.checkbox(&mut show_stats, "Statistics");
             ui.checkbox(show_simulation, "Simulation");
             ui.checkbox(show_lighting, "Lighting");
             add_separator(ui);
@@ -143,19 +143,18 @@ pub fn dev_tuning_ui(
 
             ui.add_space(UI_SPACING_DEFAULT);
 
-            if ui.button("Apply Resize").clicked() {
-                if current_size[0] != manager.inner.active_radius_x
-                    || current_size[1] != manager.inner.active_radius_y
-                {
-                    info!(
-                        "Dev UI dispatching Resize: {}x{}",
-                        current_size[0], current_size[1]
-                    );
-                    resize_writer.write(ResizeSimulationEvent {
-                        new_active_radius_x: current_size[0],
-                        new_active_radius_y: current_size[1],
-                    });
-                }
+            if ui.button("Apply Resize").clicked()
+                && (current_size[0] != manager.inner.active_radius_x
+                    || current_size[1] != manager.inner.active_radius_y)
+            {
+                info!(
+                    "Dev UI dispatching Resize: {}x{}",
+                    current_size[0], current_size[1]
+                );
+                resize_writer.write(ResizeSimulationEvent {
+                    new_active_radius_x: current_size[0],
+                    new_active_radius_y: current_size[1],
+                });
             }
             add_separator(ui);
 

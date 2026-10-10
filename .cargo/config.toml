@@ -1,0 +1,3 @@
+[alias]
+# The single entry point for repository evidence; see docs/development/workflow.md.
+evidence = "run --locked --release -p monarchy-evidence --"

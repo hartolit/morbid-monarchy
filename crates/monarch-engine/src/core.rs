@@ -4,19 +4,21 @@ use bevy::{
 };
 
 use crate::core::{
+    counters::EngineCounters,
     entities::{
-        observer::{resolve_observer_kinematics, ObserverConfig},
-        spherical::simulate_rigid_sphere_kinematics,
         GlobalPhysicsConfig,
+        observer::{ObserverConfig, resolve_observer_kinematics},
+        spherical::simulate_rigid_sphere_kinematics,
     },
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::{simulate_world, SimulationClock, SimulationConfig, SimulationEventQueue},
+    simulation::{SimulationClock, SimulationConfig, SimulationEventQueue, simulate_world},
     world::{
-        grid::ActiveWorldGrid, handle_chunk_loaded, handle_simulation_resize, manage_chunk_window,
-        WorldFocus, WorldManager, WorldStore,
+        WorldFocus, WorldManager, WorldStore, grid::ActiveWorldGrid, handle_chunk_loaded,
+        handle_simulation_resize, manage_chunk_window,
     },
 };
 
+pub mod counters;
 pub mod entities;
 pub mod events;
 pub mod generation;
@@ -35,6 +37,7 @@ impl Plugin for LandscapePlugin {
             .init_resource::<SimulationEventQueue>()
             .init_resource::<SimulationConfig>()
             .init_resource::<SimulationClock>()
+            .init_resource::<EngineCounters>()
             .init_resource::<GlobalPhysicsConfig>()
             .init_resource::<ObserverConfig>()
             .insert_resource(ActiveWorldGrid::default())

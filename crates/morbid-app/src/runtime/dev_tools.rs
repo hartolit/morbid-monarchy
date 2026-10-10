@@ -67,7 +67,11 @@ impl Default for BrushSettings {
     }
 }
 
-pub struct DevToolsPlugin;
+pub struct DevToolsPlugin {
+    /// Whether mouse buttons drive the brush, attract and lift tools. A scripted caller applies
+    /// the same tool functions itself.
+    pub pointer_tools: bool,
+}
 
 impl Plugin for DevToolsPlugin {
     fn build(&self, app: &mut App) {
@@ -80,14 +84,16 @@ impl Plugin for DevToolsPlugin {
                 EguiPrimaryContextPass,
                 (ui::dev_tuning_ui, compass::navigation_compass).chain(),
             )
-            .add_systems(
+            .add_systems(Update, brush::update_brush_cursor);
+        if self.pointer_tools {
+            app.add_systems(
                 Update,
                 (
-                    brush::update_brush_cursor,
                     brush::handle_brush_input,
                     brush::attract_spheres_input,
                     brush::lift_spheres_input,
                 ),
             );
+        }
     }
 }

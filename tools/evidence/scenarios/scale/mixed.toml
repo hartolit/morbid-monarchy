@@ -1,0 +1,96 @@
+# Frozen scale scenario, prompt 01. Do not edit to make a run faster: a changed workload
+# is a new scenario with its own name. Physical actions are scheduled by simulation tick.
+# Site: seed 69, the shore of the lake north-west of the origin chunk. The lake (water level 100)
+# spans x -192..120, y 296..424; a sand band (elevation 100-119, 5 loose sand) runs through
+# x 0..288, y 288..330; grass lies to the south. Cell coordinates are (x, y); y is render -z.
+
+schema = 1
+profile = "scale"
+case = "mixed"
+description = "Repeated climate swings freeze and thaw the lake from its shores and wake the whole window; fire spreads through grass, lava quenches in the shallows, oil mixes into the lake, foliage grows."
+
+[world]
+seed = 69
+active_radius_chunks = [16, 16]
+tick_rate_hz = 60.0
+max_ticks_per_frame = 4
+ambient_temperature_c = 12.0
+elevation_scale = 0.5
+families = ["liquid", "granular", "thermal", "fire", "biology"]
+
+[presentation]
+resolution = [1920, 1080]
+present_mode = "no-vsync"
+overlay = true
+
+[camera]
+start_cell = [200, 230]
+height = 150.0
+yaw_degrees = 30.0
+pitch_degrees = -40.0
+
+[run]
+runs = 5
+warmup_frames = 300
+measured_frames = 1800
+residency_timeout_seconds = 600.0
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = -8.0
+at_tick = 0
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = 15.0
+at_tick = 600
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = -8.0
+at_tick = 1200
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = 15.0
+at_tick = 1800
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = -8.0
+at_tick = 2400
+
+[[actions]]
+kind = "climate"
+ambient_temperature_c = 15.0
+at_tick = 3000
+
+[[actions]]
+kind = "brush"
+tool = "fire"
+cell = [260, 200]
+radius = 6
+strength = 1
+from_tick = 30
+to_tick = 30
+every_ticks = 1
+
+[[actions]]
+kind = "brush"
+tool = "lava"
+cell = [110, 335]
+radius = 3
+strength = 6
+from_tick = 0
+to_tick = 1000000
+every_ticks = 2
+
+[[actions]]
+kind = "brush"
+tool = "oil"
+cell = [90, 360]
+radius = 3
+strength = 4
+from_tick = 0
+to_tick = 1000000
+every_ticks = 4

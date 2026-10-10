@@ -102,7 +102,7 @@ impl ChunkManager {
             let old_active_ref = self.active_view.as_ref();
             for key in new_active_view
                 .iter()
-                .filter(|k| old_active_ref.map_or(true, |old| !old.contains(k)))
+                .filter(|k| old_active_ref.is_none_or(|old| !old.contains(k)))
             {
                 if let Some(chunk_data) = store.cached.pop(&key) {
                     grid.load_chunk(key, self.chunk_size, &chunk_data.cells);
@@ -141,7 +141,7 @@ impl ChunkManager {
             let old_preload_ref = self.preload_view.as_ref();
             for key in new_preload_view
                 .iter()
-                .filter(|k| old_preload_ref.map_or(true, |old| !old.contains(k)))
+                .filter(|k| old_preload_ref.is_none_or(|old| !old.contains(k)))
             {
                 if !store.active.contains_key(&key)
                     && !store.cached.contains(&key)
@@ -181,10 +181,10 @@ impl ChunkManager {
             }
 
             for key in old_active.iter().filter(|k| !new_active_view.contains(k)) {
-                if let Some(chunk_data) = store.active.remove(&key) {
-                    if let Some((evicted_key, evicted_data)) = store.cached.push(key, chunk_data) {
-                        events.unloads_emitted.push((evicted_key, evicted_data));
-                    }
+                if let Some(chunk_data) = store.active.remove(&key)
+                    && let Some((evicted_key, evicted_data)) = store.cached.push(key, chunk_data)
+                {
+                    events.unloads_emitted.push((evicted_key, evicted_data));
                 }
             }
         }
@@ -226,7 +226,7 @@ impl ChunkManager {
     ) -> Option<(ChunkKey, Chunk<T, M>)> {
         store.pending.remove(&key);
 
-        let is_active = self.active_view.map_or(false, |v| v.contains(&key));
+        let is_active = self.active_view.is_some_and(|v| v.contains(&key));
 
         if is_active {
             grid.load_chunk(key, self.chunk_size, &chunk_data.cells);

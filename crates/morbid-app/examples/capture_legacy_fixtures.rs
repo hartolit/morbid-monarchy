@@ -49,7 +49,10 @@ fn main() -> ExitCode {
 
 fn capture(output: &Path) -> Result<(), String> {
     if output.exists() {
-        return Err(format!("{} already exists; refusing to overwrite", output.display()));
+        return Err(format!(
+            "{} already exists; refusing to overwrite",
+            output.display()
+        ));
     }
     let rows_dir = output.join("rows");
     fs::create_dir_all(&rows_dir).map_err(|e| format!("create {}: {e}", rows_dir.display()))?;
@@ -67,8 +70,10 @@ fn capture(output: &Path) -> Result<(), String> {
     // Two batches, as two periodic save flushes would commit them.
     let (first, second) = encoded.split_at(2);
     for batch in [first, second] {
-        let refs: Vec<(ChunkKey, &[u8])> =
-            batch.iter().map(|(key, bytes)| (*key, bytes.as_slice())).collect();
+        let refs: Vec<(ChunkKey, &[u8])> = batch
+            .iter()
+            .map(|(key, bytes)| (*key, bytes.as_slice()))
+            .collect();
         storage
             .write_batch(&refs)
             .map_err(|e| format!("write batch: {e}"))?;
@@ -92,7 +97,9 @@ fn capture(output: &Path) -> Result<(), String> {
         let decoded: CellChunk =
             bitcode::decode(bytes).map_err(|e| format!("decode {file}: {e}"))?;
         if decoded != row.chunk {
-            return Err(format!("{file}: decoded chunk differs from the source chunk"));
+            return Err(format!(
+                "{file}: decoded chunk differs from the source chunk"
+            ));
         }
 
         append_row(&mut manifest, row, &file, bytes.len());
@@ -157,7 +164,10 @@ fn edit_like_brushes(chunk: &mut CellChunk) {
             cell.set_granular_vol(current + 12);
         }
         if (40..44).contains(&x) && (40..44).contains(&y) {
-            let raised = cell.elevation().saturating_add(25).min(WorldCell::MAX_ELEVATION as u16);
+            let raised = cell
+                .elevation()
+                .saturating_add(25)
+                .min(WorldCell::MAX_ELEVATION as u16);
             cell.set_elevation(raised);
         }
         if (50..52).contains(&x)

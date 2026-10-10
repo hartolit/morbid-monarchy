@@ -1,0 +1,298 @@
+# Behavioral coverage registry, checked by `cargo evidence test cpu`.
+#
+# Every test in a covered package must appear here, and every entry must run and pass. `id` is
+# the stable coverage identity: when a test is renamed or moves to another owner, update
+# `package`, `target` and `test` and keep `id`. `origin = "baseline"` marks the 28 tests that
+# existed before the GPU transition; the runner requires all 28 to stay registered.
+#
+# determinism: "exact" (integer or otherwise reproducible), "float-tolerance" (floating body
+# motion against physical bounds), "stochastic-thread-rng" (probabilistic: the rule draws from a
+# thread-seeded RNG, so a single run is not an exact oracle).
+
+# --- Column rules: monarch-engine core/world/cell.rs ---
+
+[[behavior]]
+id = "cell.inflow.small-absorbed"
+package = "monarch-engine"
+target = "lib"
+test = "core::world::cell::tests::small_inflow_is_absorbed_by_a_deeper_pool"
+origin = "baseline"
+expectation = "A smaller inflow of another liquid joins a deeper pool: the resident material stays and the combined volume is kept."
+destination = "world-model column rules (01); per-cell GPU rule (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "cell.inflow.larger-takes-over"
+package = "monarch-engine"
+target = "lib"
+test = "core::world::cell::tests::larger_inflow_takes_the_column_over_without_losing_volume"
+origin = "baseline"
+expectation = "A larger inflow takes the column's material over and keeps the combined volume."
+destination = "world-model column rules (01); per-cell GPU rule (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "cell.quench.either-order"
+package = "monarch-engine"
+target = "lib"
+test = "core::world::cell::tests::magma_and_coolant_quench_into_rock_either_way_round"
+origin = "baseline"
+expectation = "Magma received by a coolant pool raises stone by the magma volume; coolant received by magma quenches the magma to stone, then fills the column."
+destination = "world-model column rules (01); per-cell GPU rule with the corrected ceiling accounting (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "cell.phase.ice-solid-volume-kept"
+package = "monarch-engine"
+target = "lib"
+test = "core::world::cell::tests::ice_is_solid_and_phase_changes_keep_volume"
+origin = "baseline"
+expectation = "Freezing makes the water a solid that adds to the solid top and accepts no liquid; thawing restores the same water volume."
+destination = "world-model column rules (01); per-cell GPU rule (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "cell.drain.clears-state"
+package = "monarch-engine"
+target = "lib"
+test = "core::world::cell::tests::draining_dry_clears_the_liquid_state"
+origin = "baseline"
+expectation = "Draining a column dry returns only the volume present and clears its liquid material and momentum flags."
+destination = "world-model column rules (01); per-cell GPU rule (03)"
+determinism = "exact"
+
+# --- Cellular automaton: monarch-engine core/simulation.rs ---
+
+[[behavior]]
+id = "sim.liquid.dam-break"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::dam_break_conserves_liquid_and_settles"
+origin = "baseline"
+expectation = "A 400-unit water column on rock spreads, conserves liquid and solid volume exactly, falls asleep within 6000 ticks and rests level within one unit."
+destination = "GPU liquid transfer and sparse scheduling (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.liquid.basin-level"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::walled_basin_fills_level_and_rests"
+origin = "baseline"
+expectation = "A walled basin filled from one corner conserves volume, falls asleep and rests level within one unit."
+destination = "GPU liquid transfer and sparse scheduling (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.granular.pile"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::granular_pile_conserves_mass_and_settles"
+origin = "baseline"
+expectation = "A 3x3 sand pile at maximum loose height conserves solid volume and falls asleep."
+destination = "GPU granular transfer (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.conservation.chaotic"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::chaotic_terrain_conserves_liquid_and_solid_mass"
+origin = "baseline"
+expectation = "Seeded random relief, sand and water conserve the liquid and solid totals exactly after each of 600 ticks."
+destination = "GPU cell simulation conservation (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.mixing.oil-patch"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::oil_poured_into_a_lake_stays_a_patch"
+origin = "baseline"
+expectation = "Oil injected into a lake stays within 1 to 9 cells over 600 ticks, and mixing deletes no volume."
+destination = "GPU liquid mixing (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.thermal.freeze-thaw"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::still_water_freezes_from_the_shore_and_thaws_back"
+origin = "baseline"
+expectation = "At -10 C a walled pond freezes completely and sleeps; after a climate wake at 20 C it thaws completely; volume is conserved both ways."
+destination = "GPU thermal rule with climate reactivation (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.thermal.ice-floor"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::ice_is_a_floor_that_liquid_cannot_enter"
+origin = "baseline"
+expectation = "Ice at -5 C keeps its material and volume beside 200 units of water for 200 ticks."
+destination = "GPU thermal and liquid rules (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.thermal.magma-water"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::magma_touching_water_solidifies_and_boils_it"
+origin = "baseline"
+expectation = "In one thermal-only tick, magma beside water becomes stone raised by the magma volume, and the water loses volume."
+destination = "GPU thermal rule and reaction accounting (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "sim.fire.oil-burns-out"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::burning_oil_consumes_its_fuel_and_burns_out"
+origin = "baseline"
+expectation = "A burning 12-unit oil pool consumes its oil and the fire goes out within 1000 fire-only ticks."
+destination = "GPU fire rule with keyed randomness (03)"
+determinism = "stochastic-thread-rng"
+
+[[behavior]]
+id = "sim.clock.whole-ticks-capped"
+package = "monarch-engine"
+target = "lib"
+test = "core::simulation::tests::fixed_clock_runs_whole_ticks_and_caps_catch_up"
+origin = "baseline"
+expectation = "3.5 tick lengths of frame time run exactly 3 ticks; a 1 s frame runs only the 4-tick catch-up limit."
+destination = "Runtime fixed-step admission shared by cells and bodies (03-04)"
+determinism = "exact"
+
+# --- Displacement apportioning: monarch-engine core/physics/grid_physics.rs ---
+
+[[behavior]]
+id = "body.apportion.exact-capacity"
+package = "monarch-engine"
+target = "lib"
+test = "core::physics::grid_physics::tests::apportion_is_exact_and_respects_capacity"
+origin = "baseline"
+expectation = "Displaced units are apportioned exactly across slots without exceeding any slot's capacity."
+destination = "GPU collective deformation and displacement (04)"
+determinism = "exact"
+
+# --- Rigid spheres: monarch-engine core/entities/spherical.rs ---
+
+[[behavior]]
+id = "body.geometry.closest-point"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::closest_point_respects_triangle_regions"
+origin = "baseline"
+expectation = "Closest point on a triangle lies on the face, at the vertex or on the edge for points in each region (within 1e-6)."
+destination = "GPU heightfield contact (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.buoyancy.cap-volume"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::submerged_fraction_matches_cap_volume"
+origin = "baseline"
+expectation = "Submerged fraction follows the spherical cap: 0, 1/2 and 1 at depths 0, r and 2r, clamped beyond (within 1e-6)."
+destination = "GPU buoyancy (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.rest.soft-ground"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::resting_sphere_settles_into_soft_ground_without_drifting"
+origin = "baseline"
+expectation = "A steel sphere on soil is grounded after 180 frames, drifts under 0.05 horizontally and sinks no more than the rut depth scale plus 0.25."
+destination = "GPU sphere contact and yielding ground (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.roll.slope"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::sphere_rolls_down_a_slope"
+origin = "baseline"
+expectation = "On a rock slope of rise over run 0.5 a sphere rolls more than 3 units downhill in 90 frames, veers under 0.5 and changes no elevation."
+destination = "GPU sphere contact (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.drive.bumpy-no-hop"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::driven_sphere_crosses_bumpy_ground_without_hopping"
+origin = "baseline"
+expectation = "A driven sphere crosses one-unit bumps to x = 52 within 120 frames and is grounded on at least 90% of them."
+destination = "GPU sphere contact and drive commands (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.drive.flat-rock-grounded"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::full_speed_on_flat_rock_never_leaves_the_ground"
+origin = "baseline"
+expectation = "Driven at full speed on flat rock, a sphere is grounded with vertical speed under 0.05 on every frame."
+destination = "GPU sphere contact and drive commands (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.rut.bounded-conserved"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::rolling_leaves_a_bounded_trail_with_conserved_berms"
+origin = "baseline"
+expectation = "Rolling over sand leaves a nonzero trail no deeper than sand softness allows, and sand volume is conserved."
+destination = "GPU collective deformation (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.drive.climb-hill"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::driven_sphere_climbs_a_hill"
+origin = "baseline"
+expectation = "A pushed sphere climbs a 16-unit ramp and reaches the plateau within 180 frames."
+destination = "GPU sphere contact and drive commands (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.impact.crater-conserved"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::hard_landing_craters_and_conserves_sand"
+origin = "baseline"
+expectation = "A steel sphere dropped 30 units onto sand craters the impact cell, ends grounded and conserves sand volume."
+destination = "GPU collective deformation (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.buoyancy.float-sink"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::light_sphere_floats_and_dense_sphere_sinks"
+origin = "baseline"
+expectation = "Wood floats ungrounded with submerged fraction within 0.05 of its relative density; steel sinks to within 0.1 of the bed."
+destination = "GPU buoyancy (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.wake.surface-cut"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::wake_scales_with_how_much_of_the_sphere_cuts_the_surface"
+origin = "baseline"
+expectation = "A half-submerged sphere moving at 8 units/s raises a nonzero wave more than three times larger than a barely covered one."
+destination = "GPU liquid displacement (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "body.splash.conserved"
+package = "monarch-engine"
+target = "lib"
+test = "core::entities::spherical::tests::plunging_sphere_splashes_without_losing_water"
+origin = "baseline"
+expectation = "A steel sphere plunging into water opens a cavity below half depth at the impact cell and conserves water on every frame."
+destination = "GPU liquid displacement (04)"
+determinism = "float-tolerance"

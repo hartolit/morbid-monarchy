@@ -256,27 +256,69 @@ pub fn handle_brush_input(
         return;
     };
 
-    let center_x = hit_position.x.floor() as i32;
-    let center_y = (-hit_position.z).floor() as i32;
-    let cell_pos = IVec2::new(center_x, center_y);
-
     if is_spawning_entity {
-        let mut spawn_y = SPHERE_SPAWN_OFFSET_Y;
+        spawn_sphere(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &grid,
+            global_config.elevation_scale,
+            SphereSpawn {
+                wood: *brush == GridBrush::SpawnWoodSphere,
+                hit: hit_position,
+                drop_height: SPHERE_SPAWN_OFFSET_Y,
+            },
+        );
+        return;
+    }
 
-        if is_within_grid(cell_pos, &grid) {
-            let cell = grid.get_cell(cell_pos);
-            let floor_h = (cell.elevation() as f32 + cell.granular_vol() as f32)
-                * global_config.elevation_scale;
-            spawn_y = floor_h + SPHERE_SPAWN_OFFSET_Y;
-        }
+    let center = IVec2::new(
+        hit_position.x.floor() as i32,
+        (-hit_position.z).floor() as i32,
+    );
+    apply_brush(&mut grid, *brush, &settings, center);
+}
 
-        let preset = if *brush == GridBrush::SpawnWoodSphere {
-            &WOOD_SPHERE
-        } else {
-            &METAL_SPHERE
-        };
+/// Which sphere to spawn, and where.
+#[derive(Debug, Clone, Copy)]
+pub struct SphereSpawn {
+    /// Wood floats in water; metal sinks.
+    pub wood: bool,
+    /// World position whose column the sphere drops onto.
+    pub hit: Vec3,
+    /// World units above the column's bedrock and loose material (the tool uses 10).
+    pub drop_height: f32,
+}
 
-        commands.spawn((
+/// Spawns a sphere above the column under `request.hit`.
+///
+/// The interactive tool and the scripted baseline driver both spawn through this function.
+pub fn spawn_sphere(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    grid: &ActiveWorldGrid,
+    elevation_scale: f32,
+    request: SphereSpawn,
+) -> Entity {
+    let SphereSpawn {
+        wood,
+        hit,
+        drop_height,
+    } = request;
+    let cell_pos = IVec2::new(hit.x.floor() as i32, (-hit.z).floor() as i32);
+    let mut spawn_y = drop_height;
+
+    if is_within_grid(cell_pos, grid) {
+        let cell = grid.get_cell(cell_pos);
+        let floor_h = (cell.elevation() as f32 + cell.granular_vol() as f32) * elevation_scale;
+        spawn_y = floor_h + drop_height;
+    }
+
+    let preset = if wood { &WOOD_SPHERE } else { &METAL_SPHERE };
+
+    commands
+        .spawn((
             Mesh3d(meshes.add(Sphere::new(SPHERE_SPAWN_RADIUS))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: preset.color,
@@ -284,14 +326,23 @@ pub fn handle_brush_input(
                 perceptual_roughness: preset.roughness,
                 ..default()
             })),
-            Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
+            Transform::from_translation(Vec3::new(hit.x, spawn_y, hit.z)),
             DynamicRigidSphere::new(preset.mass, SPHERE_SPAWN_RADIUS, preset.relative_density),
             KinematicProfile::default(),
             DeformationProfile::default(),
-        ));
-        return;
-    }
+        ))
+        .id()
+}
 
+/// Applies one stroke of a material brush to every in-window cell within `settings.radius` of
+/// `center`, waking each changed cell. Spawning brushes do nothing here.
+pub fn apply_brush(
+    grid: &mut ActiveWorldGrid,
+    brush: GridBrush,
+    settings: &BrushSettings,
+    center: IVec2,
+) {
+    let (center_x, center_y) = (center.x, center.y);
     let radius = settings.radius;
     let radius_sq = radius * radius;
 
@@ -303,11 +354,11 @@ pub fn handle_brush_input(
 
             let world_position = IVec2::new(center_x + dx, center_y + dy);
 
-            if is_within_grid(world_position, &grid) {
+            if is_within_grid(world_position, grid) {
                 let mut cell = grid.get_cell(world_position);
                 let mut cell_was_mutated = false;
 
-                match (*brush, brush.fluid()) {
+                match (brush, brush.fluid()) {
                     (_, Some(fluid)) => {
                         // Painting takes the column over and keeps the volume already there.
                         let before = cell;
@@ -331,9 +382,9 @@ pub fn handle_brush_input(
                             0
                         };
 
-                        let new_vol = old_vol.saturating_add(settings.strength as u16).min(
-                            WorldCell::MAX_ELEVATION as u16 + WorldCell::MAX_GRANULAR_VOL as u16,
-                        );
+                        let new_vol = old_vol
+                            .saturating_add(settings.strength as u16)
+                            .min(WorldCell::MAX_ELEVATION as u16 + WorldCell::MAX_GRANULAR_VOL);
 
                         if cell.granular_mat() != GranularMat::GRANULAR_SAND || old_vol != new_vol {
                             cell.set_granular_mat(GranularMat::GRANULAR_SAND);
@@ -398,13 +449,23 @@ pub fn attract_spheres_input(
     let dt = time.delta_secs();
 
     for (transform, mut sphere) in spheres.iter_mut() {
-        let to_target = hit_position - transform.translation;
-        let dist_sq = to_target.length_squared();
+        attract_sphere(transform, &mut sphere, hit_position, dt);
+    }
+}
 
-        if dist_sq > EPSILON_DIST_SQ {
-            let direction = to_target.normalize();
-            sphere.velocity += direction * ATTRACT_FORCE_MAGNITUDE * dt;
-        }
+/// Accelerates one sphere toward `target` for `dt` seconds.
+pub fn attract_sphere(
+    transform: &Transform,
+    sphere: &mut DynamicRigidSphere,
+    target: Vec3,
+    dt: f32,
+) {
+    let to_target = target - transform.translation;
+    let dist_sq = to_target.length_squared();
+
+    if dist_sq > EPSILON_DIST_SQ {
+        let direction = to_target.normalize();
+        sphere.velocity += direction * ATTRACT_FORCE_MAGNITUDE * dt;
     }
 }
 
@@ -435,17 +496,27 @@ pub fn lift_spheres_input(
     let delta_time = time.delta_secs();
 
     for (transform, mut sphere) in spheres.iter_mut() {
-        let vector_to_target = hit_position - transform.translation;
-        let horizontal_offset = Vec3::new(vector_to_target.x, 0.0, vector_to_target.z);
-        let distance_squared = horizontal_offset.length_squared();
+        lift_sphere(transform, &mut sphere, hit_position, delta_time);
+    }
+}
 
-        if distance_squared < LIFT_INFLUENCE_RADIUS_SQ {
-            sphere.velocity.y += LIFT_ACCELERATION * delta_time;
+/// Lifts one sphere near `target` and pulls it toward the target column for `delta_time` seconds.
+pub fn lift_sphere(
+    transform: &Transform,
+    sphere: &mut DynamicRigidSphere,
+    target: Vec3,
+    delta_time: f32,
+) {
+    let vector_to_target = target - transform.translation;
+    let horizontal_offset = Vec3::new(vector_to_target.x, 0.0, vector_to_target.z);
+    let distance_squared = horizontal_offset.length_squared();
 
-            if distance_squared > EPSILON_DIST_SQ {
-                let horizontal_direction = horizontal_offset.normalize();
-                sphere.velocity += horizontal_direction * LIFT_CENTERING_FORCE * delta_time;
-            }
+    if distance_squared < LIFT_INFLUENCE_RADIUS_SQ {
+        sphere.velocity.y += LIFT_ACCELERATION * delta_time;
+
+        if distance_squared > EPSILON_DIST_SQ {
+            let horizontal_direction = horizontal_offset.normalize();
+            sphere.velocity += horizontal_direction * LIFT_CENTERING_FORCE * delta_time;
         }
     }
 }

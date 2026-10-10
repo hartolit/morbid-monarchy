@@ -197,15 +197,15 @@ fn get_preferred_source(
     for &dir in shuffled.get().iter() {
         let neighbor_pos = world_pos + dir;
 
-        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos) {
-            if neighbor_cell.fluid_mat() != FluidMat::EMPTY && donors.can_donate(neighbor_idx) {
-                if let Some((_, pref_pos)) = get_preferred_destination(neighbor_pos, view, tick) {
-                    if pref_pos == world_pos && neighbor_cell.fluid_vol() > best_fluid {
-                        best_fluid = neighbor_cell.fluid_vol();
-                        best_source = Some((neighbor_idx, neighbor_pos));
-                    }
-                }
-            }
+        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos)
+            && neighbor_cell.fluid_mat() != FluidMat::EMPTY
+            && donors.can_donate(neighbor_idx)
+            && let Some((_, pref_pos)) = get_preferred_destination(neighbor_pos, view, tick)
+            && pref_pos == world_pos
+            && neighbor_cell.fluid_vol() > best_fluid
+        {
+            best_fluid = neighbor_cell.fluid_vol();
+            best_source = Some((neighbor_idx, neighbor_pos));
         }
     }
 
@@ -274,20 +274,14 @@ pub fn step_liquid(
     }
 
     // Donate liquid to the optimal outgoing destination
-    if can_donate && old_cell.fluid_mat() != FluidMat::EMPTY {
-        if let Some((dest_idx, dest_pos)) = get_preferred_destination(world_pos, view, tick) {
-            if let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, donors, tick) {
-                if winner_pos == world_pos {
-                    outgoing_amt = calc_liquid_transfer(
-                        old_cell,
-                        world_pos,
-                        &view.cells[dest_idx],
-                        dest_pos,
-                        view,
-                    );
-                }
-            }
-        }
+    if can_donate
+        && old_cell.fluid_mat() != FluidMat::EMPTY
+        && let Some((dest_idx, dest_pos)) = get_preferred_destination(world_pos, view, tick)
+        && let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, donors, tick)
+        && winner_pos == world_pos
+    {
+        outgoing_amt =
+            calc_liquid_transfer(old_cell, world_pos, &view.cells[dest_idx], dest_pos, view);
     }
 
     if incoming_amt == 0 && outgoing_amt == 0 {

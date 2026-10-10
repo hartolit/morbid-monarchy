@@ -17,7 +17,12 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::{
+    sync::atomic::{AtomicU8, Ordering},
+    time::Instant,
+};
+
+use crate::core::counters::EngineCounters;
 
 use crate::core::world::{
     cell::{FluidMat, SurfaceMat, TerrainMat},
@@ -123,6 +128,7 @@ pub fn simulate_world(
     event_queue: Res<SimulationEventQueue>,
     config: Res<SimulationConfig>,
     mut applied_temperature: Local<Option<f32>>,
+    counters: Option<ResMut<EngineCounters>>,
 ) {
     // Sleeping pools never re-evaluate their phase on their own, so a change of climate has
     // to wake the whole window once.
@@ -136,6 +142,7 @@ pub fn simulate_world(
     let tick_seconds = 1.0 / config.tick_rate_hz.max(MIN_TICK_RATE_HZ);
     clock.accumulated_seconds += time.delta_secs_f64();
 
+    let started = Instant::now();
     let mut ticks_run = 0;
     while clock.accumulated_seconds >= tick_seconds && ticks_run < config.max_ticks_per_frame {
         run_simulation_tick(&mut grid, &event_queue.tx, &config);
@@ -143,8 +150,19 @@ pub fn simulate_world(
         ticks_run += 1;
     }
 
+    let backlog_seconds = clock.accumulated_seconds;
     if ticks_run == config.max_ticks_per_frame {
         clock.accumulated_seconds = clock.accumulated_seconds.min(tick_seconds);
+    }
+
+    if let Some(mut counters) = counters {
+        let ticks = u64::from(ticks_run);
+        counters.ticks += ticks;
+        counters.simulation_nanos += started.elapsed().as_nanos() as u64;
+        counters.full_copy_bytes += ticks * std::mem::size_of_val(&*grid.spatial.cells) as u64;
+        counters.wake_clear_bytes += ticks * grid.next_wake_buffer.len() as u64;
+        counters.discarded_simulation_nanos +=
+            ((backlog_seconds - clock.accumulated_seconds).max(0.0) * 1e9) as u64;
     }
 }
 

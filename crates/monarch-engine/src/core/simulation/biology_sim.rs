@@ -71,12 +71,12 @@ pub fn step_biology<R: Rng + ?Sized>(
                 fertile_neighbors += 1;
             }
 
-            if !is_hydrated && vertical_delta <= MAX_CAPILLARY_LIFT {
-                if n_cell.fluid_mat() == FluidMat::FLUID_WATER
-                    || n_cell.fluid_mat() == FluidMat::FLUID_BLOOD
-                {
-                    is_hydrated = true;
-                }
+            if !is_hydrated
+                && vertical_delta <= MAX_CAPILLARY_LIFT
+                && (n_cell.fluid_mat() == FluidMat::FLUID_WATER
+                    || n_cell.fluid_mat() == FluidMat::FLUID_BLOOD)
+            {
+                is_hydrated = true;
             }
         }
     }
@@ -99,23 +99,20 @@ pub fn step_biology<R: Rng + ?Sized>(
     } else if surface == SurfaceMat::SURFACE_FOLIAGE {
         let state = old_cell.surface_state();
 
-        if is_hydrated && !is_drowning {
-            if state < FOLIAGE_MATURE_STATE {
-                // Grow aggressively if requirements are met
-                if rng.random_ratio(1, 3) {
-                    cell.set_surface_state(state + 1);
-                }
+        if is_hydrated && !is_drowning && state < FOLIAGE_MATURE_STATE {
+            // Grow aggressively if requirements are met
+            if rng.random_ratio(1, 3) {
+                cell.set_surface_state(state + 1);
+            }
 
-                // Consume water locally to create a sink which naturally draws in from surrounding cells
-                let current_fluid = cell.fluid_mat();
-                if current_fluid == FluidMat::FLUID_WATER || current_fluid == FluidMat::FLUID_BLOOD
-                {
-                    cell.drain_fluid(FOLIAGE_WATER_USE);
-                } else if cell.granular_mat() == GranularMat::GRANULAR_MUD {
-                    // Alternatively, dry out local mud
-                    if rng.random_ratio(1, 10) {
-                        cell.set_granular_mat(GranularMat::GRANULAR_DIRT);
-                    }
+            // Consume water locally to create a sink which naturally draws in from surrounding cells
+            let current_fluid = cell.fluid_mat();
+            if current_fluid == FluidMat::FLUID_WATER || current_fluid == FluidMat::FLUID_BLOOD {
+                cell.drain_fluid(FOLIAGE_WATER_USE);
+            } else if cell.granular_mat() == GranularMat::GRANULAR_MUD {
+                // Alternatively, dry out local mud
+                if rng.random_ratio(1, 10) {
+                    cell.set_granular_mat(GranularMat::GRANULAR_DIRT);
                 }
             }
         }

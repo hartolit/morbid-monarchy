@@ -27,10 +27,10 @@ impl ShuffledDirs {
 
         let forward = compass_forward(flags);
 
-        if forward != IVec2::ZERO {
-            if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
-                dirs.swap(0, idx);
-            }
+        if forward != IVec2::ZERO
+            && let Some(idx) = dirs[0..count].iter().position(|&d| d == forward)
+        {
+            dirs.swap(0, idx);
         }
 
         Self { dirs, count }
@@ -76,10 +76,10 @@ impl ShuffledDirs {
 
         let forward = compass_forward(flags);
 
-        if forward != IVec2::ZERO {
-            if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
-                dirs.swap(0, idx);
-            }
+        if forward != IVec2::ZERO
+            && let Some(idx) = dirs[0..count].iter().position(|&d| d == forward)
+        {
+            dirs.swap(0, idx);
         }
 
         Self { dirs, count }

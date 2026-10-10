@@ -7,8 +7,10 @@ use bevy::{
     time::Time,
     transform::components::Transform,
 };
+use std::time::Instant;
 
 use crate::core::{
+    counters::EngineCounters,
     entities::{DeformationProfile, GlobalPhysicsConfig, KinematicProfile},
     physics::{
         grid_physics::{DisplacementSlot, GridPhysicsApi},
@@ -370,11 +372,15 @@ pub fn simulate_rigid_sphere_kinematics(
     mut grid: ResMut<ActiveWorldGrid>,
     time: Res<Time>,
     global_config: Res<GlobalPhysicsConfig>,
+    counters: Option<ResMut<EngineCounters>>,
 ) {
     let frame_seconds = time.delta_secs();
     if frame_seconds <= 0.0 || spheres.is_empty() {
         return;
     }
+    let started = Instant::now();
+    let sphere_count = spheres.iter().len() as u64;
+    let mut pair_contacts = 0;
 
     let substep_count = ((frame_seconds / global_config.max_substep_seconds).ceil() as u32)
         .clamp(1, global_config.max_substeps.max(1));
@@ -384,7 +390,7 @@ pub fn simulate_rigid_sphere_kinematics(
 
     for _ in 0..substep_count {
         integrate_body_forces(&mut spheres, &physics_api, &global_config, substep_seconds);
-        resolve_sphere_pairs(&mut spheres, &global_config);
+        pair_contacts += resolve_sphere_pairs(&mut spheres, &global_config);
         resolve_terrain_contacts(
             &mut spheres,
             &mut physics_api,
@@ -392,6 +398,15 @@ pub fn simulate_rigid_sphere_kinematics(
             substep_seconds,
         );
         displace_liquids(&mut spheres, &mut physics_api, substep_seconds);
+    }
+
+    if let Some(mut counters) = counters {
+        let substeps = u64::from(substep_count);
+        counters.body_substeps += substeps;
+        // `iter_combinations_mut` visits every unordered pair once per substep.
+        counters.body_pair_tests += substeps * sphere_count * sphere_count.saturating_sub(1) / 2;
+        counters.body_pair_contacts += pair_contacts;
+        counters.body_nanos += started.elapsed().as_nanos() as u64;
     }
 }
 
@@ -434,7 +449,12 @@ fn integrate_body_forces(
     }
 }
 
-fn resolve_sphere_pairs(spheres: &mut SphereQuery<'_, '_>, global_config: &GlobalPhysicsConfig) {
+/// Resolves every overlapping pair and returns how many overlapped.
+fn resolve_sphere_pairs(
+    spheres: &mut SphereQuery<'_, '_>,
+    global_config: &GlobalPhysicsConfig,
+) -> u64 {
+    let mut contacts = 0;
     let mut combinations = spheres.iter_combinations_mut();
     while let Some([(mut t_a, mut s_a, k_a, _), (mut t_b, mut s_b, k_b, _)]) =
         combinations.fetch_next()
@@ -444,6 +464,7 @@ fn resolve_sphere_pairs(spheres: &mut SphereQuery<'_, '_>, global_config: &Globa
         let min_dist = s_a.radius + s_b.radius;
 
         if dist_sq < min_dist * min_dist {
+            contacts += 1;
             let dist = dist_sq.sqrt();
             let normal = if dist > global_config.epsilon_distance {
                 pos_delta / dist
@@ -471,6 +492,7 @@ fn resolve_sphere_pairs(spheres: &mut SphereQuery<'_, '_>, global_config: &Globa
             }
         }
     }
+    contacts
 }
 
 /// Bounces off the ground, then removes any velocity still pointing into a contact and applies

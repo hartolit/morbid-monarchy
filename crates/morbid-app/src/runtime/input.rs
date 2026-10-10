@@ -296,19 +296,32 @@ pub fn drive_possessed_sphere(
             input_dir = input_dir.normalize();
 
             let rot = Quat::from_rotation_y(camera.yaw);
-            let move_dir = rot * input_dir;
-
-            let speed_along_input = sphere.velocity.dot(move_dir);
-            let speed_gain = (SPHERE_ACCELERATION * time.delta_secs())
-                .min(SPHERE_MAX_DRIVE_SPEED - speed_along_input)
-                .max(0.0);
-            sphere.velocity += move_dir * speed_gain;
+            drive_sphere(&mut sphere, rot * input_dir, time.delta_secs());
         }
 
-        // Jump along the contact normal so slopes launch the sphere away from the surface.
-        if keyboard.just_pressed(KeyCode::Space) && sphere.is_grounded {
-            let ground_normal = sphere.ground_normal;
-            sphere.velocity += ground_normal * SPHERE_JUMP_IMPULSE;
+        if keyboard.just_pressed(KeyCode::Space) {
+            jump_sphere(&mut sphere);
         }
     }
+}
+
+/// Accelerates a driven sphere along the unit vector `move_dir` for `dt` seconds, up to the
+/// drive speed; rolling physics, not the controls, decide how it coasts beyond that.
+pub fn drive_sphere(sphere: &mut DynamicRigidSphere, move_dir: Vec3, dt: f32) {
+    let speed_along_input = sphere.velocity.dot(move_dir);
+    let speed_gain = (SPHERE_ACCELERATION * dt)
+        .min(SPHERE_MAX_DRIVE_SPEED - speed_along_input)
+        .max(0.0);
+    sphere.velocity += move_dir * speed_gain;
+}
+
+/// Jumps along the contact normal, so slopes launch the sphere away from the surface. Returns
+/// whether the sphere was grounded and jumped.
+pub fn jump_sphere(sphere: &mut DynamicRigidSphere) -> bool {
+    if !sphere.is_grounded {
+        return false;
+    }
+    let ground_normal = sphere.ground_normal;
+    sphere.velocity += ground_normal * SPHERE_JUMP_IMPULSE;
+    true
 }

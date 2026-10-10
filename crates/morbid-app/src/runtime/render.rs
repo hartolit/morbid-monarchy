@@ -16,6 +16,7 @@ use bevy::{
 use monarch_engine::prelude::*;
 use rustc_hash::FxHashSet;
 use spatial_lib::chunk::math::ChunkKey;
+use std::time::Instant;
 
 pub struct WorldRenderPlugin;
 
@@ -28,6 +29,7 @@ impl Plugin for WorldRenderPlugin {
             MaterialPlugin::<SurfaceMaterial>::default(),
         ))
         .init_resource::<WorldLighting>()
+        .init_resource::<RenderCounters>()
         .add_systems(Startup, (setup_rendering, spawn_sun))
         .add_systems(
             Update,
@@ -272,6 +274,20 @@ define_landscape_material!(
 
 #[derive(Resource)]
 pub struct ChunkMeshHandle(pub Handle<Mesh>);
+
+/// Grid synchronization work, accumulated for baseline measurement. Counting never changes
+/// when the grid is copied or which materials are touched.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderCounters {
+    /// Frames on which the whole cell grid was copied into the shared storage-buffer asset.
+    pub grid_uploads: u64,
+    /// Bytes copied into that asset. Bevy then transfers the same bytes to the GPU.
+    pub grid_upload_bytes: u64,
+    /// Landscape material assets mutated. Each mutation makes Bevy prepare the material again.
+    pub material_writes: u64,
+    /// Wall time spent in `sync_grid_rendering`.
+    pub sync_nanos: u64,
+}
 
 #[derive(Resource)]
 pub struct GlobalWorldMaterials {
@@ -713,7 +729,9 @@ fn sync_grid_rendering(
     physics: Res<GlobalPhysicsConfig>,
     lighting: Res<WorldLighting>,
     chunk_query: Query<(Entity, &ChunkRenderMarker)>,
+    mut counters: ResMut<RenderCounters>,
 ) {
+    let started = Instant::now();
     let grid_ref = grid.bypass_change_detection();
     let cells_dirty = grid_ref.cells_dirty;
 
@@ -721,6 +739,8 @@ fn sync_grid_rendering(
         // All four layer materials share one storage buffer, so it is copied once.
         if let Some(mut buffer) = buffers.get_mut(&global_mats.grid_buffer) {
             let src: &[u8] = bytemuck::cast_slice(&grid_ref.spatial.cells);
+            counters.grid_uploads += 1;
+            counters.grid_upload_bytes += src.len() as u64;
             match &mut buffer.data {
                 Some(dst) => {
                     dst.resize(src.len(), 0);
@@ -749,21 +769,26 @@ fn sync_grid_rendering(
 
         if let Some(mut material) = terrain_mats.get_mut(&global_mats.terrain) {
             update_window(&mut material.window);
+            counters.material_writes += 1;
         }
         if let Some(mut material) = granular_mats.get_mut(&global_mats.granular) {
             update_window(&mut material.window);
+            counters.material_writes += 1;
         }
         if let Some(mut material) = fluid_mats.get_mut(&global_mats.fluid) {
             update_window(&mut material.window);
+            counters.material_writes += 1;
         }
         if let Some(mut material) = surface_mats.get_mut(&global_mats.surface) {
             update_window(&mut material.window);
+            counters.material_writes += 1;
         }
 
         grid.cells_dirty = false;
     }
 
     let Some(active_view) = manager.inner.active_view else {
+        counters.sync_nanos += started.elapsed().as_nanos() as u64;
         return;
     };
 
@@ -814,4 +839,5 @@ fn sync_grid_rendering(
             ));
         }
     }
+    counters.sync_nanos += started.elapsed().as_nanos() as u64;
 }

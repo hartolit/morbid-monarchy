@@ -85,10 +85,10 @@ pub fn step_fire<R: Rng + ?Sized>(
                 continue;
             }
 
-            if let Some((_, n_cell)) = view.get_cell(world_pos + IVec2::new(dx, dy)) {
-                if is_heat_source(n_cell) {
-                    heat_sources += 1;
-                }
+            if let Some((_, n_cell)) = view.get_cell(world_pos + IVec2::new(dx, dy))
+                && is_heat_source(n_cell)
+            {
+                heat_sources += 1;
             }
         }
     }

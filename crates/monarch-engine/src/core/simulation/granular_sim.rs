@@ -120,19 +120,16 @@ fn get_preferred_source(
     for &dir in shuffled.get().iter() {
         let neighbor_pos = world_pos + dir;
 
-        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos) {
-            if get_granular_repose(neighbor_cell.granular_mat()) != u16::MAX
-                && donors.can_donate(neighbor_idx)
-            {
-                if let Some((_, dest_pos)) = get_preferred_destination(neighbor_pos, view, tick) {
-                    if dest_pos == world_pos {
-                        let diff = floor_height(neighbor_cell).saturating_sub(dest_total);
-                        if diff > best_diff {
-                            best_diff = diff;
-                            best_source = Some((neighbor_idx, neighbor_pos));
-                        }
-                    }
-                }
+        if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos)
+            && get_granular_repose(neighbor_cell.granular_mat()) != u16::MAX
+            && donors.can_donate(neighbor_idx)
+            && let Some((_, dest_pos)) = get_preferred_destination(neighbor_pos, view, tick)
+            && dest_pos == world_pos
+        {
+            let diff = floor_height(neighbor_cell).saturating_sub(dest_total);
+            if diff > best_diff {
+                best_diff = diff;
+                best_source = Some((neighbor_idx, neighbor_pos));
             }
         }
     }
@@ -165,14 +162,15 @@ pub fn step_granular(
     }
 
     // Donate granular matter to a lower neighbor
-    if can_donate && old_cell.granular_mat() != GranularMat::EMPTY {
-        if let Some((dest_idx, dest_pos)) = get_preferred_destination(world_pos, view, tick) {
-            // Verify we are the destination's primary source to prevent race conditions
-            if let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, donors, tick) {
-                if winner_pos == world_pos {
-                    outgoing_amt = calc_granular_transfer(old_cell, &view.cells[dest_idx]);
-                }
-            }
+    if can_donate
+        && old_cell.granular_mat() != GranularMat::EMPTY
+        && let Some((dest_idx, dest_pos)) = get_preferred_destination(world_pos, view, tick)
+    {
+        // Verify we are the destination's primary source to prevent race conditions
+        if let Some((_, winner_pos)) = get_preferred_source(dest_pos, view, donors, tick)
+            && winner_pos == world_pos
+        {
+            outgoing_amt = calc_granular_transfer(old_cell, &view.cells[dest_idx]);
         }
     }
 
