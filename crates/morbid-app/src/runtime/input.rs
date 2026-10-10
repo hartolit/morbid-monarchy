@@ -1,5 +1,6 @@
 use bevy::{
     input::mouse::MouseWheel,
+    light::NotShadowCaster,
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -29,7 +30,9 @@ const MIN_ZOOM_DISTANCE: f32 = 5.0;
 const MAX_ZOOM_DISTANCE: f32 = 100.0;
 
 const SPHERE_ACCELERATION: f32 = 250.0;
-const SPHERE_JUMP_THRESHOLD: f32 = 1.0;
+/// Driving only accelerates the sphere up to this speed along the input direction; rolling
+/// physics, not the controls, decide how it coasts beyond that.
+const SPHERE_MAX_DRIVE_SPEED: f32 = 40.0;
 const SPHERE_JUMP_IMPULSE: f32 = 35.0;
 
 #[derive(Component)]
@@ -69,6 +72,9 @@ pub fn setup_observer(
             CameraTether::default(),
             Transform::from_translation(start_pos),
             Mesh3d(meshes.add(Cylinder::new(OBSERVER_MESH_RADIUS, OBSERVER_MESH_HEIGHT))),
+            // The observer body travels with the free-flying camera; a shadow from it would
+            // float on the terrain with nothing visible casting it.
+            NotShadowCaster,
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgb(OBSERVER_COLOR_R, OBSERVER_COLOR_G, OBSERVER_COLOR_B),
                 metallic: OBSERVER_METALLIC,
@@ -292,16 +298,17 @@ pub fn drive_possessed_sphere(
             let rot = Quat::from_rotation_y(camera.yaw);
             let move_dir = rot * input_dir;
 
-            sphere.velocity.x += move_dir.x * SPHERE_ACCELERATION * time.delta_secs();
-            sphere.velocity.z += move_dir.z * SPHERE_ACCELERATION * time.delta_secs();
-
-            sphere.is_granular_inactive = false;
+            let speed_along_input = sphere.velocity.dot(move_dir);
+            let speed_gain = (SPHERE_ACCELERATION * time.delta_secs())
+                .min(SPHERE_MAX_DRIVE_SPEED - speed_along_input)
+                .max(0.0);
+            sphere.velocity += move_dir * speed_gain;
         }
 
-        if keyboard.just_pressed(KeyCode::Space) && sphere.velocity.y.abs() < SPHERE_JUMP_THRESHOLD
-        {
-            sphere.velocity.y = SPHERE_JUMP_IMPULSE;
-            sphere.is_granular_inactive = false;
+        // Jump along the contact normal so slopes launch the sphere away from the surface.
+        if keyboard.just_pressed(KeyCode::Space) && sphere.is_grounded {
+            let ground_normal = sphere.ground_normal;
+            sphere.velocity += ground_normal * SPHERE_JUMP_IMPULSE;
         }
     }
 }

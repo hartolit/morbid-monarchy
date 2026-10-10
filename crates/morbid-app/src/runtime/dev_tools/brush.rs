@@ -11,21 +11,39 @@ use crate::runtime::{
 const RAYMARCH_MAX_DIST: f32 = 1000.0;
 const SPHERE_SPAWN_OFFSET_Y: f32 = 10.0;
 const SPHERE_SPAWN_RADIUS: f32 = 4.0;
-const SPHERE_SPAWN_MASS: f32 = 4.0;
 
-const SPHERE_COLOR_R: f32 = 0.6;
-const SPHERE_COLOR_G: f32 = 0.6;
-const SPHERE_COLOR_B: f32 = 0.65;
-const SPHERE_METALLIC: f32 = 0.8;
-const SPHERE_ROUGHNESS: f32 = 0.2;
+/// Physical and visual parameters for a spawnable sphere.
+struct SpherePreset {
+    mass: f32,
+    /// Density relative to water; decides whether the sphere floats.
+    relative_density: f32,
+    color: Color,
+    metallic: f32,
+    roughness: f32,
+}
+
+const METAL_SPHERE: SpherePreset = SpherePreset {
+    mass: 4.0,
+    relative_density: 7.8,
+    color: Color::srgb(0.6, 0.6, 0.65),
+    metallic: 0.8,
+    roughness: 0.2,
+};
+
+/// Same volume as the metal sphere, so mass scales with the density ratio (0.6 / 7.8).
+const WOOD_SPHERE: SpherePreset = SpherePreset {
+    mass: 0.31,
+    relative_density: 0.6,
+    color: Color::srgb(0.55, 0.38, 0.22),
+    metallic: 0.0,
+    roughness: 0.8,
+};
 
 const ATTRACT_FORCE_MAGNITUDE: f32 = 350.0;
 const LIFT_ACCELERATION: f32 = 250.0;
 const LIFT_CENTERING_FORCE: f32 = 40.0;
 const LIFT_INFLUENCE_RADIUS_SQ: f32 = 22500.0;
 const EPSILON_DIST_SQ: f32 = 0.0001;
-
-const MAX_FLUID_VOL: u16 = 1023;
 
 /// Validates absolute mathematical grid inclusion to prevent memory panics.
 #[inline(always)]
@@ -172,7 +190,7 @@ pub fn update_brush_cursor(
         None
     };
 
-    let cursor_radius = if *brush == GridBrush::SpawnSphere {
+    let cursor_radius = if brush.spawns_entity() {
         0.0
     } else {
         settings.radius as f32
@@ -219,7 +237,7 @@ pub fn handle_brush_input(
         return;
     }
 
-    let is_spawning_entity = *brush == GridBrush::SpawnSphere;
+    let is_spawning_entity = brush.spawns_entity();
     if is_spawning_entity {
         if !mouse.just_pressed(MouseButton::Left) {
             return;
@@ -252,16 +270,22 @@ pub fn handle_brush_input(
             spawn_y = floor_h + SPHERE_SPAWN_OFFSET_Y;
         }
 
+        let preset = if *brush == GridBrush::SpawnWoodSphere {
+            &WOOD_SPHERE
+        } else {
+            &METAL_SPHERE
+        };
+
         commands.spawn((
             Mesh3d(meshes.add(Sphere::new(SPHERE_SPAWN_RADIUS))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(SPHERE_COLOR_R, SPHERE_COLOR_G, SPHERE_COLOR_B),
-                metallic: SPHERE_METALLIC,
-                perceptual_roughness: SPHERE_ROUGHNESS,
+                base_color: preset.color,
+                metallic: preset.metallic,
+                perceptual_roughness: preset.roughness,
                 ..default()
             })),
             Transform::from_translation(Vec3::new(hit_position.x, spawn_y, hit_position.z)),
-            DynamicRigidSphere::new(SPHERE_SPAWN_MASS, SPHERE_SPAWN_RADIUS),
+            DynamicRigidSphere::new(preset.mass, SPHERE_SPAWN_RADIUS, preset.relative_density),
             KinematicProfile::default(),
             DeformationProfile::default(),
         ));
@@ -283,26 +307,14 @@ pub fn handle_brush_input(
                 let mut cell = grid.get_cell(world_position);
                 let mut cell_was_mutated = false;
 
-                match *brush {
-                    GridBrush::Water => {
-                        let old_state = if cell.fluid_mat() == FluidMat::FLUID_WATER {
-                            cell.fluid_vol()
-                        } else {
-                            0
-                        };
-                        let new_state = old_state
-                            .saturating_add(settings.strength as u16)
-                            .min(MAX_FLUID_VOL);
-
-                        if cell.fluid_mat() != FluidMat::FLUID_WATER
-                            || cell.fluid_vol() != new_state
-                        {
-                            cell.set_fluid_mat(FluidMat::FLUID_WATER);
-                            cell.set_fluid_vol(new_state);
-                            cell_was_mutated = true;
-                        }
+                match (*brush, brush.fluid()) {
+                    (_, Some(fluid)) => {
+                        // Painting takes the column over and keeps the volume already there.
+                        let before = cell;
+                        cell.inject_fluid(fluid, settings.strength as u16);
+                        cell_was_mutated = cell != before;
                     }
-                    GridBrush::Fire => {
+                    (GridBrush::Fire, _) => {
                         let fluid = cell.fluid_mat();
                         if cell.surface_mat() != SurfaceMat::SURFACE_FIRE
                             && (fluid == FluidMat::EMPTY || fluid == FluidMat::FLUID_OIL)
@@ -312,7 +324,7 @@ pub fn handle_brush_input(
                             cell_was_mutated = true;
                         }
                     }
-                    GridBrush::Sand => {
+                    (GridBrush::Sand, _) => {
                         let old_vol = if cell.granular_mat() == GranularMat::GRANULAR_SAND {
                             cell.granular_vol()
                         } else {
@@ -329,15 +341,17 @@ pub fn handle_brush_input(
                             cell_was_mutated = true;
                         }
                     }
-                    GridBrush::RaiseTerrain => {
-                        let new_elevation =
-                            cell.elevation().saturating_add(settings.strength as u16);
+                    (GridBrush::RaiseTerrain, _) => {
+                        let new_elevation = cell
+                            .elevation()
+                            .saturating_add(settings.strength as u16)
+                            .min(WorldCell::MAX_ELEVATION as u16);
                         if new_elevation != cell.elevation() {
                             cell.set_elevation(new_elevation);
                             cell_was_mutated = true;
                         }
                     }
-                    GridBrush::LowerTerrain => {
+                    (GridBrush::LowerTerrain, _) => {
                         let new_elevation =
                             cell.elevation().saturating_sub(settings.strength as u16);
                         if new_elevation != cell.elevation() {

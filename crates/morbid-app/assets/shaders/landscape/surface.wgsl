@@ -1,12 +1,11 @@
-#import bevy_pbr::mesh_functions::{get_world_from_local, mesh_position_local_to_clip}
-#import "shaders/landscape/common.wgsl"::{VertexInput, VertexOutput, process_landscape_vertex, process_landscape_fragment}
+#import "shaders/landscape/common.wgsl"::{VertexInput, VertexOutput, LAYER_SURFACE, process_landscape_vertex, shade_solid_layer}
 
 @vertex
 fn vertex(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
-    return process_landscape_vertex(in, instance_index, 3u);
+    return process_landscape_vertex(in, instance_index, LAYER_SURFACE);
 }
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    return process_landscape_fragment(in);
+    return shade_solid_layer(in);
 }

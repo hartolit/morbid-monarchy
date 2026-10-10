@@ -2,7 +2,7 @@ use bevy::math::IVec2;
 use rand::{Rng, RngExt};
 
 use crate::core::{
-    simulation::GridEvent,
+    simulation::{FOLIAGE_MATURE_STATE, GridEvent},
     world::{
         cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},
         grid::CellGridReadView,
@@ -11,6 +11,8 @@ use crate::core::{
 
 // The absolute physical limit that water can be wicked upwards by roots.
 const MAX_CAPILLARY_LIFT: u32 = 2;
+// Water a growing plant draws from its own column per growth step.
+const FOLIAGE_WATER_USE: u16 = 2;
 
 #[inline(always)]
 pub fn step_biology<R: Rng + ?Sized>(
@@ -98,7 +100,7 @@ pub fn step_biology<R: Rng + ?Sized>(
         let state = old_cell.surface_state();
 
         if is_hydrated && !is_drowning {
-            if state < 10 {
+            if state < FOLIAGE_MATURE_STATE {
                 // Grow aggressively if requirements are met
                 if rng.random_ratio(1, 3) {
                     cell.set_surface_state(state + 1);
@@ -108,15 +110,7 @@ pub fn step_biology<R: Rng + ?Sized>(
                 let current_fluid = cell.fluid_mat();
                 if current_fluid == FluidMat::FLUID_WATER || current_fluid == FluidMat::FLUID_BLOOD
                 {
-                    let vol = cell.fluid_vol();
-                    if vol > 0 {
-                        let consume_amt = 2.min(vol);
-                        cell.set_fluid_vol(vol - consume_amt);
-                        if cell.fluid_vol() == 0 {
-                            cell.set_fluid_mat(FluidMat::EMPTY);
-                            cell.set_compass(0);
-                        }
-                    }
+                    cell.drain_fluid(FOLIAGE_WATER_USE);
                 } else if cell.granular_mat() == GranularMat::GRANULAR_MUD {
                     // Alternatively, dry out local mud
                     if rng.random_ratio(1, 10) {

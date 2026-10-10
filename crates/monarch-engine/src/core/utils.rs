@@ -25,19 +25,7 @@ impl ShuffledDirs {
 
         dirs[0..count].shuffle(rng);
 
-        let mut forward = IVec2::ZERO;
-        if (flags & CompassFlags::FACING_N) != 0 {
-            forward.y += 1;
-        }
-        if (flags & CompassFlags::FACING_S) != 0 {
-            forward.y -= 1;
-        }
-        if (flags & CompassFlags::FACING_E) != 0 {
-            forward.x += 1;
-        }
-        if (flags & CompassFlags::FACING_W) != 0 {
-            forward.x -= 1;
-        }
+        let forward = compass_forward(flags);
 
         if forward != IVec2::ZERO {
             if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
@@ -86,19 +74,7 @@ impl ShuffledDirs {
             h = h.wrapping_mul(0x9E37_79B1).wrapping_add(1);
         }
 
-        let mut forward = IVec2::ZERO;
-        if (flags & CompassFlags::FACING_N) != 0 {
-            forward.y += 1;
-        }
-        if (flags & CompassFlags::FACING_S) != 0 {
-            forward.y -= 1;
-        }
-        if (flags & CompassFlags::FACING_E) != 0 {
-            forward.x += 1;
-        }
-        if (flags & CompassFlags::FACING_W) != 0 {
-            forward.x -= 1;
-        }
+        let forward = compass_forward(flags);
 
         if forward != IVec2::ZERO {
             if let Some(idx) = dirs[0..count].iter().position(|&d| d == forward) {
@@ -152,6 +128,25 @@ impl ShuffledDirs {
     pub fn get(&self) -> &[IVec2] {
         &self.dirs[0..self.count]
     }
+}
+
+/// Grid step encoded by a cell's compass (momentum) flags; zero when the cell has none.
+#[inline(always)]
+pub fn compass_forward(flags: u8) -> IVec2 {
+    let mut forward = IVec2::ZERO;
+    if (flags & CompassFlags::FACING_N) != 0 {
+        forward.y += 1;
+    }
+    if (flags & CompassFlags::FACING_S) != 0 {
+        forward.y -= 1;
+    }
+    if (flags & CompassFlags::FACING_E) != 0 {
+        forward.x += 1;
+    }
+    if (flags & CompassFlags::FACING_W) != 0 {
+        forward.x -= 1;
+    }
+    forward
 }
 
 #[inline(always)]

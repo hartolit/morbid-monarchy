@@ -10,7 +10,7 @@ use crate::core::{
         GlobalPhysicsConfig,
     },
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    simulation::{simulate_world, SimulationConfig, SimulationEventQueue},
+    simulation::{simulate_world, SimulationClock, SimulationConfig, SimulationEventQueue},
     world::{
         grid::ActiveWorldGrid, handle_chunk_loaded, handle_simulation_resize, manage_chunk_window,
         WorldFocus, WorldManager, WorldStore,
@@ -34,6 +34,7 @@ impl Plugin for LandscapePlugin {
             .init_resource::<WorldStore>()
             .init_resource::<SimulationEventQueue>()
             .init_resource::<SimulationConfig>()
+            .init_resource::<SimulationClock>()
             .init_resource::<GlobalPhysicsConfig>()
             .init_resource::<ObserverConfig>()
             .insert_resource(ActiveWorldGrid::default())

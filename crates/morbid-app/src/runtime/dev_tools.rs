@@ -1,8 +1,10 @@
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
+use monarch_engine::prelude::FluidMat;
 
 pub mod brush;
+pub mod compass;
 pub mod ui;
 
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
@@ -10,11 +12,44 @@ pub enum GridBrush {
     #[default]
     None,
     Water,
+    Lava,
+    Oil,
+    Ice,
     Fire,
     Sand,
     RaiseTerrain,
     LowerTerrain,
-    SpawnSphere,
+    SpawnMetalSphere,
+    SpawnWoodSphere,
+}
+
+impl GridBrush {
+    /// Liquid painted by fluid brushes.
+    pub fn fluid(self) -> Option<FluidMat> {
+        match self {
+            Self::Water => Some(FluidMat::FLUID_WATER),
+            Self::Lava => Some(FluidMat::FLUID_MAGMA),
+            Self::Oil => Some(FluidMat::FLUID_OIL),
+            Self::Ice => Some(FluidMat::FLUID_ICE),
+            _ => None,
+        }
+    }
+
+    pub fn spawns_entity(self) -> bool {
+        matches!(self, Self::SpawnMetalSphere | Self::SpawnWoodSphere)
+    }
+}
+
+/// Whether the developer overlay (tool bar, panels and compass) is drawn.
+#[derive(Resource)]
+pub struct DevOverlay {
+    pub visible: bool,
+}
+
+impl Default for DevOverlay {
+    fn default() -> Self {
+        Self { visible: true }
+    }
 }
 
 #[derive(Resource)]
@@ -38,9 +73,13 @@ impl Plugin for DevToolsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GridBrush>()
             .init_resource::<BrushSettings>()
+            .init_resource::<DevOverlay>()
             .add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
-            .add_systems(EguiPrimaryContextPass, ui::dev_tuning_ui)
+            .add_systems(
+                EguiPrimaryContextPass,
+                (ui::dev_tuning_ui, compass::navigation_compass).chain(),
+            )
             .add_systems(
                 Update,
                 (

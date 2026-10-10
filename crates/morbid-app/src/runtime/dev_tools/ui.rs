@@ -7,8 +7,11 @@ use monarch_engine::prelude::{
 };
 
 use crate::runtime::{
-    dev_tools::{BrushSettings, GridBrush},
-    render::WorldTuningConfig,
+    dev_tools::{
+        BrushSettings, DevOverlay, GridBrush,
+        compass::{COMPASS_ANCHOR_OFFSET, COMPASS_FOOTPRINT_HEIGHT},
+    },
+    render::WorldLighting,
 };
 
 const BRUSH_STRENGTH_RANGE: std::ops::RangeInclusive<u8> = 1..=255;
@@ -26,41 +29,56 @@ const UI_RADIUS_MAX: u32 = 32;
 
 const UI_STATS_OFFSET_X: f32 = -10.0;
 const UI_STATS_OFFSET_Y: f32 = 40.0;
+const UI_STACK_GAP: f32 = 8.0;
 
 const UI_FPS_THRESHOLD_GOOD: f64 = 32.0;
 
-const BRUSH_OPTIONS: [(GridBrush, &str); 7] = [
+const UI_TICK_RATE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=240.0;
+const UI_CATCH_UP_RANGE: std::ops::RangeInclusive<u32> = 1..=16;
+const UI_TEMPERATURE_RANGE: std::ops::RangeInclusive<f32> = -30.0..=40.0;
+const UI_PANEL_OFFSET_X: f32 = 10.0;
+
+const UI_SUN_AZIMUTH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=360.0;
+const UI_SUN_ELEVATION_RANGE: std::ops::RangeInclusive<f32> = 2.0..=90.0;
+const UI_AMBIENT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=3000.0;
+const UI_UNIT_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+const BRUSH_OPTIONS: [(GridBrush, &str); 11] = [
     (GridBrush::None, "None"),
     (GridBrush::Water, "Spawn Water"),
+    (GridBrush::Lava, "Spawn Lava"),
+    (GridBrush::Oil, "Spawn Oil"),
+    (GridBrush::Ice, "Spawn Ice"),
     (GridBrush::Fire, "Spawn Fire"),
     (GridBrush::Sand, "Spawn Sand"),
     (GridBrush::RaiseTerrain, "Raise Terrain"),
     (GridBrush::LowerTerrain, "Lower Terrain"),
-    (GridBrush::SpawnSphere, "Spawn Metal Sphere"),
+    (GridBrush::SpawnMetalSphere, "Spawn Metal Sphere"),
+    (GridBrush::SpawnWoodSphere, "Spawn Wooden Sphere"),
 ];
 
 pub fn dev_tuning_ui(
     mut contexts: EguiContexts,
-    mut world_config: ResMut<WorldTuningConfig>,
+    mut lighting: ResMut<WorldLighting>,
     mut global_config: ResMut<GlobalPhysicsConfig>,
     mut sim_config: ResMut<SimulationConfig>,
     mut brush: ResMut<GridBrush>,
     mut brush_settings: ResMut<BrushSettings>,
     mut resize_writer: MessageWriter<ResizeSimulationEvent>,
     mut pending_resize: Local<Option<[u32; 2]>>,
-    mut show_menu: Local<Option<bool>>,
+    mut overlay: ResMut<DevOverlay>,
     mut show_stats: Local<bool>,
+    mut show_panels: Local<[bool; 2]>,
     manager: Res<WorldManager>,
     grid: Res<ActiveWorldGrid>,
     keys: Res<ButtonInput<KeyCode>>,
     diagnostics: Res<DiagnosticsStore>,
 ) {
-    let is_visible = show_menu.get_or_insert(true);
     if keys.just_pressed(KeyCode::Backquote) || keys.just_pressed(KeyCode::F12) {
-        *is_visible = !*is_visible;
+        overlay.visible = !overlay.visible;
     }
 
-    if !*is_visible {
+    if !overlay.visible {
         return;
     }
 
@@ -96,18 +114,15 @@ pub fn dev_tuning_ui(
             );
             ui.add_space(UI_SPACING_DEFAULT);
 
+            let [show_simulation, show_lighting] = &mut *show_panels;
             ui.checkbox(&mut *show_stats, "Statistics");
-            add_separator(ui);
-
-            ui.checkbox(&mut sim_config.run_liquid, "Run Liquid");
-            ui.checkbox(&mut sim_config.run_biology, "Run Biology");
-            ui.checkbox(&mut sim_config.run_granular, "Run Granular");
+            ui.checkbox(show_simulation, "Simulation");
+            ui.checkbox(show_lighting, "Lighting");
             add_separator(ui);
 
             ui.label(egui::RichText::new("Elevation Scale:").color(egui::Color32::LIGHT_GRAY));
 
-            // TODO: Fix
-            let mut scale = world_config.elevation_scale;
+            let mut scale = global_config.elevation_scale;
             if ui
                 .add(
                     egui::DragValue::new(&mut scale)
@@ -116,7 +131,6 @@ pub fn dev_tuning_ui(
                 )
                 .changed()
             {
-                world_config.elevation_scale = scale;
                 global_config.elevation_scale = scale;
             }
 
@@ -190,11 +204,126 @@ pub fn dev_tuning_ui(
         });
     });
 
+    let [show_simulation, show_lighting] = *show_panels;
+
+    if show_simulation {
+        egui::Window::new("Simulation")
+            .anchor(
+                egui::Align2::LEFT_TOP,
+                [UI_PANEL_OFFSET_X, UI_STATS_OFFSET_Y],
+            )
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut sim_config.run_liquid, "Run Liquid");
+                ui.checkbox(&mut sim_config.run_granular, "Run Granular");
+                ui.checkbox(&mut sim_config.run_thermal, "Run Thermal");
+                ui.checkbox(&mut sim_config.run_fire, "Run Fire");
+                ui.checkbox(&mut sim_config.run_biology, "Run Biology");
+                ui.separator();
+
+                egui::Grid::new("simulation_grid").show(ui, |ui| {
+                    ui.label("Tick Rate (Hz):");
+                    ui.add(
+                        egui::DragValue::new(&mut sim_config.tick_rate_hz)
+                            .range(UI_TICK_RATE_RANGE),
+                    );
+                    ui.end_row();
+
+                    ui.label("Max Ticks / Frame:");
+                    ui.add(
+                        egui::DragValue::new(&mut sim_config.max_ticks_per_frame)
+                            .range(UI_CATCH_UP_RANGE),
+                    );
+                    ui.end_row();
+
+                    // Edited through a copy: the simulation wakes every pool whenever this
+                    // value changes, so it must only change on an actual edit.
+                    ui.label("Temperature (°C):");
+                    let mut temperature = sim_config.ambient_temperature_c;
+                    if ui
+                        .add(egui::Slider::new(&mut temperature, UI_TEMPERATURE_RANGE))
+                        .changed()
+                    {
+                        sim_config.ambient_temperature_c = temperature;
+                    }
+                    ui.end_row();
+                });
+            });
+    }
+
+    if show_lighting {
+        egui::Window::new("Lighting")
+            .anchor(
+                egui::Align2::LEFT_BOTTOM,
+                [UI_PANEL_OFFSET_X, -UI_PANEL_OFFSET_X],
+            )
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                // Edit through the bypass so the shaders and lights are only re-uploaded when a
+                // value actually changes, not every frame the panel is open.
+                let mut changed = false;
+                {
+                    let values = lighting.bypass_change_detection();
+                    egui::Grid::new("lighting_grid").show(ui, |ui| {
+                        let mut slider =
+                            |ui: &mut egui::Ui,
+                             label: &str,
+                             value: &mut f32,
+                             range: std::ops::RangeInclusive<f32>| {
+                                ui.label(label);
+                                changed |= ui.add(egui::Slider::new(value, range)).changed();
+                                ui.end_row();
+                            };
+
+                        slider(
+                            ui,
+                            "Sun Azimuth (deg):",
+                            &mut values.sun_azimuth_degrees,
+                            UI_SUN_AZIMUTH_RANGE,
+                        );
+                        slider(
+                            ui,
+                            "Sun Elevation (deg):",
+                            &mut values.sun_elevation_degrees,
+                            UI_SUN_ELEVATION_RANGE,
+                        );
+                        slider(
+                            ui,
+                            "Sky Brightness:",
+                            &mut values.ambient_brightness,
+                            UI_AMBIENT_RANGE,
+                        );
+                        slider(
+                            ui,
+                            "Terrain Shadows:",
+                            &mut values.terrain_shadow_strength,
+                            UI_UNIT_RANGE,
+                        );
+                        slider(
+                            ui,
+                            "Ambient Occlusion:",
+                            &mut values.ambient_occlusion_strength,
+                            UI_UNIT_RANGE,
+                        );
+                    });
+                }
+                if changed {
+                    lighting.set_changed();
+                }
+            });
+    }
+
     if *show_stats {
+        // Stacked under the compass, which owns the top-right corner.
         egui::Window::new("World Statistics")
             .anchor(
                 egui::Align2::RIGHT_TOP,
-                [UI_STATS_OFFSET_X, UI_STATS_OFFSET_Y],
+                [
+                    UI_STATS_OFFSET_X,
+                    COMPASS_ANCHOR_OFFSET[1] + COMPASS_FOOTPRINT_HEIGHT + UI_STACK_GAP,
+                ],
             )
             .resizable(false)
             .collapsible(false)
