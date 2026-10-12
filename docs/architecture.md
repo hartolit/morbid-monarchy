@@ -3,10 +3,10 @@
 **Target architecture for the GPU transition, adopted in prompt 00.** The checkout still runs the
 CPU-authoritative Bevy baseline described under [current baseline](#current-baseline), and
 [status](product/status.md) owns what is implemented and verified. Everything else on this page
-is the target. Package names are the proposed implementation map; those directories do not exist
-yet. 00 creates no packages. 01 checks each proposed boundary against its actual consumers. Where
-none justifies a crate, 01 uses a module instead and records that here and in
-[ADR 0002](decisions/0002-native-composition.md).
+is the target. Package names are the proposed implementation map. 01 created the first two,
+`world-model` and `tools/evidence`, with their consumers; the others do not exist yet and are
+created by the stage that first uses them. Where no consumer justifies a crate, a module is used
+instead and recorded here and in [ADR 0002](decisions/0002-native-composition.md).
 
 ## One physical world, several consumers
 
@@ -31,21 +31,22 @@ and an ordered physical tick; separating them behind per-cell traits would obscu
 
 ## Current baseline
 
-This is the source at `a9c1539`; the sprint
+This is the source at `a9c1539` with the changes of 01; the sprint
 [source audit](development/virtual-office/gpu-transition/source-audit.md) lists the symbols. Each
-row describes current behavior that the target replaces. None of it is a second supported path.
+row describes current behavior that the target replaces, except `world-model`, which is already
+the target owner. None of it is a second supported path.
 
 | Responsibility | Current owner and behavior | Target owner |
 | --- | --- | --- |
-| Cell meaning, materials, generation | `monarch-engine` `core/world/{cell,chunk}.rs`, `core/generation` | `world-model` |
+| Cell meaning, materials, coordinates, units, supported settings, generation | `world-model` since 01 (`cell`, `material`, `spatial`, `units`, `config`, `body`, `generation`). The engine, application and evidence runner import it; none keeps its own copy. Commands and observations exist with the evidence driver as their first consumer | `world-model` |
 | Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update` | `gpu-world` |
 | Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid | `gpu-world`; ECS keeps identity and a `BodyHandle` |
 | Observer, brushes, picking, statistics | `core/entities/observer.rs` and `morbid-app` `runtime/{input,dev_tools}` read and write the CPU grid directly | Intent in `world-runtime`; queries, edits and reductions in `gpu-world`; UI in `morbid-app` |
-| Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs`; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
-| Persistence | `morbid-app` `runtime/persistence.rs` over `spatial-lib` `chunk/storage.rs` (redb, bitcode) | `world-store` |
+| Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs` over `world_model::spatial` keys; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
+| Persistence | `morbid-app` `runtime/persistence.rs` and `legacy_format.rs` (the old writer's bitcode bytes) over `spatial-lib` `chunk/storage.rs` (redb) | `world-store` |
 | Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
 | Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
-| Evidence | In-crate `#[test]` functions only | `monarchy-evidence` |
+| Evidence | `monarchy-evidence` (01): docs/static/CPU lanes, adapter inspection, the frozen scenarios and the baseline driver; in-crate tests registered in `coverage.toml` | `monarchy-evidence` |
 
 Cells, bodies and the observer are unordered `Update` systems. The only thing that serializes them
 is that each takes `ResMut<ActiveWorldGrid>`. The [one physical tick](#one-physical-tick) below
@@ -57,8 +58,8 @@ replaces that arrangement; documenting the old order is not enough.
 apps/morbid/                     package morbid-app; native composition
   src/{main,application,input,ui,assets}.rs
   assets/                       runtime art, fonts, UI and imported assets
-crates/world-model/             framework-free semantic values and generation
-  src/{cell,material,spatial,units,command,observation,generation}.rs
+crates/world-model/             framework-free semantic values and generation (exists since 01)
+  src/{cell,material,spatial,units,config,body,command,observation,generation}.rs
 crates/world-runtime/           CPU orchestration and consumer-owned ports
   src/{clock,commands,residency,checkpoint,workers,ports}.rs
 adapters/gpu-world/             GPU execution of the physical world

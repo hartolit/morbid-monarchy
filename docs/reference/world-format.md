@@ -1,14 +1,16 @@
 # World representation, residency and saved data
 
 This document owns the physical value representation and snapshot/storage lifecycle. The current
-format is described separately from the target envelope. 01 captures legacy fixtures; 05 implements
-the new writer/import path. No new saved-world reader is present in this documentation delivery.
+format is described separately from the target envelope. 01 captured legacy fixtures and moved the
+cell definition into `world-model`; 05 implements the new writer/import path.
 
 ## Existing packed cell
 
-Source: `crates/monarch-engine/src/core/world/cell.rs`, `WorldCell(pub u64)`.
-Bit 0 is the low bit of the first 32-bit word; GPU word order is explicitly low word, high word.
-Do not rely on native host byte order for persisted bytes or portable interchange.
+Source: `crates/world-model/src/cell.rs`, `WorldCell(pub u64)` (in `monarch-engine` until 01).
+`WorldCell::LAYOUT` is the one table of the fields below; every accessor reads it, and its tests
+compare it with this table written out by hand. Bit 0 is the low bit of the first 32-bit word;
+GPU word order is explicitly low word, high word (`WorldCell::to_words`, `from_words`). Do not
+rely on native host byte order for persisted bytes or portable interchange.
 
 | Bits | Field | Encoded capacity |
 | --- | --- | ---: |
@@ -25,13 +27,25 @@ Do not rely on native host byte order for persisted bytes or portable interchang
 | 60–63 | Compass/momentum flags | 4 bits |
 
 Material IDs and scales retain their existing meanings until changed through a tested decision.
+
+**Elevation scale is physical configuration (decided in 01).** One elevation unit is
+`elevation_scale` world units high (default 0.5, supported 0.01–5.0,
+`world_model::config::ELEVATION_SCALE`). Bodies collide with, float in and deform the scaled
+surface, and the renderer draws the same surface, so the scale is not a display setting. Cells
+store integer units and never change when it does. The target applies a change at a tick
+boundary, as a configuration command, and records the scale with the configuration in every
+checkpoint; a world reopened with another scale is a different physical world, not a restyle.
+The baseline writes `GlobalPhysicsConfig::elevation_scale` immediately from the developer UI and
+does not save it.
 Chunks have 64×64 cells. CPU world keys in the baseline have three signed components, and the
 active 2.5D view uses a planar mapping. Source at `a9c1539` shows that mapping. A grid-attached
 observer sets the focus to `(x, −z, 0)` from its Bevy translation (`sync_world_focus`), so keys
 written through the normal path have `z = 0`. A cell's `y` is the renderer's `−z` (also used by
 `spherical.rs` and the render chunk transforms). The redb key and the generator seed still include
-`z`. The comment on `ChunkKey::to_ivec2` says "XZ plane", but the code returns `(x, y)`; do not
-rely on the comment. 01 confirms this with old-writer fixtures. Import records how it handles
+`z`. `ChunkKey::to_ivec2` returns `(x, y)`; the misleading "XZ plane" comment was corrected when
+the key moved to `world_model::spatial` in 01. The two render-to-cell conversions are named there:
+`nearest_cell` rounds (body centres) and `quad_cell` floors (picking, brushes, the observer's
+floor). The old-writer fixtures include a synthetic `z = 1` row; import records how it handles
 rows with nonzero `z`. New GPU slots use local indices plus absolute-key metadata, never float
 absolute-world IDs.
 
@@ -41,8 +55,11 @@ rejected at the owning input boundary.
 
 ## Legacy storage facts
 
-The baseline redb table is `spatial_chunks`, keyed by `[i32; 3]`, with bitcode-encoded `CellChunk`
-bytes. There is no complete versioned world/checkpoint envelope. The application uses startup seed
+The baseline redb table is `spatial_chunks`, keyed by `[i32; 3]`. Its values are the derived
+bitcode encoding of `CellChunk { cells, metadata: { last_simulated: f64, theme: u8 } }`. Since 01
+the model types carry no codec; `morbid-app` `legacy_format` mirrors that shape and is tested to
+re-encode the [old-writer fixtures](../../crates/morbid-app/tests/fixtures/legacy-v0/README.md)
+byte for byte. There is no complete versioned world/checkpoint envelope. The application uses startup seed
 69 in code. Existing `last_simulated` metadata holds session-relative elapsed seconds at load time.
 It is not proof of a consistent world snapshot or a portable simulation-clock contract. Only
 chunks evicted from the LRU cache are ever written, either by the periodic save batch or by the

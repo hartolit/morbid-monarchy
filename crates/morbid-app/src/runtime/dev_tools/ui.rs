@@ -2,8 +2,14 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::{diagnostic::DiagnosticsStore, ecs::message::MessageWriter, prelude::*};
 use bevy_egui::{EguiContexts, egui};
 use monarch_engine::prelude::{
-    ActiveWorldGrid, FluidMat, GlobalPhysicsConfig, ResizeSimulationEvent, SimulationConfig,
-    WorldManager,
+    ActiveWorldGrid, GlobalPhysicsConfig, ResizeSimulationEvent, SimulationConfig, WorldManager,
+};
+use world_model::{
+    config::{
+        ACTIVE_RADIUS_CHUNKS, AMBIENT_TEMPERATURE_C, BRUSH_RADIUS_CELLS, BRUSH_STRENGTH,
+        ELEVATION_SCALE, MAX_TICKS_PER_FRAME, TICK_RATE_HZ,
+    },
+    material::FluidMat,
 };
 
 use crate::runtime::{
@@ -14,18 +20,10 @@ use crate::runtime::{
     render::WorldLighting,
 };
 
-const BRUSH_STRENGTH_RANGE: std::ops::RangeInclusive<u8> = 1..=255;
-const BRUSH_RADIUS_RANGE: std::ops::RangeInclusive<i32> = 0..=64;
-
 const UI_FONT_SIZE_HEADING: f32 = 15.0;
 const UI_SPACING_DEFAULT: f32 = 16.0;
 
-const UI_ELEVATION_MIN: f32 = 0.01;
-const UI_ELEVATION_MAX: f32 = 5.0;
 const UI_ELEVATION_SPEED: f32 = 0.05;
-
-const UI_RADIUS_MIN: u32 = 1;
-const UI_RADIUS_MAX: u32 = 32;
 
 const UI_STATS_OFFSET_X: f32 = -10.0;
 const UI_STATS_OFFSET_Y: f32 = 40.0;
@@ -33,9 +31,6 @@ const UI_STACK_GAP: f32 = 8.0;
 
 const UI_FPS_THRESHOLD_GOOD: f64 = 32.0;
 
-const UI_TICK_RATE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=240.0;
-const UI_CATCH_UP_RANGE: std::ops::RangeInclusive<u32> = 1..=16;
-const UI_TEMPERATURE_RANGE: std::ops::RangeInclusive<f32> = -30.0..=40.0;
 const UI_PANEL_OFFSET_X: f32 = 10.0;
 
 const UI_SUN_AZIMUTH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=360.0;
@@ -126,7 +121,7 @@ pub fn dev_tuning_ui(
             if ui
                 .add(
                     egui::DragValue::new(&mut scale)
-                        .range(UI_ELEVATION_MIN..=UI_ELEVATION_MAX)
+                        .range(ELEVATION_SCALE)
                         .speed(UI_ELEVATION_SPEED),
                 )
                 .changed()
@@ -137,9 +132,9 @@ pub fn dev_tuning_ui(
             add_separator(ui);
 
             ui.label(egui::RichText::new("Active Radius (X/Y):").color(egui::Color32::LIGHT_GRAY));
-            ui.add(egui::DragValue::new(&mut current_size[0]).range(UI_RADIUS_MIN..=UI_RADIUS_MAX));
+            ui.add(egui::DragValue::new(&mut current_size[0]).range(ACTIVE_RADIUS_CHUNKS));
             ui.label("x");
-            ui.add(egui::DragValue::new(&mut current_size[1]).range(UI_RADIUS_MIN..=UI_RADIUS_MAX));
+            ui.add(egui::DragValue::new(&mut current_size[1]).range(ACTIVE_RADIUS_CHUNKS));
 
             ui.add_space(UI_SPACING_DEFAULT);
 
@@ -176,12 +171,10 @@ pub fn dev_tuning_ui(
 
             if *brush != GridBrush::None {
                 ui.label("Radius:");
-                ui.add(egui::DragValue::new(&mut brush_settings.radius).range(BRUSH_RADIUS_RANGE));
+                ui.add(egui::DragValue::new(&mut brush_settings.radius).range(BRUSH_RADIUS_CELLS));
 
                 ui.label("Strength:");
-                ui.add(
-                    egui::DragValue::new(&mut brush_settings.strength).range(BRUSH_STRENGTH_RANGE),
-                );
+                ui.add(egui::DragValue::new(&mut brush_settings.strength).range(BRUSH_STRENGTH));
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -223,16 +216,13 @@ pub fn dev_tuning_ui(
 
                 egui::Grid::new("simulation_grid").show(ui, |ui| {
                     ui.label("Tick Rate (Hz):");
-                    ui.add(
-                        egui::DragValue::new(&mut sim_config.tick_rate_hz)
-                            .range(UI_TICK_RATE_RANGE),
-                    );
+                    ui.add(egui::DragValue::new(&mut sim_config.tick_rate_hz).range(TICK_RATE_HZ));
                     ui.end_row();
 
                     ui.label("Max Ticks / Frame:");
                     ui.add(
                         egui::DragValue::new(&mut sim_config.max_ticks_per_frame)
-                            .range(UI_CATCH_UP_RANGE),
+                            .range(MAX_TICKS_PER_FRAME),
                     );
                     ui.end_row();
 
@@ -241,7 +231,7 @@ pub fn dev_tuning_ui(
                     ui.label("Temperature (°C):");
                     let mut temperature = sim_config.ambient_temperature_c;
                     if ui
-                        .add(egui::Slider::new(&mut temperature, UI_TEMPERATURE_RANGE))
+                        .add(egui::Slider::new(&mut temperature, AMBIENT_TEMPERATURE_C))
                         .changed()
                     {
                         sim_config.ambient_temperature_c = temperature;

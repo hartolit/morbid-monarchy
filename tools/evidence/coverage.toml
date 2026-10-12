@@ -9,56 +9,56 @@
 # motion against physical bounds), "stochastic-thread-rng" (probabilistic: the rule draws from a
 # thread-seeded RNG, so a single run is not an exact oracle).
 
-# --- Column rules: monarch-engine core/world/cell.rs ---
+# --- Column rules: world-model cell.rs (monarch-engine core/world/cell.rs until 01) ---
 
 [[behavior]]
 id = "cell.inflow.small-absorbed"
-package = "monarch-engine"
+package = "world-model"
 target = "lib"
-test = "core::world::cell::tests::small_inflow_is_absorbed_by_a_deeper_pool"
+test = "cell::tests::small_inflow_is_absorbed_by_a_deeper_pool"
 origin = "baseline"
 expectation = "A smaller inflow of another liquid joins a deeper pool: the resident material stays and the combined volume is kept."
-destination = "world-model column rules (01); per-cell GPU rule (03)"
+destination = "world-model column rules (moved in 01); per-cell GPU rule (03)"
 determinism = "exact"
 
 [[behavior]]
 id = "cell.inflow.larger-takes-over"
-package = "monarch-engine"
+package = "world-model"
 target = "lib"
-test = "core::world::cell::tests::larger_inflow_takes_the_column_over_without_losing_volume"
+test = "cell::tests::larger_inflow_takes_the_column_over_without_losing_volume"
 origin = "baseline"
 expectation = "A larger inflow takes the column's material over and keeps the combined volume."
-destination = "world-model column rules (01); per-cell GPU rule (03)"
+destination = "world-model column rules (moved in 01); per-cell GPU rule (03)"
 determinism = "exact"
 
 [[behavior]]
 id = "cell.quench.either-order"
-package = "monarch-engine"
+package = "world-model"
 target = "lib"
-test = "core::world::cell::tests::magma_and_coolant_quench_into_rock_either_way_round"
+test = "cell::tests::magma_and_coolant_quench_into_rock_either_way_round"
 origin = "baseline"
 expectation = "Magma received by a coolant pool raises stone by the magma volume; coolant received by magma quenches the magma to stone, then fills the column."
-destination = "world-model column rules (01); per-cell GPU rule with the corrected ceiling accounting (03)"
+destination = "world-model column rules (moved in 01); per-cell GPU rule with the corrected ceiling accounting (03)"
 determinism = "exact"
 
 [[behavior]]
 id = "cell.phase.ice-solid-volume-kept"
-package = "monarch-engine"
+package = "world-model"
 target = "lib"
-test = "core::world::cell::tests::ice_is_solid_and_phase_changes_keep_volume"
+test = "cell::tests::ice_is_solid_and_phase_changes_keep_volume"
 origin = "baseline"
 expectation = "Freezing makes the water a solid that adds to the solid top and accepts no liquid; thawing restores the same water volume."
-destination = "world-model column rules (01); per-cell GPU rule (03)"
+destination = "world-model column rules (moved in 01); per-cell GPU rule (03)"
 determinism = "exact"
 
 [[behavior]]
 id = "cell.drain.clears-state"
-package = "monarch-engine"
+package = "world-model"
 target = "lib"
-test = "core::world::cell::tests::draining_dry_clears_the_liquid_state"
+test = "cell::tests::draining_dry_clears_the_liquid_state"
 origin = "baseline"
 expectation = "Draining a column dry returns only the volume present and clears its liquid material and momentum flags."
-destination = "world-model column rules (01); per-cell GPU rule (03)"
+destination = "world-model column rules (moved in 01); per-cell GPU rule (03)"
 determinism = "exact"
 
 # --- Cellular automaton: monarch-engine core/simulation.rs ---
@@ -296,3 +296,217 @@ origin = "baseline"
 expectation = "A steel sphere plunging into water opens a cavity below half depth at the impact cell and conserves water on every frame."
 destination = "GPU liquid displacement (04)"
 determinism = "float-tolerance"
+
+# --- Semantic model: world-model (added in 01) ---
+
+[[behavior]]
+id = "model.layout.documented-table"
+package = "world-model"
+target = "lib"
+test = "cell::layout_tests::layout_matches_the_documented_table_and_tiles_64_bits"
+origin = "transition"
+expectation = "The packed-cell field table equals the documented layout written out by hand, and its fields tile all 64 bits without gaps or overlaps."
+destination = "world-model; the GPU word layout (02) and saved format (05) derive from it"
+determinism = "exact"
+
+[[behavior]]
+id = "model.layout.shifted-field-specimen"
+package = "world-model"
+target = "lib"
+test = "cell::layout_tests::a_shifted_field_is_detected"
+origin = "transition"
+expectation = "Deliberate failure specimen: a field moved by one bit is reported by the layout check."
+destination = "world-model; kept as the wrong-offset specimen (verification evidence)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.layout.field-maxima"
+package = "world-model"
+target = "lib"
+test = "cell::layout_tests::each_hand_written_field_maximum_reads_back_alone"
+origin = "transition"
+expectation = "Each hand-written word with one field at its maximum reads back that maximum through its accessor and zero everywhere else; all-ones reads every maximum."
+destination = "world-model; the same words seed the GPU ABI round trip (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.layout.setters-isolated"
+package = "world-model"
+target = "lib"
+test = "cell::layout_tests::setters_change_only_their_field"
+origin = "transition"
+expectation = "Setters change only their own bits and truncate wider values to the field."
+destination = "world-model"
+determinism = "exact"
+
+[[behavior]]
+id = "model.layout.word-order"
+package = "world-model"
+target = "lib"
+test = "cell::layout_tests::words_are_low_then_high_independent_of_host_order"
+origin = "transition"
+expectation = "A cell is two 32-bit words, low bits first, and little-endian bytes put word 0 first."
+destination = "world-model; GPU buffer layout (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.config.defaults-in-range"
+package = "world-model"
+target = "lib"
+test = "config::tests::defaults_are_inside_their_ranges"
+origin = "transition"
+expectation = "Every configuration default lies inside its supported range."
+destination = "world-model; runtime configuration commands (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.config.brush-footprint"
+package = "world-model"
+target = "lib"
+test = "config::tests::largest_brush_touches_the_documented_cell_count"
+origin = "transition"
+expectation = "The largest supported brush (radius 64) touches exactly 12,853 cells, the documented per-stroke bound."
+destination = "world-model; command capacity (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.presets-in-envelope"
+package = "world-model"
+target = "lib"
+test = "body::tests::presets_lie_inside_the_supported_envelope"
+origin = "transition"
+expectation = "Both sphere presets lie inside the supported radius, density and mass ranges, and wood keeps the metal sphere's volume."
+destination = "world-model; GPU body admission (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.speed-envelope"
+package = "world-model"
+target = "lib"
+test = "body::tests::attract_terminal_speed_stays_inside_the_speed_limit"
+origin = "transition"
+expectation = "Attract's terminal speed against air drag, and drive plus jump, stay within the supported body speed."
+destination = "world-model; GPU body substep and sweep rule (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.command.refuses-unsupported"
+package = "world-model"
+target = "lib"
+test = "command::tests::out_of_range_values_cannot_become_commands"
+origin = "transition"
+expectation = "Brush radius and strength, drop height, direction and temperature outside the supported ranges cannot be constructed as commands."
+destination = "world-model; runtime command admission (02-04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.command.direction-axes"
+package = "world-model"
+target = "lib"
+test = "command::tests::directions_are_normalized_and_map_y_to_render_minus_z"
+origin = "transition"
+expectation = "A drive direction is normalized and cell +y maps to render -z."
+destination = "world-model"
+determinism = "exact"
+
+[[behavior]]
+id = "model.spatial.cell-conversions"
+package = "world-model"
+target = "lib"
+test = "spatial::tests::the_two_cell_conversions_differ_only_where_they_should"
+origin = "transition"
+expectation = "Nearest-vertex and quad-corner conversions from render space agree inside a quad's lower half and differ past it; negative positions floor downward."
+destination = "world-model; GPU ray and body queries (03-04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.spatial.negative-keys"
+package = "world-model"
+target = "lib"
+test = "spatial::tests::keys_floor_negative_positions"
+origin = "transition"
+expectation = "Chunk keys floor negative positions and stay planar; a key's origin cell is its key times 64."
+destination = "world-model; residency (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.spatial.rect-view"
+package = "world-model"
+target = "lib"
+test = "spatial::tests::rect_view_holds_the_window_and_iterates_every_key_once"
+origin = "transition"
+expectation = "A planar rectangle view contains exactly its keys and iterates each once with z = 0."
+destination = "world-model; residency (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.generation.baseline-words"
+package = "world-model"
+target = "lib"
+test = "generation::tests::origin_chunk_matches_the_baseline_generator"
+origin = "transition"
+expectation = "The extracted generator reproduces the baseline's recorded words and sums for the origin chunk at seed 69."
+destination = "world-model; GPU or CPU generation for streaming (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.generation.seed-and-key"
+package = "world-model"
+target = "lib"
+test = "generation::tests::generation_depends_only_on_seed_and_key"
+origin = "transition"
+expectation = "Generation depends only on seed and key: repeated calls agree and another seed differs."
+destination = "world-model; streaming generation (05)"
+determinism = "exact"
+
+# --- Legacy saved rows: morbid-app tests/legacy_fixtures.rs (added in 01) ---
+
+[[behavior]]
+id = "format.legacy.decode-matches-manifest"
+package = "morbid-app"
+target = "test:legacy_fixtures"
+test = "every_row_decodes_to_the_values_the_old_writer_recorded"
+origin = "transition"
+expectation = "Every old-writer row decodes to the cell count, metadata, field sums and boundary words recorded before encoding."
+destination = "legacy codec (01); importer from these rows (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "format.legacy.reencode-identical"
+package = "morbid-app"
+target = "test:legacy_fixtures"
+test = "re_encoding_reproduces_the_old_writer_bytes"
+origin = "transition"
+expectation = "Re-encoding a decoded row reproduces the old writer's bytes exactly."
+destination = "legacy codec until the versioned format (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "format.legacy.corrupt-is-error"
+package = "morbid-app"
+target = "test:legacy_fixtures"
+test = "truncated_and_foreign_bytes_are_errors_not_chunks"
+origin = "transition"
+expectation = "Truncated or foreign bytes are decoding errors, never chunks."
+destination = "store read failures stay distinct from absence (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "format.legacy.store-rows"
+package = "morbid-app"
+target = "test:legacy_fixtures"
+test = "the_store_holds_exactly_the_recorded_rows"
+origin = "transition"
+expectation = "A copy of the fixture store holds exactly the five recorded rows with their bytes, and an unrecorded key is absent."
+destination = "saved-world store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "format.legacy.generated-rows"
+package = "morbid-app"
+target = "test:legacy_fixtures"
+test = "generated_rows_match_the_extracted_generator"
+origin = "transition"
+expectation = "Rows the old writer stored straight from the generator equal the extracted generator's output for the same keys."
+destination = "world-model generation (01); import (05)"
+determinism = "exact"

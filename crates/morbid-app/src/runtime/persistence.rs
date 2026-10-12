@@ -5,10 +5,7 @@ use bevy::{
 };
 use monarch_engine::prelude::*;
 use redb::Database;
-use spatial_lib::prelude::{
-    math::ChunkKey,
-    storage::{ChunkStorage, redb_backend::RedbChunkStorage},
-};
+use spatial_lib::prelude::storage::{ChunkStorage, redb_backend::RedbChunkStorage};
 use std::{
     path::Path,
     sync::{
@@ -16,6 +13,9 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use world_model::{generation::WorldGenerator, spatial::ChunkKey};
+
+use crate::legacy_format;
 
 /// Directory the interactive application uses, relative to the working directory.
 pub const WORLD_DATA_DIR: &str = "world_data";
@@ -103,21 +103,20 @@ pub fn handle_load_requests(
         counters.load_requests += 1;
 
         let task = io_pool.spawn(async move {
-            let cached_chunk =
-                match storage_clone.read_chunk(key, |bytes| bitcode::decode::<CellChunk>(bytes)) {
-                    Ok(Some(Ok(data))) => Some(data),
-                    Ok(Some(Err(e))) => {
-                        task_counters.decode_errors.fetch_add(1, Ordering::Relaxed);
-                        error!("Corruption decoding chunk {:?}: {}", key, e);
-                        None
-                    }
-                    Ok(None) => None,
-                    Err(e) => {
-                        task_counters.read_errors.fetch_add(1, Ordering::Relaxed);
-                        error!("Storage read error for chunk {:?}: {}", key, e);
-                        None
-                    }
-                };
+            let cached_chunk = match storage_clone.read_chunk(key, legacy_format::decode) {
+                Ok(Some(Ok(data))) => Some(data),
+                Ok(Some(Err(e))) => {
+                    task_counters.decode_errors.fetch_add(1, Ordering::Relaxed);
+                    error!("Corruption decoding chunk {:?}: {}", key, e);
+                    None
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    task_counters.read_errors.fetch_add(1, Ordering::Relaxed);
+                    error!("Storage read error for chunk {:?}: {}", key, e);
+                    None
+                }
+            };
 
             let data = if let Some(chunk_data) = cached_chunk {
                 task_counters
@@ -130,7 +129,7 @@ pub fn handle_load_requests(
                     .fetch_add(1, Ordering::Relaxed);
                 let gen_task = compute_pool.spawn(async move {
                     let generator = WorldGenerator::new(world_seed);
-                    generator.generate_chunk(key)
+                    generated_cell_chunk(generator.generate_chunk(key))
                 });
                 gen_task.await
             };
@@ -177,7 +176,7 @@ pub fn process_save_queue(
         let task = pool.spawn(async move {
             let encoded_payloads: Vec<_> = chunks_to_save
                 .into_iter()
-                .map(|(k, data)| (k, bitcode::encode(&data)))
+                .map(|(k, data)| (k, legacy_format::encode(&data)))
                 .collect();
 
             let batch_refs: Vec<_> = encoded_payloads
@@ -228,7 +227,7 @@ pub fn emergency_flush_on_exit(
 
     let encoded_payloads: Vec<_> = chunks_to_save
         .into_iter()
-        .map(|(k, data)| (k, bitcode::encode(&data)))
+        .map(|(k, data)| (k, legacy_format::encode(&data)))
         .collect();
 
     let batch_refs: Vec<_> = encoded_payloads

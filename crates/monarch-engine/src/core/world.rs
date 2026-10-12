@@ -8,31 +8,26 @@ use bevy::{
     time::Time,
 };
 
-use spatial_lib::prelude::{
-    manager::{ChunkManager, ChunkStore},
-    math::ChunkKey,
+use spatial_lib::prelude::manager::{ChunkManager, ChunkStore};
+use world_model::{
+    cell::WorldCell,
+    config::DEFAULT_ACTIVE_RADIUS_CHUNKS,
+    spatial::{CHUNK_SIZE, ChunkKey},
 };
 
 use crate::core::{
     events::{ChunkLoadRequest, ChunkLoadedEvent, ChunkUnloadEvent, ResizeSimulationEvent},
-    world::{
-        cell::WorldCell,
-        chunk::{CHUNK_SIZE, ChunkMetadata},
-        grid::ActiveWorldGrid,
-    },
+    world::{chunk::ChunkMetadata, grid::ActiveWorldGrid},
 };
 
-pub mod cell;
 pub mod chunk;
 pub mod grid;
 
-pub const DEFAULT_ACTIVE_RADIUS_X: u32 = 6;
-pub const DEFAULT_ACTIVE_RADIUS_Y: u32 = 6;
 pub const PRELOAD_EXT_RADIUS: u32 = 4;
 pub const PRELOAD_TRIGGER: u32 = 2;
 
-pub const CACHE_CHUNK_SIZE: usize = (((DEFAULT_ACTIVE_RADIUS_X * 2)
-    * (DEFAULT_ACTIVE_RADIUS_Y * 2))
+pub const CACHE_CHUNK_SIZE: usize = (((DEFAULT_ACTIVE_RADIUS_CHUNKS * 2)
+    * (DEFAULT_ACTIVE_RADIUS_CHUNKS * 2))
     * (PRELOAD_EXT_RADIUS * 2)) as usize;
 
 #[derive(Resource)]
@@ -57,8 +52,8 @@ impl Default for WorldManager {
     fn default() -> Self {
         Self {
             inner: ChunkManager::new(
-                DEFAULT_ACTIVE_RADIUS_X,
-                DEFAULT_ACTIVE_RADIUS_Y,
+                DEFAULT_ACTIVE_RADIUS_CHUNKS,
+                DEFAULT_ACTIVE_RADIUS_CHUNKS,
                 PRELOAD_EXT_RADIUS,
                 PRELOAD_TRIGGER,
                 CHUNK_SIZE,

@@ -24,16 +24,16 @@ use std::{
 
 use crate::core::counters::EngineCounters;
 
-use crate::core::world::{
-    cell::{FluidMat, SurfaceMat, TerrainMat},
-    grid::{WAKE_ACTIVE_FRESH, WAKE_ACTIVE_MIN, WAKE_ASLEEP, WAKE_CHANGE_RADIUS, schedule_wake},
+use crate::core::world::grid::{
+    WAKE_ACTIVE_FRESH, WAKE_ACTIVE_MIN, WAKE_ASLEEP, WAKE_CHANGE_RADIUS, schedule_wake,
 };
 use crate::prelude::ActiveWorldGrid;
 use crate::prelude::CellGridReadView;
+use world_model::{
+    config::{DEFAULT_AMBIENT_TEMPERATURE_C, DEFAULT_MAX_TICKS_PER_FRAME, DEFAULT_TICK_RATE_HZ},
+    material::{FluidMat, SurfaceMat, TerrainMat},
+};
 
-pub const DEFAULT_TICK_RATE_HZ: f64 = 60.0;
-pub const DEFAULT_MAX_TICKS_PER_FRAME: u32 = 4;
-pub const DEFAULT_AMBIENT_TEMPERATURE_C: f32 = 12.0;
 /// Lower bound on the tick rate so a zeroed configuration cannot produce an infinite step.
 pub const MIN_TICK_RATE_HZ: f64 = 1.0;
 
@@ -313,9 +313,9 @@ pub fn run_simulation_tick(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::world::cell::{GranularMat, WorldCell};
     use bevy::ecs::{system::RunSystemOnce, world::World};
     use std::time::Duration;
+    use world_model::{cell::WorldCell, material::GranularMat};
 
     const GRID_SIZE: i32 = 48;
     const BED_ELEVATION: u16 = 100;

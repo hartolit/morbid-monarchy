@@ -1,13 +1,13 @@
 use bevy::math::IVec2;
 
 use crate::core::{
-    physics::materials::get_granular_repose,
     simulation::DonorMask,
     utils::{FlowPattern, ShuffledDirs, spatial_hash},
-    world::{
-        cell::{GranularMat, WorldCell},
-        grid::CellGridReadView,
-    },
+    world::grid::CellGridReadView,
+};
+use world_model::{
+    cell::WorldCell,
+    material::{GranularMat, granular_repose},
 };
 
 /// Upper bound on granular volume moved across one edge per tick; keeps avalanches gradual.
@@ -57,7 +57,7 @@ fn get_preferred_destination(
 ) -> Option<(usize, IVec2)> {
     let (_, source_cell) = view.get_cell(world_pos)?;
     let source_mat = source_cell.granular_mat();
-    let base_repose = get_granular_repose(source_mat);
+    let base_repose = granular_repose(source_mat);
 
     // Loose material under ice is frozen in place.
     if base_repose == u16::MAX
@@ -121,7 +121,7 @@ fn get_preferred_source(
         let neighbor_pos = world_pos + dir;
 
         if let Some((neighbor_idx, neighbor_cell)) = view.get_cell(neighbor_pos)
-            && get_granular_repose(neighbor_cell.granular_mat()) != u16::MAX
+            && granular_repose(neighbor_cell.granular_mat()) != u16::MAX
             && donors.can_donate(neighbor_idx)
             && let Some((_, dest_pos)) = get_preferred_destination(neighbor_pos, view, tick)
             && dest_pos == world_pos

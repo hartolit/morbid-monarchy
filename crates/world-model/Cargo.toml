@@ -1,0 +1,11 @@
+[package]
+name = "world-model"
+version = "0.1.0"
+edition = "2024"
+description = "Framework-free meaning of the world: packed cells, materials, coordinates, units, supported configuration, commands, observations and terrain generation."
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+noise.workspace = true
+rand.workspace = true

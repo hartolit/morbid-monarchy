@@ -15,8 +15,11 @@ use bevy::{
 };
 use monarch_engine::prelude::*;
 use rustc_hash::FxHashSet;
-use spatial_lib::chunk::math::ChunkKey;
 use std::time::Instant;
+use world_model::{
+    material::{FluidMat, GranularMat, SurfaceMat, TerrainMat},
+    spatial::{CHUNK_SIZE, ChunkKey, cell_render_xz},
+};
 
 pub struct WorldRenderPlugin;
 
@@ -805,9 +808,8 @@ fn sync_grid_rendering(
     // Spawns missing instances locked to their physical coordinate origins
     for key in active_view.iter() {
         if !existing_chunks.contains(&key) {
-            let chunk_x = key.key.x * (CHUNK_SIZE as i32);
-            let chunk_y = key.key.y * (CHUNK_SIZE as i32);
-            let pos = Transform::from_xyz(chunk_x as f32, 0.0, -(chunk_y as f32));
+            let (x, z) = cell_render_xz(key.origin_cell());
+            let pos = Transform::from_xyz(x, 0.0, z);
 
             commands.spawn((
                 Mesh3d(chunk_mesh.0.clone()),

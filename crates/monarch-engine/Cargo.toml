@@ -6,11 +6,10 @@ edition = "2024"
 [dependencies]
 bevy.workspace = true
 rand.workspace = true
-noise.workspace = true
 rustc-hash.workspace = true
 lru.workspace = true
-bitcode.workspace = true
 bytemuck.workspace = true
 rayon.workspace = true
 flume.workspace = true
 spatial-lib.workspace = true
+world-model.workspace = true

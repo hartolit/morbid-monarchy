@@ -3,10 +3,11 @@ use rand::{Rng, RngExt};
 
 use crate::core::{
     simulation::{FOLIAGE_MATURE_STATE, GridEvent},
-    world::{
-        cell::{FluidMat, GranularMat, SurfaceMat, TerrainMat, WorldCell},
-        grid::CellGridReadView,
-    },
+    world::grid::CellGridReadView,
+};
+use world_model::{
+    cell::WorldCell,
+    material::{FluidMat, GranularMat, SurfaceMat, TerrainMat},
 };
 
 // The absolute physical limit that water can be wicked upwards by roots.

@@ -19,6 +19,7 @@ use crate::runtime::{
 };
 
 pub mod baseline;
+pub mod legacy_format;
 mod runtime;
 
 /// Seed of every world the baseline application generates.

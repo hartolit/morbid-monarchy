@@ -25,11 +25,32 @@ struct ForbiddenClosure {
 
 /// Dependency-direction rules in force. Later stages add their packages here when they create
 /// them, so a rule never passes vacuously for a package that does not exist.
-const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[ForbiddenClosure {
-    package: EVIDENCE_PACKAGE,
-    forbidden_prefixes: &["bevy", "morbid-app", "monarch-engine"],
-    reason: "default evidence builds must not compile the Bevy baseline; it is behind `legacy-baseline`",
-}];
+const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
+    ForbiddenClosure {
+        package: EVIDENCE_PACKAGE,
+        forbidden_prefixes: &["bevy", "morbid-app", "monarch-engine"],
+        reason: "default evidence builds must not compile the Bevy baseline; it is behind `legacy-baseline`",
+    },
+    ForbiddenClosure {
+        package: "world-model",
+        forbidden_prefixes: &[
+            "bevy",
+            "wgpu",
+            "naga",
+            "winit",
+            "egui",
+            "redb",
+            "bitcode",
+            "rayon",
+            "flume",
+            "monarch-engine",
+            "morbid-app",
+            "spatial-lib",
+            EVIDENCE_PACKAGE,
+        ],
+        reason: "the world model is framework-free: no engine, GPU API, window, UI, store, codec, worker pool or other workspace package",
+    },
+];
 
 /// `default_features` is the workspace resolved without `--all-features`.
 pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -> Item {
@@ -59,16 +80,36 @@ pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -
         }
     }
 
-    for rule in FORBIDDEN_CLOSURES {
-        let Some(package) = default_features.member(rule.package) else {
+    problems.extend(closure_violations(default_features, FORBIDDEN_CLOSURES));
+
+    let state = if problems.is_empty() {
+        State::Passed
+    } else {
+        State::Failed
+    };
+    Item::new(
+        "static.contracts.dependencies",
+        state,
+        format!(
+            "evidence leaf isolated, application not imported, {} closure rule(s)",
+            FORBIDDEN_CLOSURES.len()
+        ),
+    )
+    .with_details(problems)
+}
+
+fn closure_violations(workspace: &Workspace, rules: &[ForbiddenClosure]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for rule in rules {
+        let Some(package) = workspace.member(rule.package) else {
             problems.push(format!(
                 "rule target {} is not a workspace member",
                 rule.package
             ));
             continue;
         };
-        for (id, path) in default_features.production_closure(&package.id) {
-            let Some(dependency) = default_features.package(&id) else {
+        for (id, path) in workspace.production_closure(&package.id) {
+            let Some(dependency) = workspace.package(&id) else {
                 continue;
             };
             if rule
@@ -86,21 +127,7 @@ pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -
             }
         }
     }
-
-    let state = if problems.is_empty() {
-        State::Passed
-    } else {
-        State::Failed
-    };
-    Item::new(
-        "static.contracts.dependencies",
-        state,
-        format!(
-            "evidence leaf isolated, application not imported, {} closure rule(s)",
-            FORBIDDEN_CLOSURES.len()
-        ),
-    )
-    .with_details(problems)
+    problems
 }
 
 pub fn pins_item(root: &Path) -> Item {
@@ -175,4 +202,58 @@ pub fn pins_item(root: &Path) -> Item {
         "exact toolchain, tracked lockfile and evidence alias",
     )
     .with_details(problems)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A model that depends on `glam`, and through `extra` on whatever the case adds.
+    fn workspace(extra: Option<&str>) -> Workspace {
+        let mut model_deps =
+            vec![serde_json::json!({"pkg": "glam", "dep_kinds": [{"kind": null}]})];
+        let mut packages = vec![
+            serde_json::json!({"id": "world-model", "name": "world-model", "manifest_path": "/w/m/Cargo.toml"}),
+            serde_json::json!({"id": "glam", "name": "glam", "manifest_path": "/r/glam/Cargo.toml"}),
+        ];
+        let mut nodes = vec![serde_json::json!({"id": "glam", "deps": []})];
+        if let Some(name) = extra {
+            model_deps.push(serde_json::json!({"pkg": "helper", "dep_kinds": [{"kind": null}]}));
+            packages.push(serde_json::json!({"id": "helper", "name": "helper", "manifest_path": "/r/h/Cargo.toml"}));
+            packages.push(
+                serde_json::json!({"id": name, "name": name, "manifest_path": "/r/x/Cargo.toml"}),
+            );
+            nodes.push(serde_json::json!({"id": "helper", "deps": [{"pkg": name, "dep_kinds": [{"kind": null}]}]}));
+            nodes.push(serde_json::json!({"id": name, "deps": []}));
+        }
+        nodes.push(serde_json::json!({"id": "world-model", "deps": model_deps}));
+        Workspace::from_metadata(&serde_json::json!({
+            "workspace_members": ["world-model"],
+            "packages": packages,
+            "resolve": {"nodes": nodes}
+        }))
+        .expect("metadata")
+    }
+
+    #[test]
+    fn the_model_may_not_reach_an_engine_or_store_even_indirectly() {
+        let model_rule = &FORBIDDEN_CLOSURES[1..];
+        assert_eq!(model_rule[0].package, "world-model");
+        assert!(closure_violations(&workspace(None), model_rule).is_empty());
+        for forbidden in ["bevy_ecs", "wgpu-core", "redb", "monarch-engine"] {
+            let problems = closure_violations(&workspace(Some(forbidden)), model_rule);
+            assert_eq!(problems.len(), 1, "{forbidden}: {problems:?}");
+            assert!(
+                problems[0].contains("helper"),
+                "the path is reported: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rule_for_a_missing_package_fails_instead_of_passing_vacuously() {
+        let problems = closure_violations(&workspace(None), &FORBIDDEN_CLOSURES[..1]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("not a workspace member"));
+    }
 }

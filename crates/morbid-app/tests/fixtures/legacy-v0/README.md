@@ -7,8 +7,8 @@ as immutable. A capture made with changed code is a new fixture set, not an upda
 
 | Item | Value |
 | --- | --- |
-| Source | Commit `eea8652` (toolchain pin over `a9c1539`); capture program `crates/morbid-app/examples/capture_legacy_fixtures.rs` at the commit that added this directory |
-| Writer calls | `bitcode::encode(&CellChunk)` then `RedbChunkStorage::write_batch`, the same two calls as `runtime::persistence::process_save_queue` |
+| Source | Commit `eea8652` (toolchain pin over `a9c1539`); capture program `crates/morbid-app/examples/capture_legacy_fixtures.rs` in commit `58e9648`, which added this directory. The program was deleted when the cell types moved to `world-model` and lost their bitcode derive; it remains in history |
+| Writer calls | `bitcode::encode(&CellChunk)` (the derived encoding) then `RedbChunkStorage::write_batch`, the same two calls `runtime::persistence::process_save_queue` made at that commit |
 | Toolchain / libraries | rustc 1.99.0 (`b940084d7`), bitcode 0.6.9, redb 4.1.0 (from `Cargo.lock`) |
 | Table | `spatial_chunks`, key `[i32; 3]`, value bitcode-encoded `CellChunk` |
 | Generator seed | 69 (the value hard-coded in `morbid_app::run`) |

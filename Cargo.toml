@@ -3,6 +3,7 @@ members = [
     "crates/morbid-app",
     "crates/monarch-engine",
     "crates/spatial-lib",
+    "crates/world-model",
     "tools/evidence",
 ]
 resolver = "3"
@@ -30,3 +31,4 @@ wgpu = "29.0.4"
 monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
 spatial-lib = { path = "crates/spatial-lib" }
+world-model = { path = "crates/world-model" }

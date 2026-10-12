@@ -1,11 +1,9 @@
 use bevy::math::IVec2;
 
-use crate::core::{
-    utils::spatial_hash_extended,
-    world::{
-        cell::{FluidMat, SurfaceMat, WorldCell},
-        grid::CellGridReadView,
-    },
+use crate::core::{utils::spatial_hash_extended, world::grid::CellGridReadView};
+use world_model::{
+    cell::WorldCell,
+    material::{FluidMat, SurfaceMat},
 };
 
 /// Temperature at which water and ice trade places.

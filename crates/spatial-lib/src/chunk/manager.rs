@@ -1,10 +1,10 @@
 use super::Chunk;
-use super::math::{ChunkKey, ChunkView};
 use crate::prelude::ToroidalGrid;
 
 use lru::LruCache;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::num::NonZeroUsize;
+use world_model::spatial::{ChunkKey, ChunkView};
 
 /// Engine-agnostic storage for the topological state of chunks.
 #[derive(Debug)]

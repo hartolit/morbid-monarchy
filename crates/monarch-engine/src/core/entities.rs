@@ -5,6 +5,11 @@ use bevy::{
     ecs::{component::Component, resource::Resource},
     math::Vec3,
 };
+use world_model::{
+    body::AIR_DRAG_RATE,
+    config::DEFAULT_ELEVATION_SCALE,
+    units::{GRAVITY_Y, MAX_BODY_SUBSTEP_SECONDS},
+};
 
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct GlobalPhysicsConfig {
@@ -22,11 +27,11 @@ pub struct GlobalPhysicsConfig {
 impl Default for GlobalPhysicsConfig {
     fn default() -> Self {
         Self {
-            gravity: Vec3::new(0.0, -32.0, 0.0),
-            elevation_scale: 0.50,
+            gravity: Vec3::new(0.0, GRAVITY_Y, 0.0),
+            elevation_scale: DEFAULT_ELEVATION_SCALE,
             epsilon_distance: 0.000001,
             half_cell_offset: 0.5,
-            max_substep_seconds: 1.0 / 120.0,
+            max_substep_seconds: MAX_BODY_SUBSTEP_SECONDS,
             max_substeps: 8,
         }
     }
@@ -56,7 +61,7 @@ impl Default for KinematicProfile {
     fn default() -> Self {
         Self {
             mass: 1.0,
-            air_drag_rate: 0.6,
+            air_drag_rate: AIR_DRAG_RATE,
             rolling_resistance_coefficient: 0.12,
             ground_damping_rate: 0.4,
             static_friction_coefficient: 0.2,

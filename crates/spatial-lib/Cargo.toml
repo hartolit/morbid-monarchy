@@ -5,11 +5,11 @@ edition = "2024"
 
 [features]
 default = []
-redb-storage = ["dep:redb", "dep:bitcode"]
+redb-storage = ["dep:redb"]
 
 [dependencies]
 glam = { workspace = true }
 lru = { workspace = true }
 rustc-hash = { workspace = true }
+world-model = { workspace = true }
 redb = { workspace = true, optional = true }
-bitcode = { workspace = true, optional = true, features = ["derive"] }

@@ -1,12 +1,10 @@
-use crate::core::{
-    entities::GlobalPhysicsConfig,
-    physics::materials::{get_ground_softness, get_terrain_crush_hardness},
-    world::{
-        cell::{FluidMat, GranularMat, SurfaceMat, WorldCell},
-        grid::ActiveWorldGrid,
-    },
-};
+use crate::core::{entities::GlobalPhysicsConfig, world::grid::ActiveWorldGrid};
 use bevy::math::{IVec2, Vec3};
+use world_model::{
+    cell::WorldCell,
+    material::{FluidMat, GranularMat, SurfaceMat, ground_softness, terrain_crush_hardness},
+    spatial::cell_render_xz,
+};
 
 /// One column's part in a displacement: how many units may be taken from it (a source) or
 /// added to it (a sink).
@@ -125,7 +123,8 @@ impl<'a> GridPhysicsApi<'a> {
         let corner = |offset: IVec2| -> Option<Vec3> {
             let position = cell + offset;
             let height = height_of(position)?;
-            Some(Vec3::new(position.x as f32, height, -(position.y as f32)))
+            let (x, z) = cell_render_xz(position);
+            Some(Vec3::new(x, height, z))
         };
         let v00 = corner(IVec2::new(0, 0))?;
         let v10 = corner(IVec2::new(1, 0))?;
@@ -241,7 +240,7 @@ impl<'a> GridPhysicsApi<'a> {
             return (0, 0.0);
         }
 
-        let unit_cost = crush_cost * get_terrain_crush_hardness(cell.terrain_mat());
+        let unit_cost = crush_cost * terrain_crush_hardness(cell.terrain_mat());
         let required_crush = ((solid_height - effective_bottom_height)
             / self.global_config.elevation_scale)
             .ceil() as u16;
@@ -267,7 +266,7 @@ impl<'a> GridPhysicsApi<'a> {
         if !self.is_in_bounds(cell_position) {
             return 0.0;
         }
-        get_ground_softness(&self.grid.get_cell(cell_position))
+        ground_softness(&self.grid.get_cell(cell_position))
     }
 
     /// Shatters an ice sheet whose top lies above `height_limit`, melting the column back into

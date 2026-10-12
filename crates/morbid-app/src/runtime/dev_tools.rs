@@ -1,7 +1,10 @@
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
-use monarch_engine::prelude::FluidMat;
+use world_model::{
+    config::{DEFAULT_BRUSH_RADIUS_CELLS, DEFAULT_BRUSH_STRENGTH},
+    material::FluidMat,
+};
 
 pub mod brush;
 pub mod compass;
@@ -61,8 +64,8 @@ pub struct BrushSettings {
 impl Default for BrushSettings {
     fn default() -> Self {
         Self {
-            radius: 5,
-            strength: 1,
+            radius: DEFAULT_BRUSH_RADIUS_CELLS,
+            strength: DEFAULT_BRUSH_STRENGTH,
         }
     }
 }

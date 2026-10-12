@@ -1,6 +1,6 @@
-use crate::core::world::cell::CompassFlags;
 use bevy::math::IVec2;
 use rand::{Rng, seq::SliceRandom};
+use world_model::material::CompassFlags;
 
 #[derive(Clone, Copy)]
 pub enum FlowPattern {

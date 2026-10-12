@@ -2,9 +2,7 @@ use bevy::{ecs::resource::Resource, math::IVec2};
 use spatial_lib::grid::{GridReadView, ToroidalGrid};
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::core::world::{
-    DEFAULT_ACTIVE_RADIUS_X, DEFAULT_ACTIVE_RADIUS_Y, cell::WorldCell, chunk::CHUNK_SIZE,
-};
+use world_model::{cell::WorldCell, config::DEFAULT_ACTIVE_RADIUS_CHUNKS, spatial::CHUNK_SIZE};
 
 pub type CellGridReadView<'a> = GridReadView<'a, WorldCell>;
 
@@ -64,16 +62,13 @@ pub struct ActiveWorldGrid {
 
 impl Default for ActiveWorldGrid {
     fn default() -> Self {
-        let span_chunks_x = (DEFAULT_ACTIVE_RADIUS_X * 2 + 1) as i32;
-        let span_chunks_y = (DEFAULT_ACTIVE_RADIUS_Y * 2 + 1) as i32;
-        let window_origin = IVec2::new(
-            -(DEFAULT_ACTIVE_RADIUS_X as i32) * (CHUNK_SIZE as i32),
-            -(DEFAULT_ACTIVE_RADIUS_Y as i32) * (CHUNK_SIZE as i32),
-        );
+        let span_chunks = (DEFAULT_ACTIVE_RADIUS_CHUNKS * 2 + 1) as i32;
+        let window_origin =
+            IVec2::splat(-(DEFAULT_ACTIVE_RADIUS_CHUNKS as i32) * (CHUNK_SIZE as i32));
 
         Self::new(
-            span_chunks_x * (CHUNK_SIZE as i32),
-            span_chunks_y * (CHUNK_SIZE as i32),
+            span_chunks * (CHUNK_SIZE as i32),
+            span_chunks * (CHUNK_SIZE as i32),
             window_origin,
         )
     }

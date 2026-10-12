@@ -9,6 +9,10 @@ use monarch_engine::prelude::{
     spherical::DynamicRigidSphere,
     *,
 };
+use world_model::{
+    body::{DRIVE_ACCELERATION, DRIVE_MAX_SPEED, JUMP_IMPULSE},
+    spatial::CHUNK_SIZE,
+};
 
 // TODO: Make this a resource
 const DEFAULT_TETHER_DISTANCE: f32 = 15.0;
@@ -28,12 +32,6 @@ const INPUT_MOVEMENT_UNIT: f32 = 1.0;
 const ZOOM_SPEED_MULTIPLIER: f32 = 3.0;
 const MIN_ZOOM_DISTANCE: f32 = 5.0;
 const MAX_ZOOM_DISTANCE: f32 = 100.0;
-
-const SPHERE_ACCELERATION: f32 = 250.0;
-/// Driving only accelerates the sphere up to this speed along the input direction; rolling
-/// physics, not the controls, decide how it coasts beyond that.
-const SPHERE_MAX_DRIVE_SPEED: f32 = 40.0;
-const SPHERE_JUMP_IMPULSE: f32 = 35.0;
 
 #[derive(Component)]
 pub struct ObserverLens;
@@ -309,8 +307,8 @@ pub fn drive_possessed_sphere(
 /// drive speed; rolling physics, not the controls, decide how it coasts beyond that.
 pub fn drive_sphere(sphere: &mut DynamicRigidSphere, move_dir: Vec3, dt: f32) {
     let speed_along_input = sphere.velocity.dot(move_dir);
-    let speed_gain = (SPHERE_ACCELERATION * dt)
-        .min(SPHERE_MAX_DRIVE_SPEED - speed_along_input)
+    let speed_gain = (DRIVE_ACCELERATION * dt)
+        .min(DRIVE_MAX_SPEED - speed_along_input)
         .max(0.0);
     sphere.velocity += move_dir * speed_gain;
 }
@@ -322,6 +320,6 @@ pub fn jump_sphere(sphere: &mut DynamicRigidSphere) -> bool {
         return false;
     }
     let ground_normal = sphere.ground_normal;
-    sphere.velocity += ground_normal * SPHERE_JUMP_IMPULSE;
+    sphere.velocity += ground_normal * JUMP_IMPULSE;
     true
 }

@@ -27,7 +27,11 @@ cell payloads. Only the evidence runner's `legacy-baseline` driver uses that mod
 
 ## Saved data
 
-Chunks are bitcode-encoded `CellChunk`s in the redb table `spatial_chunks`, written only when the
-LRU cache evicts them or at exit. See [world format](../../docs/reference/world-format.md).
-[`tests/fixtures/legacy-v0`](tests/fixtures/legacy-v0/README.md) holds rows written by this save
-path. `examples/capture_legacy_fixtures.rs` produced them.
+Chunks are rows of the redb table `spatial_chunks`, written only when the LRU cache evicts them or
+at exit. [`legacy_format`](src/legacy_format.rs) owns their bytes: it encodes and decodes exactly
+what the old writer produced by deriving bitcode on `CellChunk`, which the model types no longer
+carry. A row that does not decode is a corrupt row, not an absent chunk. See
+[world format](../../docs/reference/world-format.md).
+[`tests/fixtures/legacy-v0`](tests/fixtures/legacy-v0/README.md) holds rows the old writer wrote
+before the extraction, and [`tests/legacy_fixtures.rs`](tests/legacy_fixtures.rs) decodes them and
+re-encodes them byte for byte.

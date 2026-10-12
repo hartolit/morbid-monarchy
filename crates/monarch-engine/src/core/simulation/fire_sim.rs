@@ -1,13 +1,10 @@
 use bevy::math::IVec2;
 use rand::{Rng, RngExt};
 
-use crate::core::{
-    physics::materials::is_combustible,
-    simulation::GridEvent,
-    world::{
-        cell::{FluidMat, SurfaceMat, WorldCell},
-        grid::CellGridReadView,
-    },
+use crate::core::{simulation::GridEvent, world::grid::CellGridReadView};
+use world_model::{
+    cell::WorldCell,
+    material::{FluidMat, SurfaceMat, is_combustible},
 };
 
 /// Burn ticks a flame survives once it has no liquid fuel left.

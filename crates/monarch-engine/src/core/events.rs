@@ -1,6 +1,6 @@
 use crate::core::world::chunk::CellChunk;
 use bevy::ecs::message::Message;
-use spatial_lib::prelude::math::ChunkKey;
+use world_model::spatial::ChunkKey;
 
 #[derive(Message)]
 pub struct ChunkUnloadEvent {

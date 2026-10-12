@@ -3,6 +3,7 @@ use crate::core::{
     world::grid::ActiveWorldGrid,
 };
 use bevy::prelude::*;
+use world_model::spatial::quad_cell;
 
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct ObserverConfig {
@@ -153,10 +154,7 @@ pub fn resolve_observer_kinematics(
 
             transform.translation += observer.velocity * delta_time;
 
-            let center_grid = bevy::math::IVec2::new(
-                transform.translation.x.floor() as i32,
-                (-transform.translation.z).floor() as i32,
-            );
+            let center_grid = quad_cell(transform.translation.x, transform.translation.z);
 
             let structural_floor = physics.get_floor_height(center_grid).unwrap_or(0.0);
             let contact_boundary = structural_floor + tuning.structural_height;

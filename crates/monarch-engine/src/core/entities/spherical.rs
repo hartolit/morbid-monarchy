@@ -12,18 +12,17 @@ use std::time::Instant;
 use crate::core::{
     counters::EngineCounters,
     entities::{DeformationProfile, GlobalPhysicsConfig, KinematicProfile},
-    physics::{
-        grid_physics::{DisplacementSlot, GridPhysicsApi},
-        materials::fluid_properties,
-    },
-    world::{
-        cell::{FluidMat, GranularMat},
-        grid::ActiveWorldGrid,
-    },
+    physics::grid_physics::{DisplacementSlot, GridPhysicsApi},
+    world::grid::ActiveWorldGrid,
+};
+use world_model::{
+    body::BODY_RELATIVE_DENSITY,
+    material::{FluidMat, GranularMat, fluid_properties},
+    spatial::nearest_cell,
 };
 
 /// Lower bound on a body's relative density; keeps the buoyancy ratio finite.
-const MIN_BODY_RELATIVE_DENSITY: f32 = 0.01;
+const MIN_BODY_RELATIVE_DENSITY: f32 = *BODY_RELATIVE_DENSITY.start();
 
 /// Position passes per substep. Each pass pushes the sphere out of its deepest overlap; a few
 /// passes settle creases where several triangles overlap it at once.
@@ -419,7 +418,7 @@ fn integrate_body_forces(
 ) {
     for (mut transform, mut sphere, kinematic, _) in spheres.iter_mut() {
         let position = transform.translation;
-        let center_cell = IVec2::new(position.x.round() as i32, (-position.z).round() as i32);
+        let center_cell = nearest_cell(position.x, position.z);
 
         let mut acceleration = global_config.gravity;
         let mut drag_rate = kinematic.air_drag_rate;
@@ -582,7 +581,7 @@ fn carve_impact_crater(
         .sqrt()
         .min(radius * sphere.max_deformation_size_ratio);
 
-    let center_cell = IVec2::new(center.x.round() as i32, (-center.z).round() as i32);
+    let center_cell = nearest_cell(center.x, center.z);
     let baseline = physics_api
         .get_floor_height(center_cell)
         .unwrap_or(center.y - radius);
@@ -940,10 +939,7 @@ fn press_rut(
             center,
             inner: radius * RUT_BERM_INNER_RATIO,
             outer: radius * RUT_BERM_OUTER_RATIO,
-            ceiling: plane.at(IVec2::new(
-                center.x.round() as i32,
-                (-center.z).round() as i32,
-            )) + radius * RUT_BERM_HEIGHT_RATIO,
+            ceiling: plane.at(nearest_cell(center.x, center.z)) + radius * RUT_BERM_HEIGHT_RATIO,
             max_per_cell: sphere.max_rim_deposit_per_cell,
             heading,
         },
@@ -1178,20 +1174,24 @@ fn ring_room(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::world::cell::{TerrainMat, WorldCell};
     use bevy::ecs::{entity::Entity, system::RunSystemOnce, world::World};
     use rand::{RngExt, SeedableRng, rngs::SmallRng};
     use std::time::Duration;
+    use world_model::{
+        body::{self, METAL_SPHERE, WOOD_SPHERE},
+        cell::WorldCell,
+        material::TerrainMat,
+    };
 
     const GRID_SIZE: i32 = 64;
-    const RADIUS: f32 = 4.0;
-    const MASS: f32 = 4.0;
+    const RADIUS: f32 = METAL_SPHERE.radius;
+    const MASS: f32 = METAL_SPHERE.mass;
     const FRAME_SECONDS: f32 = 1.0 / 60.0;
-    const STEEL_DENSITY: f32 = 7.8;
-    const WOOD_DENSITY: f32 = 0.6;
-    /// Matches the possession controls' drive acceleration and top speed.
-    const DRIVE_ACCELERATION: f32 = 250.0;
-    const MAX_DRIVE_SPEED: f32 = 40.0;
+    const STEEL_DENSITY: f32 = METAL_SPHERE.relative_density;
+    const WOOD_DENSITY: f32 = WOOD_SPHERE.relative_density;
+    /// The possession controls' drive acceleration and top speed.
+    const DRIVE_ACCELERATION: f32 = body::DRIVE_ACCELERATION;
+    const MAX_DRIVE_SPEED: f32 = body::DRIVE_MAX_SPEED;
 
     fn scale() -> f32 {
         GlobalPhysicsConfig::default().elevation_scale

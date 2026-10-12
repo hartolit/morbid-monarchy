@@ -7,6 +7,7 @@
 
 use bevy::{prelude::*, render::storage::ShaderBuffer};
 use monarch_engine::prelude::*;
+use world_model::cell::WorldCell;
 
 pub use crate::runtime::{
     dev_tools::{

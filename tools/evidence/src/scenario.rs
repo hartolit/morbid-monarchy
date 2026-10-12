@@ -14,6 +14,14 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use world_model::{
+    body::{self, BodyHandle},
+    command::{
+        AmbientTemperature, BodySpawn, Command, CommandError, Direction, EditTool, MaterialEdit,
+    },
+    config,
+    glam::IVec2,
+};
 
 use crate::identity::sha256_hex;
 
@@ -172,11 +180,35 @@ pub struct BodyGroup {
     pub at_tick: u64,
 }
 
+impl BodyGroup {
+    /// The group's spawns in spawn order: rows of `columns` bodies toward +x, then +y.
+    pub fn spawns(&self) -> Result<Vec<BodySpawn>, CommandError> {
+        let spacing = self.spacing_cells as i32;
+        (0..self.count as i32)
+            .map(|index| {
+                let columns = self.columns as i32;
+                let column = IVec2::from(self.origin_cell)
+                    + IVec2::new(index % columns, index / columns) * spacing;
+                BodySpawn::new(self.preset.model(), column, self.drop_height)
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BodyPreset {
     Metal,
     Wood,
+}
+
+impl BodyPreset {
+    pub fn model(self) -> body::BodyPreset {
+        match self {
+            Self::Metal => body::BodyPreset::Metal,
+            Self::Wood => body::BodyPreset::Wood,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -226,6 +258,99 @@ pub enum Action {
     },
 }
 
+impl Action {
+    /// Whether a drive action controls a body at `tick`; the caller chooses that body when the
+    /// drive starts.
+    pub fn drives_at(&self, tick: u64) -> bool {
+        matches!(*self, Self::Drive { from_tick, to_tick, .. } if (from_tick..=to_tick).contains(&tick))
+    }
+
+    /// The commands this action issues at timeline tick `tick`, in order. `driven` is the body
+    /// a drive action controls; without one, a drive issues nothing.
+    pub fn commands_at(
+        &self,
+        tick: u64,
+        driven: Option<BodyHandle>,
+    ) -> Result<Vec<Command>, CommandError> {
+        let active = |from: u64, to: u64| (from..=to).contains(&tick);
+        let mut commands = Vec::new();
+        match *self {
+            Self::Brush {
+                tool,
+                cell,
+                radius,
+                strength,
+                from_tick,
+                to_tick,
+                every_ticks,
+            } => {
+                if active(from_tick, to_tick)
+                    && every_ticks > 0
+                    && (tick - from_tick).is_multiple_of(every_ticks)
+                {
+                    let edit = MaterialEdit::new(tool.edit_tool(), cell.into(), radius, strength)?;
+                    commands.push(Command::EditMaterial(edit));
+                }
+            }
+            Self::Attract {
+                cell,
+                alternate_cell,
+                alternate_every_ticks,
+                from_tick,
+                to_tick,
+            } => {
+                if active(from_tick, to_tick) {
+                    let alternate = alternate_every_ticks > 0
+                        && ((tick - from_tick) / alternate_every_ticks) % 2 == 1;
+                    let target = match (alternate, alternate_cell) {
+                        (true, Some(alternate)) => alternate,
+                        _ => cell,
+                    };
+                    commands.push(Command::AttractBodies {
+                        target: target.into(),
+                    });
+                }
+            }
+            Self::Lift {
+                cell,
+                from_tick,
+                to_tick,
+            } => {
+                if active(from_tick, to_tick) {
+                    commands.push(Command::LiftBodies {
+                        target: cell.into(),
+                    });
+                }
+            }
+            Self::Climate {
+                ambient_temperature_c,
+                at_tick,
+            } => {
+                if tick == at_tick {
+                    commands.push(Command::SetAmbientTemperature(AmbientTemperature::celsius(
+                        ambient_temperature_c,
+                    )?));
+                }
+            }
+            Self::Drive {
+                direction,
+                from_tick,
+                to_tick,
+                jump_every_ticks,
+            } => {
+                if let Some(body) = driven.filter(|_| active(from_tick, to_tick)) {
+                    let direction = Direction::new(direction[0], direction[1])?;
+                    commands.push(Command::DriveBody { body, direction });
+                    if jump_every_ticks > 0 && (tick - from_tick).is_multiple_of(jump_every_ticks) {
+                        commands.push(Command::JumpBody { body });
+                    }
+                }
+            }
+        }
+        Ok(commands)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BrushTool {
@@ -237,6 +362,21 @@ pub enum BrushTool {
     Sand,
     Raise,
     Lower,
+}
+
+impl BrushTool {
+    pub fn edit_tool(self) -> EditTool {
+        match self {
+            Self::Water => EditTool::Water,
+            Self::Lava => EditTool::Lava,
+            Self::Oil => EditTool::Oil,
+            Self::Ice => EditTool::Ice,
+            Self::Fire => EditTool::Fire,
+            Self::Sand => EditTool::Sand,
+            Self::Raise => EditTool::Raise,
+            Self::Lower => EditTool::Lower,
+        }
+    }
 }
 
 /// A validated scenario with its file identity.
@@ -351,22 +491,35 @@ pub fn validate(
         );
     }
     check(
-        (1..=32).contains(&world.active_radius_chunks[0])
-            && (1..=32).contains(&world.active_radius_chunks[1]),
-        "active radius must be 1–32 chunks".to_owned(),
+        world
+            .active_radius_chunks
+            .iter()
+            .all(|radius| config::ACTIVE_RADIUS_CHUNKS.contains(radius)),
+        format!(
+            "active radius must be within {:?} chunks",
+            config::ACTIVE_RADIUS_CHUNKS
+        ),
     );
     check(
-        (1..=16).contains(&world.max_ticks_per_frame),
-        "max ticks per frame must be 1–16".to_owned(),
+        config::TICK_RATE_HZ.contains(&world.tick_rate_hz),
+        format!("tick rate must be within {:?} Hz", config::TICK_RATE_HZ),
     );
     check(
-        world.ambient_temperature_c.is_finite()
-            && (-30.0..=40.0).contains(&world.ambient_temperature_c),
-        "ambient temperature must be −30–40 °C".to_owned(),
+        config::MAX_TICKS_PER_FRAME.contains(&world.max_ticks_per_frame),
+        format!(
+            "max ticks per frame must be within {:?}",
+            config::MAX_TICKS_PER_FRAME
+        ),
     );
+    if let Err(error) = AmbientTemperature::celsius(world.ambient_temperature_c) {
+        check(false, format!("world: {error}"));
+    }
     check(
-        world.elevation_scale.is_finite() && (0.01..=5.0).contains(&world.elevation_scale),
-        "elevation scale must be 0.01–5.0".to_owned(),
+        config::ELEVATION_SCALE.contains(&world.elevation_scale),
+        format!(
+            "elevation scale must be within {:?}",
+            config::ELEVATION_SCALE
+        ),
     );
     let mut families = world.families.clone();
     families.sort();
@@ -426,33 +579,26 @@ pub fn validate(
             format!("body group {index} needs count and columns"),
         );
         check(
-            group.spacing_cells.is_finite() && group.spacing_cells > 0.0,
-            format!("body group {index} spacing must be positive"),
+            group.spacing_cells.is_finite()
+                && group.spacing_cells >= 1.0
+                && group.spacing_cells.fract() == 0.0,
+            format!("body group {index} spacing must be a positive whole number of cells"),
         );
-        check(
-            group.drop_height.is_finite() && group.drop_height >= 0.0,
-            format!("body group {index} drop height must be non-negative"),
-        );
+        if group.columns > 0
+            && let Err(error) = group.spawns()
+        {
+            check(false, format!("body group {index}: {error}"));
+        }
     }
 
     for (index, action) in scenario.actions.iter().enumerate() {
         let (from, to) = match action {
             Action::Brush {
-                radius,
-                strength,
                 every_ticks,
                 from_tick,
                 to_tick,
                 ..
             } => {
-                check(
-                    (0..=64).contains(radius),
-                    format!("action {index}: brush radius must be 0–64"),
-                );
-                check(
-                    *strength >= 1,
-                    format!("action {index}: brush strength must be 1–255"),
-                );
                 check(
                     *every_ticks >= 1,
                     format!("action {index}: every_ticks must be at least 1"),
@@ -475,28 +621,10 @@ pub fn validate(
             Action::Lift {
                 from_tick, to_tick, ..
             } => (*from_tick, *to_tick),
-            Action::Climate {
-                ambient_temperature_c,
-                at_tick,
-            } => {
-                check(
-                    ambient_temperature_c.is_finite()
-                        && (-30.0..=40.0).contains(ambient_temperature_c),
-                    format!("action {index}: ambient temperature must be −30–40 °C"),
-                );
-                (*at_tick, *at_tick)
-            }
+            Action::Climate { at_tick, .. } => (*at_tick, *at_tick),
             Action::Drive {
-                direction,
-                from_tick,
-                to_tick,
-                ..
+                from_tick, to_tick, ..
             } => {
-                let length = (direction[0] * direction[0] + direction[1] * direction[1]).sqrt();
-                check(
-                    length.is_finite() && length > 0.0,
-                    format!("action {index}: drive direction must be nonzero"),
-                );
                 check(
                     !scenario.bodies.is_empty(),
                     format!("action {index}: drive needs bodies"),
@@ -508,6 +636,11 @@ pub fn validate(
             from <= to,
             format!("action {index}: from_tick is after to_tick"),
         );
+        // The commands the action issues when it starts carry every value it can hold; an
+        // unsupported value cannot become a command.
+        if let Err(error) = action.commands_at(from, Some(BodyHandle::new(0, 0))) {
+            check(false, format!("action {index}: {error}"));
+        }
     }
 
     if problems.is_empty() {
@@ -610,6 +743,70 @@ every_ticks = 1
                 &VALID.replace("overlay = true", "overlay = true\nfps_cap = 30")
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn unsupported_values_are_refused_by_the_command_they_would_become() {
+        let strength_zero = parse(&VALID.replace("strength = 20", "strength = 0"));
+        let problems = validate(&strength_zero, "qualification", "flow").unwrap_err();
+        assert!(
+            problems.iter().any(|p| p.contains("brush strength 0")),
+            "{problems:?}"
+        );
+        let fractional = parse(&format!(
+            "{VALID}\n[[bodies]]\npreset = \"metal\"\ncount = 64\norigin_cell = [0, 0]\ncolumns = 8\nspacing_cells = 9.5\ndrop_height = 10.0\nat_tick = 0\n"
+        ));
+        assert!(validate(&fractional, "qualification", "flow").is_err());
+    }
+
+    #[test]
+    fn actions_become_commands_on_their_ticks_in_order() {
+        let scenario = parse(VALID);
+        let brush = &scenario.actions[0];
+        let commands = brush.commands_at(0, None).expect("valid");
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::EditMaterial(edit)]
+                if edit.tool() == EditTool::Water
+                    && edit.center() == IVec2::new(220, 300)
+                    && edit.radius() == 6
+                    && edit.strength() == 20
+        ));
+        assert!(brush.commands_at(100_001, None).expect("valid").is_empty());
+
+        let drive = Action::Drive {
+            direction: [-1.0, 1.0],
+            from_tick: 60,
+            to_tick: 1_000,
+            jump_every_ticks: 300,
+        };
+        let body = BodyHandle::new(3, 0);
+        assert!(!drive.drives_at(59) && drive.drives_at(60));
+        assert!(drive.commands_at(60, None).expect("valid").is_empty());
+        assert!(matches!(
+            drive.commands_at(60, Some(body)).expect("valid").as_slice(),
+            [Command::DriveBody { .. }, Command::JumpBody { body: jumped }] if *jumped == body
+        ));
+        assert_eq!(drive.commands_at(61, Some(body)).expect("valid").len(), 1);
+
+        let group = BodyGroup {
+            preset: BodyPreset::Wood,
+            count: 3,
+            origin_cell: [10, -4],
+            columns: 2,
+            spacing_cells: 9.0,
+            drop_height: 10.0,
+            at_tick: 0,
+        };
+        let columns: Vec<IVec2> = group
+            .spawns()
+            .expect("valid")
+            .iter()
+            .map(|spawn| spawn.column())
+            .collect();
+        assert_eq!(
+            columns,
+            [IVec2::new(10, -4), IVec2::new(19, -4), IVec2::new(10, 5)]
         );
     }
 }

@@ -1,5 +1,14 @@
 use bevy::prelude::*;
 use monarch_engine::prelude::{spherical::DynamicRigidSphere, *};
+use world_model::{
+    body::{
+        self, ATTRACT_ACCELERATION, LIFT_ACCELERATION, LIFT_CENTERING_ACCELERATION,
+        LIFT_INFLUENCE_RADIUS,
+    },
+    cell::WorldCell,
+    material::{FluidMat, GranularMat, SurfaceMat},
+    spatial::quad_cell,
+};
 
 use crate::runtime::{
     dev_tools::{BrushSettings, GridBrush},
@@ -10,39 +19,30 @@ use crate::runtime::{
 
 const RAYMARCH_MAX_DIST: f32 = 1000.0;
 const SPHERE_SPAWN_OFFSET_Y: f32 = 10.0;
-const SPHERE_SPAWN_RADIUS: f32 = 4.0;
 
-/// Physical and visual parameters for a spawnable sphere.
-struct SpherePreset {
-    mass: f32,
-    /// Density relative to water; decides whether the sphere floats.
-    relative_density: f32,
+/// A spawnable sphere: its physics from `world_model::body`, and how it looks.
+struct SphereLook {
+    preset: body::SpherePreset,
     color: Color,
     metallic: f32,
     roughness: f32,
 }
 
-const METAL_SPHERE: SpherePreset = SpherePreset {
-    mass: 4.0,
-    relative_density: 7.8,
+const METAL_SPHERE: SphereLook = SphereLook {
+    preset: body::METAL_SPHERE,
     color: Color::srgb(0.6, 0.6, 0.65),
     metallic: 0.8,
     roughness: 0.2,
 };
 
-/// Same volume as the metal sphere, so mass scales with the density ratio (0.6 / 7.8).
-const WOOD_SPHERE: SpherePreset = SpherePreset {
-    mass: 0.31,
-    relative_density: 0.6,
+const WOOD_SPHERE: SphereLook = SphereLook {
+    preset: body::WOOD_SPHERE,
     color: Color::srgb(0.55, 0.38, 0.22),
     metallic: 0.0,
     roughness: 0.8,
 };
 
-const ATTRACT_FORCE_MAGNITUDE: f32 = 350.0;
-const LIFT_ACCELERATION: f32 = 250.0;
-const LIFT_CENTERING_FORCE: f32 = 40.0;
-const LIFT_INFLUENCE_RADIUS_SQ: f32 = 22500.0;
+const LIFT_INFLUENCE_RADIUS_SQ: f32 = LIFT_INFLUENCE_RADIUS * LIFT_INFLUENCE_RADIUS;
 const EPSILON_DIST_SQ: f32 = 0.0001;
 
 /// Validates absolute mathematical grid inclusion to prevent memory panics.
@@ -82,8 +82,10 @@ pub fn raymarch_grid(ray: &Ray3d, grid: &ActiveWorldGrid, elevation_scale: f32) 
     let start_pos = ray.origin;
 
     // Isolate mathematical origin coordinates
-    let mut cx = start_pos.x.floor() as i32;
-    let mut cy = (-start_pos.z).floor() as i32;
+    let IVec2 {
+        x: mut cx,
+        y: mut cy,
+    } = quad_cell(start_pos.x, start_pos.z);
 
     // Vector step directions mapped to the grid's topology (cy acts against -Z)
     let step_x = if ray.direction.x > 0.0 { 1 } else { -1 };
@@ -198,8 +200,9 @@ pub fn update_brush_cursor(
 
     let update_mat = |mat: &mut WorldWindowUniform| {
         if let Some(pos) = hit_pos {
-            mat.head_cursor.z = pos.x.floor();
-            mat.head_cursor.w = (-pos.z).floor();
+            let cell = quad_cell(pos.x, pos.z);
+            mat.head_cursor.z = cell.x as f32;
+            mat.head_cursor.w = cell.y as f32;
             mat.config.y = cursor_radius;
         } else {
             mat.config.y = -1.0;
@@ -272,10 +275,7 @@ pub fn handle_brush_input(
         return;
     }
 
-    let center = IVec2::new(
-        hit_position.x.floor() as i32,
-        (-hit_position.z).floor() as i32,
-    );
+    let center = quad_cell(hit_position.x, hit_position.z);
     apply_brush(&mut grid, *brush, &settings, center);
 }
 
@@ -306,7 +306,7 @@ pub fn spawn_sphere(
         hit,
         drop_height,
     } = request;
-    let cell_pos = IVec2::new(hit.x.floor() as i32, (-hit.z).floor() as i32);
+    let cell_pos = quad_cell(hit.x, hit.z);
     let mut spawn_y = drop_height;
 
     if is_within_grid(cell_pos, grid) {
@@ -315,19 +315,20 @@ pub fn spawn_sphere(
         spawn_y = floor_h + drop_height;
     }
 
-    let preset = if wood { &WOOD_SPHERE } else { &METAL_SPHERE };
+    let look = if wood { &WOOD_SPHERE } else { &METAL_SPHERE };
+    let preset = look.preset;
 
     commands
         .spawn((
-            Mesh3d(meshes.add(Sphere::new(SPHERE_SPAWN_RADIUS))),
+            Mesh3d(meshes.add(Sphere::new(preset.radius))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: preset.color,
-                metallic: preset.metallic,
-                perceptual_roughness: preset.roughness,
+                base_color: look.color,
+                metallic: look.metallic,
+                perceptual_roughness: look.roughness,
                 ..default()
             })),
             Transform::from_translation(Vec3::new(hit.x, spawn_y, hit.z)),
-            DynamicRigidSphere::new(preset.mass, SPHERE_SPAWN_RADIUS, preset.relative_density),
+            DynamicRigidSphere::new(preset.mass, preset.radius, preset.relative_density),
             KinematicProfile::default(),
             DeformationProfile::default(),
         ))
@@ -465,7 +466,7 @@ pub fn attract_sphere(
 
     if dist_sq > EPSILON_DIST_SQ {
         let direction = to_target.normalize();
-        sphere.velocity += direction * ATTRACT_FORCE_MAGNITUDE * dt;
+        sphere.velocity += direction * ATTRACT_ACCELERATION * dt;
     }
 }
 
@@ -516,7 +517,7 @@ pub fn lift_sphere(
 
         if distance_squared > EPSILON_DIST_SQ {
             let horizontal_direction = horizontal_offset.normalize();
-            sphere.velocity += horizontal_direction * LIFT_CENTERING_FORCE * delta_time;
+            sphere.velocity += horizontal_direction * LIFT_CENTERING_ACCELERATION * delta_time;
         }
     }
 }

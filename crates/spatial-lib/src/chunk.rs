@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 pub mod manager;
-pub mod math;
 pub mod storage;
 
 /// A rigid spatial container for dense voxel or cellular data.
@@ -10,7 +9,6 @@ pub mod storage;
 /// accidental vector resizing/reallocations during runtime while preventing
 /// the stack overflows associated with massive raw arrays.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "redb-storage", derive(bitcode::Encode, bitcode::Decode))]
 pub struct Chunk<T, M = ()> {
     pub cells: Box<[T]>,
     pub metadata: M,

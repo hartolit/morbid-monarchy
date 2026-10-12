@@ -1,13 +1,13 @@
 use crate::core::{
-    physics::materials::fluid_properties,
     simulation::DonorMask,
     utils::{FlowPattern, ShuffledDirs, compass_forward, spatial_hash},
-    world::{
-        cell::{CompassFlags, FluidMat, GranularMat, WorldCell},
-        grid::CellGridReadView,
-    },
+    world::grid::CellGridReadView,
 };
 use bevy::math::IVec2;
+use world_model::{
+    cell::WorldCell,
+    material::{CompassFlags, FluidMat, GranularMat, fluid_properties},
+};
 
 /// Bed erosion triggers when the masked hash falls below the erosive flux, so the odds per
 /// tick are `flux / (EROSION_MASK + 1)`.

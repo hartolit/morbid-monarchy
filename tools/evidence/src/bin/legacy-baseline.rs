@@ -9,9 +9,11 @@
 //!     --asset-dir crates/morbid-app/assets [--gpu-timestamps]
 //! ```
 //!
-//! The timeline starts once every active chunk is resident. Physical actions are applied per
-//! completed simulation tick (several in one frame when the clock catches up), so the simulated
-//! content does not depend on the frame rate. The camera follows its path by logical tick.
+//! The timeline starts once every active chunk is resident. For every completed simulation tick
+//! (several in one frame when the clock catches up) the scenario issues `world_model` commands,
+//! and the driver executes them through the baseline's tool functions, so the simulated content
+//! does not depend on the frame rate. The camera follows its path by logical tick. The driven
+//! body's state is recorded as `world_model` observations.
 
 use std::{
     collections::BTreeMap, fmt::Write as _, fs, path::PathBuf, process::ExitCode,
@@ -35,9 +37,7 @@ use monarch_engine::{
 };
 use monarchy_evidence::{
     measurement::{CSV_HEADER, FrameSample, distribution},
-    scenario::{
-        self, Action, BodyPreset, BrushTool, Family, LoadedScenario, PresentMode, Scenario,
-    },
+    scenario::{self, Family, LoadedScenario, PresentMode, Scenario},
 };
 use morbid_app::{
     AppOptions, InputMode, WindowRequest,
@@ -49,6 +49,12 @@ use morbid_app::{
     build_app,
 };
 use spatial_lib::prelude::manager::ChunkManager;
+use world_model::{
+    body::{BodyHandle, BodyPreset},
+    command::{Command, EditTool},
+    observation::BodyObservation,
+    spatial::{CHUNK_SIZE, cell_render_xz},
+};
 
 /// Driver summary layout version; the bench runner refuses other versions.
 const SUMMARY_SCHEMA: u32 = 1;
@@ -243,7 +249,12 @@ struct Driver {
     timeline_start_tick: u64,
     /// Timeline tick when the current frame started, before it simulated.
     frame_start_tick: u64,
-    driven_body: Option<Entity>,
+    /// Bodies the run spawned, in spawn order. A handle's index is a position here; the
+    /// baseline never despawns a body, so every generation is 0.
+    bodies: Vec<Entity>,
+    driven_body: Option<BodyHandle>,
+    /// The driven body's state at the end of each measured frame.
+    observations: Vec<BodyObservation>,
     previous: CounterSnapshot,
     /// The frame recorded in `Last`, completed with its duration at the next `First`.
     pending: Option<FrameSample>,
@@ -272,7 +283,9 @@ impl Driver {
             applied_tick: None,
             timeline_start_tick: 0,
             frame_start_tick: 0,
+            bodies: Vec::new(),
             driven_body: None,
+            observations: Vec::new(),
             previous: CounterSnapshot::default(),
             pending: None,
             samples: Vec::new(),
@@ -442,52 +455,47 @@ fn advance_timeline(
         .next()
         .map(|transform| transform.translation);
 
-    // Borrow the plan and the driven-body slot separately so actions are not cloned per tick.
+    // Borrow the plan and the body slots separately so actions are not cloned per tick.
     let Driver {
         scenario,
+        bodies,
         driven_body,
         ..
     } = &mut *driver;
+    let context = TickContext {
+        tick_seconds,
+        scale,
+    };
+    let mut commands = Vec::new();
     for t in first..=tick {
+        // Spawns first, then the actions in file order: the order the commands take effect.
+        commands.clear();
         for group in scenario.bodies.iter().filter(|group| group.at_tick == t) {
-            for index in 0..group.count {
-                let x = group.origin_cell[0] as f32
-                    + (index % group.columns) as f32 * group.spacing_cells;
-                let y = group.origin_cell[1] as f32
-                    + (index / group.columns) as f32 * group.spacing_cells;
-                spawn_sphere(
-                    &mut spawn.commands,
-                    &mut spawn.meshes,
-                    &mut spawn.materials,
-                    &grid,
-                    scale,
-                    SphereSpawn {
-                        wood: group.preset == BodyPreset::Wood,
-                        hit: Vec3::new(x, 0.0, -y),
-                        drop_height: group.drop_height,
-                    },
-                );
-            }
+            let spawns = group.spawns().expect("validated when loaded");
+            commands.extend(spawns.into_iter().map(Command::SpawnBody));
         }
-        let context = TickContext {
-            tick: t,
-            tick_seconds,
-            scale,
-            observer_position,
-        };
         for action in &scenario.actions {
-            if let Action::Climate {
-                ambient_temperature_c,
-                at_tick,
-            } = *action
+            if action.drives_at(t)
+                && driven_body.is_none()
+                && let Some(origin) = observer_position
             {
-                // `simulate_world` notices the change and wakes the window, as for the slider.
-                if at_tick == t {
-                    settings.simulation.ambient_temperature_c = ambient_temperature_c;
-                }
-                continue;
+                *driven_body = nearest_body(bodies, &actors, origin);
             }
-            apply_action(action, &context, &mut grid, &mut actors, driven_body);
+            let issued = action
+                .commands_at(t, *driven_body)
+                .expect("validated when loaded");
+            commands.extend(issued);
+        }
+        for command in &commands {
+            execute(
+                command,
+                &context,
+                &mut grid,
+                &mut actors,
+                &mut spawn,
+                &mut settings,
+                bodies,
+            );
         }
     }
     driver.applied_tick = Some(tick);
@@ -501,128 +509,121 @@ fn advance_timeline(
     }
 }
 
-/// Values every action reads for the tick being applied.
+/// Values every command reads for the tick being applied.
 #[derive(Clone, Copy)]
 struct TickContext {
-    tick: u64,
     tick_seconds: f32,
     scale: f32,
-    observer_position: Option<Vec3>,
 }
 
-/// Applies one action for the context's tick, if it is active then.
-fn apply_action(
-    action: &Action,
+/// The body nearest the observer: the one a drive action possesses.
+fn nearest_body(bodies: &[Entity], actors: &Actors, origin: Vec3) -> Option<BodyHandle> {
+    let (entity, _, _) = actors.bodies.iter().min_by(|a, b| {
+        a.1.translation
+            .distance_squared(origin)
+            .total_cmp(&b.1.translation.distance_squared(origin))
+    })?;
+    let index = bodies.iter().position(|body| *body == entity)?;
+    Some(BodyHandle::new(index as u32, 0))
+}
+
+/// Carries out one command for the context's tick through the baseline's tool functions, the
+/// same ones the mouse and keyboard call.
+fn execute(
+    command: &Command,
     context: &TickContext,
     grid: &mut ActiveWorldGrid,
     actors: &mut Actors,
-    driven_body: &mut Option<Entity>,
+    spawn: &mut SpawnTargets,
+    settings: &mut Settings,
+    bodies: &mut Vec<Entity>,
 ) {
     let TickContext {
-        tick: t,
         tick_seconds,
         scale,
-        observer_position,
     } = *context;
-    match *action {
-        Action::Brush {
-            tool,
-            cell,
-            radius,
-            strength,
-            from_tick,
-            to_tick,
-            every_ticks,
-        } => {
-            if (from_tick..=to_tick).contains(&t) && (t - from_tick) % every_ticks == 0 {
-                let settings = BrushSettings { radius, strength };
-                apply_brush(grid, grid_brush(tool), &settings, IVec2::from(cell));
-            }
+    let body = |handle: BodyHandle| {
+        bodies
+            .get(handle.index() as usize)
+            .filter(|_| handle.generation() == 0)
+            .copied()
+    };
+    match *command {
+        Command::EditMaterial(edit) => {
+            let settings = BrushSettings {
+                radius: edit.radius(),
+                strength: edit.strength(),
+            };
+            apply_brush(grid, grid_brush(edit.tool()), &settings, edit.center());
         }
-        Action::Attract {
-            cell,
-            alternate_cell,
-            alternate_every_ticks,
-            from_tick,
-            to_tick,
-        } => {
-            if (from_tick..=to_tick).contains(&t) {
-                let alternate =
-                    alternate_every_ticks > 0 && ((t - from_tick) / alternate_every_ticks) % 2 == 1;
-                let target_cell = match (alternate, alternate_cell) {
-                    (true, Some(alternate)) => alternate,
-                    _ => cell,
-                };
-                let target = column_point(grid, target_cell, scale);
-                for (_, transform, mut body) in &mut actors.bodies {
-                    attract_sphere(transform, &mut body, target, tick_seconds);
-                }
-            }
+        Command::SpawnBody(request) => {
+            let (x, z) = cell_render_xz(request.column());
+            let entity = spawn_sphere(
+                &mut spawn.commands,
+                &mut spawn.meshes,
+                &mut spawn.materials,
+                grid,
+                scale,
+                SphereSpawn {
+                    wood: request.preset() == BodyPreset::Wood,
+                    hit: Vec3::new(x, 0.0, z),
+                    drop_height: request.drop_height(),
+                },
+            );
+            bodies.push(entity);
         }
-        Action::Lift {
-            cell,
-            from_tick,
-            to_tick,
-        } => {
-            if (from_tick..=to_tick).contains(&t) {
-                let target = column_point(grid, cell, scale);
-                for (_, transform, mut body) in &mut actors.bodies {
-                    lift_sphere(transform, &mut body, target, tick_seconds);
-                }
-            }
-        }
-        Action::Climate { .. } => {}
-        Action::Drive {
+        Command::DriveBody {
+            body: handle,
             direction,
-            from_tick,
-            to_tick,
-            jump_every_ticks,
         } => {
-            if !(from_tick..=to_tick).contains(&t) {
-                return;
-            }
-            if driven_body.is_none()
-                && let Some(origin) = observer_position
+            if let Some(entity) = body(handle)
+                && let Ok((_, _, mut sphere)) = actors.bodies.get_mut(entity)
             {
-                *driven_body = actors
-                    .bodies
-                    .iter()
-                    .min_by(|a, b| {
-                        a.1.translation
-                            .distance_squared(origin)
-                            .total_cmp(&b.1.translation.distance_squared(origin))
-                    })
-                    .map(|(entity, _, _)| entity);
+                let (x, z) = direction.render_xz();
+                drive_sphere(&mut sphere, Vec3::new(x, 0.0, z), tick_seconds);
             }
-            if let Some(entity) = *driven_body
-                && let Ok((_, _, mut body)) = actors.bodies.get_mut(entity)
+        }
+        Command::JumpBody { body: handle } => {
+            if let Some(entity) = body(handle)
+                && let Ok((_, _, mut sphere)) = actors.bodies.get_mut(entity)
             {
-                let move_dir = Vec3::new(direction[0], 0.0, -direction[1]).normalize();
-                drive_sphere(&mut body, move_dir, tick_seconds);
-                if jump_every_ticks > 0 && (t - from_tick) % jump_every_ticks == 0 {
-                    jump_sphere(&mut body);
-                }
+                jump_sphere(&mut sphere);
             }
+        }
+        Command::AttractBodies { target } => {
+            let target = column_point(grid, target, scale);
+            for (_, transform, mut sphere) in &mut actors.bodies {
+                attract_sphere(transform, &mut sphere, target, tick_seconds);
+            }
+        }
+        Command::LiftBodies { target } => {
+            let target = column_point(grid, target, scale);
+            for (_, transform, mut sphere) in &mut actors.bodies {
+                lift_sphere(transform, &mut sphere, target, tick_seconds);
+            }
+        }
+        // `simulate_world` notices the change and wakes the window, as for the slider.
+        Command::SetAmbientTemperature(temperature) => {
+            settings.simulation.ambient_temperature_c = temperature.degrees();
         }
     }
 }
 
-fn grid_brush(tool: BrushTool) -> GridBrush {
+fn grid_brush(tool: EditTool) -> GridBrush {
     match tool {
-        BrushTool::Water => GridBrush::Water,
-        BrushTool::Lava => GridBrush::Lava,
-        BrushTool::Oil => GridBrush::Oil,
-        BrushTool::Ice => GridBrush::Ice,
-        BrushTool::Fire => GridBrush::Fire,
-        BrushTool::Sand => GridBrush::Sand,
-        BrushTool::Raise => GridBrush::RaiseTerrain,
-        BrushTool::Lower => GridBrush::LowerTerrain,
+        EditTool::Water => GridBrush::Water,
+        EditTool::Lava => GridBrush::Lava,
+        EditTool::Oil => GridBrush::Oil,
+        EditTool::Ice => GridBrush::Ice,
+        EditTool::Fire => GridBrush::Fire,
+        EditTool::Sand => GridBrush::Sand,
+        EditTool::Raise => GridBrush::RaiseTerrain,
+        EditTool::Lower => GridBrush::LowerTerrain,
     }
 }
 
 /// The top of the column at `cell`, where the pointer tools would hit it.
-fn column_point(grid: &ActiveWorldGrid, cell: [i32; 2], scale: f32) -> Vec3 {
-    let position = IVec2::from(cell);
+fn column_point(grid: &ActiveWorldGrid, position: IVec2, scale: f32) -> Vec3 {
     let lower = grid.spatial.window_origin;
     let upper = lower + IVec2::new(grid.spatial.width, grid.spatial.height);
     let inside = position.cmpge(lower).all() && position.cmplt(upper).all();
@@ -631,7 +632,8 @@ fn column_point(grid: &ActiveWorldGrid, cell: [i32; 2], scale: f32) -> Vec3 {
     } else {
         0.0
     };
-    Vec3::new(cell[0] as f32, top, -(cell[1] as f32))
+    let (x, z) = cell_render_xz(position);
+    Vec3::new(x, top, z)
 }
 
 /// Records the frame's work once the timeline is running.
@@ -656,6 +658,18 @@ fn record_frame(world: &mut World) {
         .next()
         .map(|window| [window.physical_width(), window.physical_height()]);
     let tick = u64::from(world.resource::<ActiveWorldGrid>().tick);
+    let driven = {
+        let driver = world.resource::<Driver>();
+        driver.driven_body.and_then(|handle| {
+            let entity = *driver.bodies.get(handle.index() as usize)?;
+            Some((handle, entity))
+        })
+    };
+    let driven_state = driven.and_then(|(handle, entity)| {
+        let transform = world.get::<Transform>(entity)?;
+        let sphere = world.get::<DynamicRigidSphere>(entity)?;
+        Some((handle, transform.translation, sphere.clone()))
+    });
     let frame_in_timeline = world.resource::<Driver>().frame - start_frame;
     let awake_cells = frame_in_timeline
         .is_multiple_of(AWAKE_EVERY_FRAMES)
@@ -753,6 +767,16 @@ fn record_frame(world: &mut World) {
     driver.previous = snapshot;
     driver.pending = Some(sample);
     driver.ticks_at_end = Some(timeline_tick);
+    if measured && let Some((body, position, sphere)) = driven_state {
+        driver.observations.push(BodyObservation {
+            body,
+            tick: timeline_tick,
+            position: position.to_array(),
+            velocity: sphere.velocity.to_array(),
+            grounded: sphere.is_grounded,
+            submerged_fraction: sphere.submerged_fraction,
+        });
+    }
 
     if let Some(size) = window {
         let requested = driver.scenario.presentation.resolution;
@@ -827,6 +851,7 @@ fn write_outputs(driver: &Driver, status: &str) {
         .collect();
     let summary = serde_json::json!({
         "schema": SUMMARY_SCHEMA,
+        "driven_body": driven_body_summary(&driver.observations),
         "status": status,
         "scenario": driver.arguments.scenario,
         "scenario_sha256": driver.scenario_sha256,
@@ -850,6 +875,29 @@ fn write_outputs(driver: &Driver, status: &str) {
     if let Err(error) = fs::write(&driver.arguments.summary, text + "\n") {
         eprintln!("legacy-baseline: write summary: {error}");
     }
+}
+
+/// What the measured window observed of the driven body, or null when nothing was driven.
+fn driven_body_summary(observations: &[BodyObservation]) -> serde_json::Value {
+    let Some(last) = observations.last() else {
+        return serde_json::Value::Null;
+    };
+    let frames = observations.len();
+    let share = |count: usize| count as f64 / frames as f64;
+    serde_json::json!({
+        "body_index": last.body.index(),
+        "observed_frames": frames,
+        "grounded_share": share(observations.iter().filter(|o| o.grounded).count()),
+        "submerged_share": share(observations.iter().filter(|o| o.submerged_fraction > 0.0).count()),
+        "speed": distribution(observations.iter().map(|o| f64::from(o.speed()))),
+        "last": {
+            "tick": last.tick,
+            "position": last.position,
+            "velocity": last.velocity,
+            "grounded": last.grounded,
+            "submerged_fraction": last.submerged_fraction,
+        },
+    })
 }
 
 /// Records the adapter Bevy selected, once the renderer has reported it.
