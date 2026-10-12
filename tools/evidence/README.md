@@ -30,6 +30,10 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
   it.
 - `scenarios/<profile>/<case>.toml` are the frozen measurement workloads. Validation rejects a file
   whose world size, resolution, tick rate or body count differs from its profile.
+- `baselines/legacy-6e108d6/` holds the measured legacy baseline: each bench `report.json` with
+  GPU process arguments removed and paths made relative, plus the SHA-256 of every raw file the
+  run left in `target/evidence/`. The raw samples stay on the measuring machine. The conclusions
+  are in [performance budgets](../../docs/reference/performance-budgets.md#measured-legacy-baseline-01).
 
 ## Baseline driver
 

@@ -610,7 +610,7 @@ pub struct Contention {
     pub load_average: Option<String>,
     pub gpu_utilization_percent: Option<u64>,
     pub gpu_memory_used_mib: Option<u64>,
-    /// Other processes nvidia-smi reports on the GPU: `pid name MiB`.
+    /// Other processes nvidia-smi reports on the GPU: `pid, executable, MiB`, without arguments.
     pub gpu_processes: Vec<String>,
 }
 
@@ -644,15 +644,21 @@ impl Contention {
                 "--query-compute-apps=pid,process_name,used_memory",
                 "--format=csv,noheader,nounits",
             ])
-            .map(|text| {
-                text.lines()
-                    .map(|line| line.trim().to_owned())
-                    .filter(|line| !line.is_empty())
-                    .collect()
-            })
+            .map(|text| text.lines().filter_map(gpu_process_entry).collect())
             .unwrap_or_default(),
         }
     }
+}
+
+/// One `pid, process_name, used_memory` line from nvidia-smi as `pid, executable, MiB`. The name
+/// is the full command line, whose arguments can carry private paths and tokens, so only the
+/// executable's file name is kept.
+fn gpu_process_entry(line: &str) -> Option<String> {
+    let (pid, rest) = line.trim().split_once(',')?;
+    let (name, mib) = rest.rsplit_once(',')?;
+    let executable = name.split_whitespace().next()?;
+    let executable = executable.rsplit('/').next().unwrap_or(executable);
+    Some(format!("{}, {executable}, {}", pid.trim(), mib.trim()))
 }
 
 /// Aggregate CPU busy share over `window`: non-idle jiffies over all jiffies on the `cpu` line.
@@ -700,6 +706,22 @@ fn gpu_memory_mib(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_processes_keep_only_the_executable_name() {
+        assert_eq!(
+            gpu_process_entry(
+                "228537, /opt/app/Discord --type=gpu-process --user-data-dir=/home/a/.config, 115"
+            )
+            .as_deref(),
+            Some("228537, Discord, 115")
+        );
+        assert_eq!(
+            gpu_process_entry(" 2963, /usr/bin/kwin_wayland, 215 ").as_deref(),
+            Some("2963, kwin_wayland, 215")
+        );
+        assert_eq!(gpu_process_entry("no fields"), None);
+    }
 
     #[test]
     fn case_summary_takes_worst_tails_across_runs() {
