@@ -14,6 +14,8 @@ use crate::{
 /// Rule files retired in favour of `AGENTS.md` and the practices; they must not return as a
 /// second active rule set.
 const RETIRED_RULE_PATHS: [&str; 3] = ["docs/persona.md", "docs/rules.md", "docs/knowledge"];
+/// The owner of package boundaries; every workspace package is named there.
+const ARCHITECTURE: &str = "docs/architecture.md";
 
 pub fn run(root: &Path, workspace: Option<&Workspace>) -> Vec<Item> {
     let markdown = markdown_files(root);
@@ -153,7 +155,8 @@ fn assignment_structure_item(root: &Path) -> Item {
     .with_details(problems)
 }
 
-/// Every workspace package explains itself in a README beside its manifest.
+/// Every workspace package explains itself in a README beside its manifest, and the
+/// architecture names it, so no package appears without a documented owner.
 fn package_readme_item(root: &Path, workspace: Option<&Workspace>) -> Item {
     let Some(workspace) = workspace else {
         return Item::new(
@@ -162,7 +165,8 @@ fn package_readme_item(root: &Path, workspace: Option<&Workspace>) -> Item {
             "workspace metadata unavailable; package introductions not checked",
         );
     };
-    let missing: Vec<String> = workspace
+    let architecture = fs::read_to_string(root.join(ARCHITECTURE)).unwrap_or_default();
+    let mut missing: Vec<String> = workspace
         .members()
         .filter(|package| !package.dir.join("README.md").is_file())
         .map(|package| {
@@ -173,6 +177,12 @@ fn package_readme_item(root: &Path, workspace: Option<&Workspace>) -> Item {
             )
         })
         .collect();
+    missing.extend(
+        workspace
+            .members()
+            .filter(|package| !architecture.contains(&format!("`{}`", package.name)))
+            .map(|package| format!("{ARCHITECTURE} does not name `{}`", package.name)),
+    );
     let state = if missing.is_empty() {
         State::Passed
     } else {
@@ -181,7 +191,10 @@ fn package_readme_item(root: &Path, workspace: Option<&Workspace>) -> Item {
     Item::new(
         "docs.package-readmes",
         state,
-        format!("{} workspace packages", workspace.members().count()),
+        format!(
+            "{} workspace packages, each with a README and named in {ARCHITECTURE}",
+            workspace.members().count()
+        ),
     )
     .with_details(missing)
 }

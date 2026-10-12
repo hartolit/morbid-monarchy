@@ -6,8 +6,11 @@
 //!
 //! ```text
 //! legacy-baseline --scenario FILE --world-dir NEW_DIR --samples FILE --summary FILE \
-//!     --asset-dir crates/morbid-app/assets [--gpu-timestamps]
+//!     --asset-dir crates/morbid-app/assets [--gpu-timestamps] [--screenshot TICK:FILE.png]...
 //! ```
+//!
+//! `--screenshot` saves the window at the first frame that reaches timeline tick `TICK`; it is
+//! for the visual reference, not for measured runs, and the bench never passes it.
 //!
 //! The timeline starts once every active chunk is resident. For every completed simulation tick
 //! (several in one frame when the clock catches up) the scenario issues `world_model` commands,
@@ -25,7 +28,11 @@ use bevy::{
     diagnostic::DiagnosticsStore,
     ecs::system::SystemParam,
     prelude::*,
-    render::{diagnostic::RenderDiagnosticsPlugin, renderer::RenderAdapterInfo},
+    render::{
+        diagnostic::RenderDiagnosticsPlugin,
+        renderer::RenderAdapterInfo,
+        view::screenshot::{Screenshot, save_to_disk},
+    },
 };
 use monarch_engine::{
     core::{
@@ -70,6 +77,8 @@ struct Arguments {
     summary: PathBuf,
     asset_dir: PathBuf,
     gpu_timestamps: bool,
+    /// Timeline ticks at which to save the window, and where.
+    screenshots: Vec<(u64, PathBuf)>,
 }
 
 fn main() -> ExitCode {
@@ -125,10 +134,21 @@ fn main() -> ExitCode {
 fn parse_arguments() -> Result<Arguments, String> {
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     let mut gpu_timestamps = false;
+    let mut screenshots = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--gpu-timestamps" => gpu_timestamps = true,
+            "--screenshot" => {
+                let value = args.next().ok_or("--screenshot needs TICK:FILE")?;
+                let (tick, file) = value
+                    .split_once(':')
+                    .ok_or_else(|| format!("--screenshot `{value}` is not TICK:FILE"))?;
+                let tick = tick
+                    .parse()
+                    .map_err(|_| format!("--screenshot tick `{tick}` is not a number"))?;
+                screenshots.push((tick, PathBuf::from(file)));
+            }
             "--scenario" | "--world-dir" | "--samples" | "--summary" | "--asset-dir" => {
                 let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?;
                 values.insert(arg, value);
@@ -148,6 +168,7 @@ fn parse_arguments() -> Result<Arguments, String> {
         samples: take("--samples")?,
         summary: take("--summary")?,
         asset_dir: take("--asset-dir")?,
+        screenshots,
         gpu_timestamps,
     })
 }
@@ -501,6 +522,19 @@ fn advance_timeline(
     driver.applied_tick = Some(tick);
     driver.timeline_start_tick = start_tick;
     driver.frame_start_tick = tick;
+
+    let due: Vec<PathBuf> = {
+        let screenshots = &mut driver.arguments.screenshots;
+        let (now, later) = screenshots.drain(..).partition(|(at, _)| *at <= tick);
+        *screenshots = later;
+        now.into_iter().map(|(_, file)| file).collect()
+    };
+    for file in due {
+        spawn
+            .commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(file));
+    }
 
     let camera = &driver.scenario.camera;
     let position = camera_position(camera, path_cell(camera, tick));

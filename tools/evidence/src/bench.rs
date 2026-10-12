@@ -24,7 +24,7 @@ use crate::{
     paths,
     process::{Step, run_logged},
     report::{Item, State},
-    scenario::{self, LoadedScenario},
+    scenario::{self, LoadedScenario, RunPlan},
 };
 
 const DRIVER_BINARY: &str = "legacy-baseline";
@@ -559,28 +559,14 @@ fn validate_run(
         });
     match samples {
         Ok(samples) => {
-            let plan = &loaded.scenario.run;
             let statistics = measurement::run_statistics(&samples);
-            let window_end = plan.warmup_ticks + plan.measured_ticks;
-            let final_tick = samples.last().map_or(0, |sample| sample.tick);
-            // A frame is measured when it starts at or after the warm-up ticks, so the first
-            // measured frame may start up to one catch-up batch after them.
-            let latest_start =
-                plan.warmup_ticks + u64::from(loaded.scenario.world.max_ticks_per_frame) - 1;
-            match samples.iter().find(|sample| sample.measured) {
-                None => result.problems.push("no measured frames".to_owned()),
-                Some(first) => {
-                    let first_start = first.tick - first.ticks;
-                    if !(plan.warmup_ticks..=latest_start).contains(&first_start)
-                        || final_tick < window_end
-                        || statistics.ticks != final_tick - first_start
-                    {
-                        result.problems.push(format!(
-                            "measured window from tick {first_start} to {final_tick} with {} ticks; expected a start in {}..={latest_start}, an end at or after {window_end}, and no missing ticks",
-                            statistics.ticks, plan.warmup_ticks
-                        ));
-                    }
-                }
+            if let Some(problem) = measured_window_problem(
+                &loaded.scenario.run,
+                loaded.scenario.world.max_ticks_per_frame,
+                &samples,
+                statistics.ticks,
+            ) {
+                result.problems.push(problem);
             }
             result.below_frame_protocol = statistics.measured_frames < PROTOCOL_MEASURED_FRAMES;
             if let Some(pacing) = statistics.presentation_pacing {
@@ -600,6 +586,35 @@ fn validate_run(
         Err(error) => result.problems.push(format!("samples: {error}")),
     }
     result.driver_summary = summary;
+}
+
+/// Why the measured frames do not cover exactly the scenario's tick window, if they do not.
+///
+/// A frame is measured when it starts at or after the warm-up ticks, so the first measured frame
+/// may start up to one catch-up batch after them. The window must reach its last tick, and the
+/// measured frames must account for every tick between their first start and the end.
+fn measured_window_problem(
+    plan: &RunPlan,
+    max_ticks_per_frame: u32,
+    samples: &[FrameSample],
+    measured_ticks: u64,
+) -> Option<String> {
+    let window_end = plan.warmup_ticks + plan.measured_ticks;
+    let final_tick = samples.last().map_or(0, |sample| sample.tick);
+    let latest_start = plan.warmup_ticks + u64::from(max_ticks_per_frame) - 1;
+    let Some(first) = samples.iter().find(|sample| sample.measured) else {
+        return Some("no measured frames".to_owned());
+    };
+    let first_start = first.tick - first.ticks;
+    let complete = (plan.warmup_ticks..=latest_start).contains(&first_start)
+        && final_tick >= window_end
+        && measured_ticks == final_tick - first_start;
+    (!complete).then(|| {
+        format!(
+            "measured window from tick {first_start} to {final_tick} with {measured_ticks} ticks; expected a start in {}..={latest_start}, an end at or after {window_end}, and no missing ticks",
+            plan.warmup_ticks
+        )
+    })
 }
 
 /// Load on the host and the GPU around a run, so contended runs can be identified.
@@ -706,6 +721,64 @@ fn gpu_memory_mib(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Frames of `ticks_each` ticks from tick 0 to `end`, measured from `warmup` on.
+    fn frames(warmup: u64, end: u64, ticks_each: u64) -> Vec<FrameSample> {
+        (1..=end / ticks_each)
+            .map(|index| {
+                let tick = index * ticks_each;
+                FrameSample {
+                    tick,
+                    ticks: ticks_each,
+                    measured: tick - ticks_each >= warmup,
+                    ..FrameSample::default()
+                }
+            })
+            .collect()
+    }
+
+    fn measured_ticks(samples: &[FrameSample]) -> u64 {
+        samples
+            .iter()
+            .filter(|sample| sample.measured)
+            .map(|s| s.ticks)
+            .sum()
+    }
+
+    #[test]
+    fn a_short_late_or_gapped_measured_window_is_rejected() {
+        let plan = RunPlan {
+            runs: 5,
+            warmup_ticks: 300,
+            measured_ticks: 1800,
+            residency_timeout_seconds: 120.0,
+        };
+        let complete = frames(300, 2100, 4);
+        assert_eq!(
+            measured_window_problem(&plan, 4, &complete, measured_ticks(&complete)),
+            None
+        );
+        // Ended early: the window never reached tick 2100.
+        let short = frames(300, 2000, 4);
+        assert!(measured_window_problem(&plan, 4, &short, measured_ticks(&short)).is_some());
+        // A dropped frame: its ticks are missing from the measured total.
+        let mut gapped = complete.clone();
+        gapped.remove(200);
+        assert!(measured_window_problem(&plan, 4, &gapped, measured_ticks(&gapped)).is_some());
+        // Measurement started a whole catch-up batch too late.
+        let late = frames(304, 2100, 4)
+            .into_iter()
+            .map(|mut sample| {
+                sample.measured = sample.tick > 308;
+                sample
+            })
+            .collect::<Vec<_>>();
+        assert!(measured_window_problem(&plan, 4, &late, measured_ticks(&late)).is_some());
+        assert_eq!(
+            measured_window_problem(&plan, 4, &[], 0).as_deref(),
+            Some("no measured frames")
+        );
+    }
 
     #[test]
     fn gpu_processes_keep_only_the_executable_name() {

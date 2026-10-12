@@ -22,6 +22,8 @@ pub struct Step {
     pub args: Vec<OsString>,
     pub cwd: PathBuf,
     pub env: Vec<(OsString, OsString)>,
+    /// Inherited variables removed before the program starts.
+    pub env_remove: Vec<OsString>,
 }
 
 impl Step {
@@ -31,6 +33,7 @@ impl Step {
             args: Vec::new(),
             cwd: cwd.to_path_buf(),
             env: Vec::new(),
+            env_remove: Vec::new(),
         }
     }
 
@@ -50,6 +53,19 @@ impl Step {
 
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    /// Removes the variables `cargo run` sets for the runner's own package (`CARGO_PKG_*`,
+    /// `CARGO_MANIFEST_*`, `CARGO_CRATE_NAME`, `CARGO_BIN_NAME`, `CARGO_PRIMARY_PACKAGE`). A
+    /// nested cargo subcommand must not see them: cargo-machete, for one, then misreads its own
+    /// arguments as paths.
+    pub fn without_runner_package_env(mut self) -> Self {
+        self.env_remove.extend(
+            std::env::vars_os()
+                .map(|(key, _)| key)
+                .filter(|key| is_runner_package_variable(&key.to_string_lossy())),
+        );
         self
     }
 
@@ -94,6 +110,9 @@ pub fn run_logged(step: &Step, run_dir: &Path, log_name: &str) -> Outcome {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for key in &step.env_remove {
+        command.env_remove(key);
+    }
     for (key, value) in &step.env {
         command.env(key, value);
     }
@@ -143,6 +162,15 @@ pub fn run_logged(step: &Step, run_dir: &Path, log_name: &str) -> Outcome {
         log,
         reason,
     }
+}
+
+fn is_runner_package_variable(key: &str) -> bool {
+    key.starts_with("CARGO_PKG_")
+        || key.starts_with("CARGO_MANIFEST_")
+        || matches!(
+            key,
+            "CARGO_CRATE_NAME" | "CARGO_BIN_NAME" | "CARGO_PRIMARY_PACKAGE"
+        )
 }
 
 fn write_log(
@@ -204,6 +232,23 @@ mod tests {
         let dir = scratch("success");
         let outcome = run_logged(&Step::new("true", &dir), &dir, "ok");
         assert_eq!(outcome.state, State::Passed);
+    }
+
+    #[test]
+    fn the_runners_package_variables_do_not_reach_nested_tools() {
+        // Cargo sets CARGO_MANIFEST_DIR for every test executable, as `cargo run` does for the
+        // runner, so the parent has it and the child must not.
+        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
+        let dir = scratch("env-remove");
+        let probe = r#"printf '%s %s' "${CARGO_MANIFEST_DIR-unset}" "${KEPT-unset}""#;
+        let step = Step::new("sh", &dir)
+            .args(["-c", probe])
+            .env("KEPT", "yes")
+            .without_runner_package_env();
+        let outcome = run_logged(&step, &dir, "env");
+        assert_eq!(outcome.stdout, "unset yes");
+        assert!(is_runner_package_variable("CARGO_PKG_NAME"));
+        assert!(!is_runner_package_variable("CARGO_HOME"));
     }
 
     #[test]

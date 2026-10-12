@@ -2,8 +2,10 @@
 
 This document owns how evidence is collected and what it establishes. Commands are defined in
 [workflow](workflow.md); timing/resource values are owned by
-[performance budgets](../reference/performance-budgets.md). All new tools/suites are pending in the
-current checkout. An unimplemented or unavailable suite cannot return success.
+[performance budgets](../reference/performance-budgets.md). 01 delivered the documentation,
+static and CPU lanes, adapter inspection and the baseline benchmark; the GPU suites and the
+connected scenario are pending, and workflow lists each command's state. An unimplemented or
+unavailable suite cannot return success.
 
 ## Evidence lanes
 
@@ -58,6 +60,23 @@ old save revision replacing a newer one; and a required GPU suite being unavaila
 fault injection or small deliberately invalid specimens. Do not weaken production validation to
 inject a failure. A suite that cannot detect an introduced violation is not sufficient evidence.
 
+| Specimen | Stage | Where it is detected |
+| --- | --- | --- |
+| Wrong packed-field offset | 01 | `world-model` `cell::layout_tests::a_shifted_field_is_detected` |
+| A required GPU suite or adapter unavailable | 01 | `monarchy-evidence` `tests/runner.rs`: a missing adapter is `unavailable`, an unimplemented suite or scenario `failed` |
+| An empty, shrunk or unregistered test selection | 01 | `monarchy-evidence` `tests_cpu::tests` |
+| A new warning, or a fixed one still excepted | 01 | `monarchy-evidence` `checks::lints::tests` |
+| A forbidden dependency reached indirectly | 01 | `monarchy-evidence` `checks::contracts::tests` |
+| CI dropping a lane or installing other checker versions | 01 | `monarchy-evidence` `checks::contracts::tests` |
+| A required dependency checker missing | 01 | `monarchy-evidence` `checks::static_lane::tests` |
+| A presentation-paced measurement run | 01 | `monarchy-evidence` `measurement::tests` |
+| A short, late or gapped measurement window | 01 | `monarchy-evidence` `bench::tests` |
+| An unsupported value turned into a command | 01 | `world-model` `command::tests`; `monarchy-evidence` `scenario::tests` |
+| Unmatched donor/receiver transfer | 03 | pending |
+| Stale slot/body generation | 02/04 | pending |
+| Missing event overflow signal | 02/04 | pending |
+| Old save revision replacing a newer one | 05 | pending |
+
 ## Connected scenario
 
 `resident-world` is the named end-to-end scenario, delivered incrementally and completed in 07.
@@ -95,10 +114,11 @@ and occupied items; unused preallocation still costs memory.
 
 ## CI and hardware access
 
-01 establishes a default CPU/static CI lane and an explicitly configured hardware lane using the
-same runner. Do not assign or alter the user's self-hosted runners without authority. Hardware
-execution may be performed manually on the nominated machine with retained reports. A GPU-required
-change cannot be called qualified while that lane remains unrun.
+The CPU/static CI lane exists since 01: [`.github/workflows/evidence.yml`](../../.github/workflows/evidence.yml)
+runs the same runner on a hosted Ubuntu runner. The hardware lane is manual: the same `cargo
+evidence` commands on the nominated machine, with the command, adapter and report path recorded
+in the stage handoff. Do not assign or alter the user's self-hosted runners without authority. A
+GPU-required change cannot be called qualified while that lane remains unrun.
 
 Keep offline shader validation mandatory in ordinary CI, including assembled renderer variants.
 A compilation-only Windows check is useful but not a Windows runtime qualification. Do not copy

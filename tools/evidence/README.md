@@ -8,8 +8,8 @@ test selection is never reported as success.
 
 | Command | What it establishes |
 | --- | --- |
-| `check docs` | Local Markdown links and anchors, the owner index, sprint structure, retired rule files, package READMEs. |
-| `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; dependency direction and toolchain/lock pins. |
+| `check docs` | Local Markdown links and anchors, the owner index, sprint structure, retired rule files, a README for every package and its name in the architecture. |
+| `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; `cargo deny` with [`deny.toml`](../../deny.toml) and `cargo machete` at their required versions; dependency direction; toolchain/lock/alias pins; the CI workflow's lanes and checker versions. |
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with a stable `--adapter` identifier, limits and features. |
 | `test gpu --suite NAME --adapter ID` | Fails explicitly until the owning stage registers the suite. |
@@ -30,6 +30,8 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
   it.
 - `scenarios/<profile>/<case>.toml` are the frozen measurement workloads. Validation rejects a file
   whose world size, resolution, tick rate or body count differs from its profile.
+- `baselines/legacy-visual/` holds the visual reference: frames the driver saved with
+  `--screenshot` from the frozen qualification scenarios, as JPEG copies with the PNG hashes.
 - `baselines/legacy-6e108d6/` holds the measured legacy baseline: each bench `report.json` with
   GPU process arguments removed and paths made relative, plus the SHA-256 of every raw file the
   run left in `target/evidence/`. The raw samples stay on the measuring machine. The conclusions
@@ -38,8 +40,10 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
 ## Baseline driver
 
 `src/bin/legacy-baseline.rs` (feature `legacy-baseline`) drives the Bevy baseline application
-through `morbid_app::build_app` in scripted input mode. It applies scenario actions per simulation
-tick through the same tool functions the mouse uses, and writes per-frame samples. `bench` builds
+through `morbid_app::build_app` in scripted input mode. For every simulation tick, the scenario
+turns its actions into `world_model` commands; the driver executes them through the same tool
+functions the mouse uses, writes per-frame samples, and summarizes the driven body's
+`BodyObservation`s. `bench` builds
 it on demand and gives each run a new directory, so the user's `world_data/` is never opened. The
 driver, and the runner's dependency on the old application, go away with the Bevy application in
 prompt 06. Default builds of the runner do not compile Bevy; `check static` enforces that.

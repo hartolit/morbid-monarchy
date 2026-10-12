@@ -43,16 +43,15 @@ the last tested commit, uncommitted changes and exact next action in the current
 
 ## Verification commands and availability
 
-The current checkout has no evidence runner, tracked lockfile or pinned toolchain, and prompt 01
-must establish them. Until then, use available source/document checks and accurately report
-unavailable compilation. Existing package test commands are `cargo test -p monarch-engine` and
-`cargo test -p spatial-lib --all-features`. `spatial-lib` has no tests, so the second command only
-compiles it. These are entry points read from source, not evidence that dependency resolution or
-tests have succeeded.
+Since 01 the checkout pins its toolchain, tracks `Cargo.lock` and has the evidence runner below.
+Use its lanes rather than ad hoc commands: `cargo evidence test cpu` runs every test executable
+and checks the result against the coverage registry, which a bare `cargo test -p PACKAGE` does
+not. `spatial-lib` still has no tests of its own.
 
-### Planned common entry point — delivered in 01
+### Common entry point — delivered in 01
 
-01 adds a `.cargo/config.toml` alias:
+`.cargo/config.toml` defines the alias, and [`tools/evidence`](../../tools/evidence/README.md)
+implements it:
 
 ```toml
 [alias]
@@ -60,23 +59,34 @@ evidence = "run --locked --release -p monarchy-evidence --"
 ```
 
 The Rust runner owns command parsing, source/configuration identity, exit status and reports.
-Commands below become maintained runnable recipes only after 01 implements and tests them. Later
-prompts extend the actual registered suites; a requested missing suite is an error, not success.
+Each command writes `report.json` and the logs of its nested commands to
+`target/evidence/<time>-<command>/`, or to `--output DIR`. It exits 0 only when every required
+item passed. Later prompts extend the registered suites; a requested missing suite is an error,
+not success.
 
-| Command | Contract |
-| --- | --- |
-| `cargo evidence check docs` | Local links, canonical owners and document/assignment structure. |
-| `cargo evidence check static` | Formatting, supported compilation/features, warning-denying Clippy/rustdoc, dependency and shader validation checks. |
-| `cargo evidence test cpu` | Pure contract/reference and storage-policy tests on the production owners. |
-| `cargo evidence inspect-adapter` | Enumerate actual adapters, identifiers, backend, driver, limits and features; do not guess a preferred GPU. |
-| `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Execute the named shader/lifecycle suite on the explicit adapter; report unavailable/failure distinctly. |
-| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Execute the connected scenario through the same runtime/adapter as the app. |
-| `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Release measurements with frozen inputs, bounded in-flight work and raw/summary outputs. |
-| `cargo evidence check all --adapter ADAPTER_ID` | Final static, CPU, all required GPU and connected recovery checks; no silent lane skipping. |
+| Command | State | Contract |
+| --- | --- | --- |
+| `cargo evidence check docs` | Runnable (01) | Local links and anchors, the owner index, sprint structure, retired rule files; every workspace package has a README and is named in the architecture. |
+| `cargo evidence check static` | Runnable (01) | rustfmt; `cargo check` for the declared feature combinations; Clippy against the finite lint baseline; rustdoc with warnings denied; `cargo deny` (advisories, licenses, bans, sources) and `cargo machete` at their required versions; dependency direction; toolchain/lock/alias pins; CI uses the same lanes and checker versions. Shader validation joins when 02 adds standalone shaders. |
+| `cargo evidence test cpu` | Runnable (01) | Every test executable on the production owners, checked against the coverage registry. |
+| `cargo evidence inspect-adapter` | Runnable (01) | Enumerates adapters with stable identifiers, backend, driver, limits and features; picks none. |
+| `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Fails until the owning stage registers the suite | Executes the named shader/lifecycle suite on the explicit adapter; reports unavailable and failure distinctly. |
+| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Fails until 04–05 | Executes the connected scenario through the same runtime/adapter as the app. |
+| `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01, baseline driver) | Release measurements of the frozen scenarios, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
+| `cargo evidence check all --adapter ADAPTER_ID` | Fails until every lane exists | Docs, static, CPU, all GPU suites and the connected scenario; no silent skipping. |
 
-Additional GPU suite names are `transfers`, `bodies`, `streaming`, `render` and `all`. 01 provides
-unsupported/not-yet-implemented failure responses, not stubs returning pass. Owners register suites
-when implemented. The runner must not recursively invoke itself or hide nested Cargo failures.
+Additional GPU suite names are `transfers`, `bodies`, `streaming`, `render` and `all`. They fail
+explicitly until their owners register them. The runner never invokes itself recursively or hides
+a nested Cargo failure.
+
+### Continuous integration
+
+[`.github/workflows/evidence.yml`](../../.github/workflows/evidence.yml) runs `check docs`,
+`check static` and `test cpu` on a hosted Ubuntu runner, installs `cargo-deny` 0.20.2 and
+`cargo-machete` 0.9.2, and keeps the reports. `check static` fails if the workflow stops running a
+lane or installs other checker versions. Hosted runners have no GPU, so the GPU lanes and
+benchmarks run by hand on the nominated hardware, and the stage handoff records the command,
+adapter and report path. No self-hosted runner is assigned.
 
 ### Gate policy
 
@@ -100,10 +110,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 ```
 
-Run declared additional feature combinations separately. Add dependency/advisory/license and unused
-dependency checks when their pinned tools are available; missing required tools fail the static
-qualification lane and are not printed as green. 01 records the supported toolchain and resolves
-a compatible dependency set; the package does not invent its versions. Track `Cargo.lock` for this
+Run declared additional feature combinations separately. `check static` runs `cargo deny --locked
+check` against [`deny.toml`](../../deny.toml) and `cargo machete`, and requires the versions in
+`tools/evidence/src/checks/static_lane.rs`; a missing or different version fails the lane and is
+not printed as green. Assembled-shader validation becomes a required item of the same lane when
+02 introduces standalone WGSL. The legacy Bevy shaders under `crates/morbid-app/assets` are
+validated only when Bevy creates their pipelines; they are exempt until 06 removes them. 01
+records the supported toolchain and resolves a compatible dependency set; the package does not
+invent its versions. Track `Cargo.lock` for this
 application workspace. CI uses the same runner/commands, not a weaker hand-maintained copy.
 
 ## Definition of done

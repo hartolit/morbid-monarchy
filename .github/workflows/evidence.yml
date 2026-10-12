@@ -1,0 +1,52 @@
+# Hosted CPU and static evidence: the same runner and lanes as a local check
+# (docs/development/workflow.md). Hosted runners have no GPU. The GPU lanes and the benchmarks
+# run by hand on the nominated hardware and are recorded in the sprint handoff; nothing here
+# stands in for them, and no self-hosted runner is assigned.
+name: evidence
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install the pinned toolchain
+        # rustup reads rust-toolchain.toml.
+        run: rustup toolchain install
+
+      - name: Install the pinned dependency checkers
+        # `check static` requires exactly these versions and fails without them.
+        run: cargo install --locked cargo-deny@0.20.2 cargo-machete@0.9.2
+
+      - name: Documentation lane
+        run: cargo evidence check docs --output target/evidence/ci-docs
+
+      - name: Static lane
+        run: cargo evidence check static --output target/evidence/ci-static
+
+      - name: CPU lane
+        run: cargo evidence test cpu --output target/evidence/ci-cpu
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-reports
+          path: |
+            target/evidence/*/report.json
+            target/evidence/*/logs/
+          if-no-files-found: error

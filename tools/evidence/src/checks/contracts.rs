@@ -5,9 +5,13 @@
 use std::{fs, path::Path, process::Command};
 
 use crate::{
+    checks::static_lane::RequiredTool,
     report::{Item, State},
     workspace::{DependencyKind, Workspace},
 };
+
+/// The hosted CI workflow, which runs the same lanes through the runner.
+pub const CI_WORKFLOW: &str = ".github/workflows/evidence.yml";
 
 /// The evidence runner as named in the workspace.
 pub const EVIDENCE_PACKAGE: &str = "monarchy-evidence";
@@ -96,6 +100,46 @@ pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -
         ),
     )
     .with_details(problems)
+}
+
+/// CI runs the CPU and static lanes through this runner and installs exactly the checker
+/// versions the static lane requires, so the two cannot drift apart.
+pub fn ci_item(root: &Path, tools: &[RequiredTool]) -> Item {
+    let problems = match fs::read_to_string(root.join(CI_WORKFLOW)) {
+        Ok(text) => ci_problems(&text, tools),
+        Err(error) => vec![format!("{CI_WORKFLOW}: {error}")],
+    };
+    let state = if problems.is_empty() {
+        State::Passed
+    } else {
+        State::Failed
+    };
+    Item::new(
+        "static.contracts.ci",
+        state,
+        format!("{CI_WORKFLOW} runs the runner's lanes with the pinned checkers"),
+    )
+    .with_details(problems)
+}
+
+fn ci_problems(workflow: &str, tools: &[RequiredTool]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for lane in [
+        "cargo evidence check docs",
+        "cargo evidence check static",
+        "cargo evidence test cpu",
+    ] {
+        if !workflow.contains(lane) {
+            problems.push(format!("{CI_WORKFLOW} does not run `{lane}`"));
+        }
+    }
+    for tool in tools {
+        let pin = format!("{}@{}", tool.package, tool.version);
+        if !workflow.contains(&pin) {
+            problems.push(format!("{CI_WORKFLOW} does not install {pin}"));
+        }
+    }
+    problems
 }
 
 fn closure_violations(workspace: &Workspace, rules: &[ForbiddenClosure]) -> Vec<String> {
@@ -248,6 +292,19 @@ mod tests {
                 "the path is reported: {problems:?}"
             );
         }
+    }
+
+    #[test]
+    fn ci_must_run_the_lanes_with_the_pinned_checkers() {
+        let tools = crate::checks::static_lane::REQUIRED_TOOLS;
+        let good = "run: cargo install --locked cargo-deny@0.20.2 cargo-machete@0.9.2\n\
+                    run: cargo evidence check docs\nrun: cargo evidence check static\n\
+                    run: cargo evidence test cpu\n";
+        assert_eq!(ci_problems(good, tools), Vec::<String>::new());
+        let drifted = good.replace("cargo-deny@0.20.2", "cargo-deny@0.19.0");
+        assert_eq!(ci_problems(&drifted, tools).len(), 1);
+        let weaker = good.replace("run: cargo evidence test cpu\n", "run: cargo test\n");
+        assert_eq!(ci_problems(&weaker, tools).len(), 1);
     }
 
     #[test]

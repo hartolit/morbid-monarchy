@@ -3808,12 +3808,9 @@ name = "monarch-engine"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bytemuck",
  "flume",
- "lru",
  "rand 0.10.2",
  "rayon",
- "rustc-hash 2.1.3",
  "spatial-lib",
  "world-model",
 ]

@@ -1,0 +1,57 @@
+# Dependency policy for `cargo deny --locked check`, which `cargo evidence check static` runs with
+# cargo-deny 0.20.2 (the version the lane and CI require).
+
+[graph]
+all-features = true
+
+[advisories]
+# A RustSec advisory against a locked crate fails the lane. Accept one only by listing its id
+# here with the reason and the stage that removes it. Patch-level fixes are applied instead.
+ignore = [
+    # lru < 0.18.2: `pop` is unsound if a key's `Drop` panics under `catch_unwind`. The only keys
+    # are `ChunkKey` (`Copy`, no `Drop`) and nothing catches unwinds. The fix is a 0.18 upgrade;
+    # 05 replaces spatial-lib's cache instead.
+    { id = "RUSTSEC-2026-0253", reason = "unreachable with Copy keys; spatial-lib's LRU cache is replaced in 05" },
+    # quick-xml < 0.41: quadratic attribute checks and unbounded namespace allocation. Only the
+    # wayland-scanner proc-macro uses it, at build time, on the protocol XML the wayland crates
+    # ship. No compatible wayland-scanner release takes 0.41 yet; 06 re-checks with winit.
+    { id = "RUSTSEC-2026-0194", reason = "build-time parsing of bundled Wayland protocol XML only; re-check in 06" },
+    { id = "RUSTSEC-2026-0195", reason = "build-time parsing of bundled Wayland protocol XML only; re-check in 06" },
+    # ttf-parser is unmaintained and has no successor release; ab_glyph (Bevy text and egui)
+    # uses it for the bundled fonts. 06 chooses the native client's text stack.
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained, no fix; 06 chooses the native text stack" },
+]
+
+[licenses]
+# The licenses the locked graph needs at 01; a new one is a decision, not a default.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",        # encase (wgpu buffer layout)
+    "BSD-2-Clause", # arrayref
+    "BSD-3-Clause", # ogg, pp-rs, tiny-skia
+    "BSL-1.0",      # clipboard-win, error-code
+    "CC0-1.0",      # hexf-parse (naga)
+    "ISC",          # inotify, libloading
+    "Unicode-3.0",  # ICU4X data and unicode-ident
+    "Zlib",         # foldhash, slotmap, bevy_mikktspace and others
+    "OFL-1.1",          # egui's bundled default fonts (epaint_default_fonts)
+    "Ubuntu-font-1.0",  # the same fonts
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# The workspace packages are not published (`publish = false`) and declare no license.
+ignore = true
+
+[bans]
+# Bevy's graph carries several major versions of some crates (glam, rand, hashbrown and others).
+# `cargo tree --duplicates` lists them; they are not refused here.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

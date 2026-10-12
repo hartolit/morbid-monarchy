@@ -2,13 +2,11 @@
 name = "monarch-engine"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 bevy.workspace = true
 rand.workspace = true
-rustc-hash.workspace = true
-lru.workspace = true
-bytemuck.workspace = true
 rayon.workspace = true
 flume.workspace = true
 spatial-lib.workspace = true
