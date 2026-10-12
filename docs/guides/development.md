@@ -20,16 +20,30 @@ GPU state. The package README and actual parser will own exact runtime options a
 
 ## Establish the toolchain
 
-Prompt 01 checks the available Rust toolchain and dependencies, selects compatible supported
-versions and commits `rust-toolchain.toml` and `Cargo.lock`. Do not treat the version numbers from
-the retired rule files (removed in `a9c1539`) or the untracked local lockfile as tested pins.
-Inspect the dependency tree before choosing wgpu/window/UI versions: all GPU consumers must share
-compatible device types.
+`rust-toolchain.toml` pins Rust 1.99.0 and `Cargo.lock` is tracked (01); rustup installs the
+toolchain on first use, and every build uses `--locked`. The static lane also needs the pinned
+dependency checkers:
 
-The maintained checks are in [workflow](../development/workflow.md). The planned `cargo evidence`
-commands are not present until 01 implements them. Run `inspect-adapter` after that implementation,
-record its returned adapter ID and use it explicitly for GPU tests. A missing GPU blocks hardware
-qualification, not source/document work.
+```sh
+cargo install --locked cargo-deny@0.20.2 cargo-machete@0.9.2
+```
+
+The window, UI and GPU versions are chosen from the resolved APIs, not guessed: see
+[ADR 0002](../decisions/0002-native-composition.md#01-package-check). All GPU consumers share one
+wgpu.
+
+The maintained checks are in [workflow](../development/workflow.md):
+
+```sh
+cargo evidence check docs
+cargo evidence check static
+cargo evidence test cpu
+cargo evidence inspect-adapter
+```
+
+`inspect-adapter` prints a stable identifier for every adapter (`vulkan-10de-2c05` is the RTX 5070
+Ti on the nominated machine). Pass it explicitly with `--adapter` to GPU suites and benchmarks; the
+runner never picks one. A missing GPU blocks hardware qualification, not source/document work.
 
 ## Target interactive operation
 
@@ -56,7 +70,8 @@ In the baseline, a brush runs `handle_brush_input`, then `raymarch_grid` against
 input validation, command admission, GPU ray resolution, ordered cell edit, reactivation, returned
 result, rendered change and dirty revision. Read the source owner at each boundary rather than
 starting from every crate's type inventory. The connected `resident-world` scenario, built up from
-01 through 07, will automate that physical/storage route; it does not exist yet.
+02 through 07, will automate that physical/storage route; it does not exist yet. Today the baseline
+driver issues the same `world_model` commands from the frozen scenarios.
 
 For performance, select a frozen profile and follow [the evidence protocol](../development/verification-evidence.md).
 Use pass timings to locate a limit, then confirm the complete application. Keep profiler capture

@@ -1,9 +1,12 @@
 # Supplied-source audit and preservation map
 
-**Evidence class: source inspection only.** Prepared on 2026-10-10 from the uploaded archives, then
-reconciled against the working checkout by prompt 00 on the same date. No Rust build, test run,
-gameplay execution, GPU capture or performance benchmark was performed for either review.
-Paths/symbols below identify the reviewed source.
+**Evidence class: source inspection, plus 01's measurements.** Prepared on 2026-10-10 from the
+uploaded archives, then reconciled against the working checkout by prompt 00 on the same date.
+Neither review built, tested or ran anything. Paths/symbols below identify the reviewed source at
+`a9c1539`. 01 moved some of it (cell, materials, generation and chunk keys now live in
+`crates/world-model`), recorded what it found while measuring, and noted its decisions on the
+rows below; the [performance budgets](../../../reference/performance-budgets.md#measured-legacy-baseline-01)
+own the measurements.
 
 ## Provenance
 
@@ -60,10 +63,20 @@ stable throughout extraction.
 | `runtime/input.rs`, `dev_tools.rs`, renderer/UI: brushes, body presets/control, camera, attract/lift, climate/lighting and grid resize. | 01 freezes the real feature inventory; 06 proves native tool behavior, not just menu presence. |
 | CPU reads of the live grid outside the solvers: `runtime/dev_tools/brush.rs` `raymarch_grid` (cursor preview, edit target, sphere spawn height, attract/lift target) and `handle_brush_input` (`set_cell`/`wake_cell`). `runtime/dev_tools/ui.rs` sums fluid volume and elevation over every cell on each frame the statistics panel is shown. `core/entities/observer.rs` samples floor height every frame in walking (non-noclip) mode. | 04 provides GPU ray/query/edit commands and observer ground queries (or a GPU-side observer rule); 06 computes the statistics as GPU reductions. None of these may use a full-grid fetch. |
 | `runtime/input.rs`, `sync_world_focus`: the residency focus follows the observer only while it is grid-attached (toggled with G), so detaching freezes streaming in place. | Preserve as a supported control in 05–06, or record an explicit scope change. |
-| `runtime/dev_tools/ui.rs`: the elevation-scale control writes `GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime. Body contact, spawn height and rendering all use it, and it is not saved. | Open conflict with fixed units; see [acceptance](acceptance.md#open-conflicts-with-existing-behavior). 01 decides its meaning. |
-| `runtime/dev_tools/ui.rs`: tick rate 10–240 Hz and catch-up 1–16 ticks/frame are live controls; body substeps (≤1/120 s, at most 8 per frame) ignore them. | 01 sets the supported tick range and the rule by which body substeps divide a tick; 04 implements it. |
-| Axis mapping: `sync_world_focus` and `ChunkKey::from_world`/`to_ivec2`. The mapping is recorded in [world format](../../../reference/world-format.md#existing-packed-cell). | 01 captures it in fixtures; 05 import decides how to handle rows with nonzero `z`. |
-| `runtime/hooks.rs`: a compiled module that contains only comments. | Remove it, or replace it with the real consumer when 02/04 deliver one; do not keep a dead module. |
+| `runtime/dev_tools/ui.rs`: the elevation-scale control writes `GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime. Body contact, spawn height and rendering all use it, and it is not saved. | Decided in 01: physical configuration, applied at a tick boundary and checkpointed; see [acceptance](acceptance.md#resolved-conflicts-with-existing-behavior). |
+| `runtime/dev_tools/ui.rs`: tick rate 10–240 Hz and catch-up 1–16 ticks/frame are live controls; body substeps (≤1/120 s, at most 8 per frame) ignore them. | 01 set the supported ranges and the rule (substeps of at most 1/120 s divide the tick; [GPU contract](../../../reference/gpu-contract.md#supported-physical-envelope-fixed-in-01)); 04 implements it. |
+| Axis mapping: `sync_world_focus` and `ChunkKey::from_world`/`to_ivec2`. The mapping is recorded in [world format](../../../reference/world-format.md#existing-packed-cell). | Captured in 01's old-writer fixtures, including a synthetic `z = 1` row; the conversions are named in `world_model::spatial`. 05 import decides how to handle rows with nonzero `z`. |
+| `runtime/hooks.rs`: a compiled module that contains only comments. | Removed in 01. 02/04 add the real consumer with the bounded outcomes. |
+
+### Found while measuring (01)
+
+| Source and observed behavior | Transition responsibility |
+| --- | --- |
+| `ToroidalGrid::load_chunk` writes a chunk's cells without scheduling them; only grid creation and resize wake every cell. A chunk that streams in after startup stays asleep until a neighbour or an edit wakes it (streaming runs measured 0 awake cells). Generated water is level, so the visible effect is that growth and other rules do not start in newly loaded chunks. | 03 wakes ingress chunks and their boundary dependants; A05 covers it. Record the change of behavior. |
+| `update_brush_cursor` iterates all four landscape materials with `Assets::iter_mut` every frame, even with no brush selected. Bevy queues `AssetEvent::Modified` for each, so every material is prepared again each frame. | 06 keeps cursor state out of material assets. Baseline frame cost includes it. |
+| A material brush marks the grid dirty in addition to the tick that follows, so a frame with an edit and a frame with a tick each upload the whole grid. The flow case measured 0.54 GiB/s of grid uploads against 0.31 GiB/s of tick copies (1.7×). | 06 removes whole-grid uploads; edits reach the GPU as commands. |
+| The mixed scenario's lava brush (radius 3, strength 6, every 2 ticks) pours into the lake that the climate swing freezes; by tick 1300 a column stands far above the surrounding ice ([visual reference](../../../../tools/evidence/baselines/legacy-visual/README.md)). Inference from the rules, not a cell readout: `inject_fluid` lets injected magma take a column over, and the quench rule turns resident magma into stone bedrock of the same height, so each stroke raises the bedrock instead of spreading. The column climbs towards the 4,095 elevation ceiling, where the documented quench defect deletes magma. The frozen mixed case therefore exercises the ceiling during measurement. | 03 decides how injected magma spreads and quenches, and corrects the ceiling accounting; it records the change of behavior and keeps this case. |
+| Bevy's default `WinitSettings::game()` updates an unfocused window at 60 Hz. Measurement windows override it to update continuously; the interactive application keeps the default. | 06 chooses the native client's unfocused policy explicitly. |
 
 ### Calculated scale, not measured traffic
 
@@ -75,8 +88,9 @@ cadence; these values are conditional arithmetic, not bus measurements.
 
 Front/back grids, retained active chunks and render-asset bytes represent roughly four packed
 payload copies before wake arrays, cache, transient staging and allocator overhead. At radius 32
-that is about 528.125 MiB of CPU cell payloads. Real residency/peak allocations still require 01
-measurement. Four materials sharing a buffer do not imply four separate grid uploads.
+that is about 528.125 MiB of CPU cell payloads. 01 measured the retained cell payload at
+30.9 MiB for radius 6 and 163.1 MiB for radius 16 (182.4 MiB while streaming). Four materials
+sharing a buffer do not imply four separate grid uploads.
 
 ## Documentation adaptation
 
@@ -124,9 +138,10 @@ a performance gate.
 
 ## Existing test inventory
 
-These **28 test functions are present in source, not reported passing**. 00 confirmed the same 28
-names in `a9c1539`; `crates/spatial-lib` has none. 01 reads their assertions,
-records failed baseline behavior honestly and maps each to a stable behavior ID and destination.
+These are the **28 test functions present in `a9c1539`**; `crates/spatial-lib` has none. 01 ran
+them (all pass, also in 25 repeated runs) and mapped each to a stable behavior ID, expectation and
+destination in [`coverage.toml`](../../../../tools/evidence/coverage.toml), which `cargo evidence
+test cpu` enforces.
 Names containing “mass” do not independently establish calibrated physical units. Keep original
 intent plus independent corrected-limit tests; do not mechanically freeze known bad behavior.
 
@@ -162,7 +177,7 @@ intent plus independent corrected-limit tests; do not mechanically freeze known 
 - `burning_oil_consumes_its_fuel_and_burns_out`
 - `fixed_clock_runs_whole_ticks_and_caps_catch_up`
 
-### `crates/monarch-engine/src/core/world/cell.rs` — 5 tests
+### `crates/monarch-engine/src/core/world/cell.rs` — 5 tests (in `crates/world-model/src/cell.rs` since 01)
 
 - `small_inflow_is_absorbed_by_a_deeper_pool`
 - `larger_inflow_takes_the_column_over_without_losing_volume`

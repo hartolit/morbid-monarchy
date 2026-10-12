@@ -34,16 +34,17 @@ ordinary qualification profile. Known failures remain attached to their owner un
 
 ## Feature preservation inventory
 
-00 reconciled this inventory with checkout `a9c1539`. The ranges shown are the current UI
-limits, not frozen support limits. 01 captures the baseline settings and visual reference and
-records any later corrections. 06 proves each feature through the native consumer. Intentional
-visual changes are documented; removing a required behavior needs an explicit scope change, not a
+00 reconciled this inventory with checkout `a9c1539`. 01 froze the ranges shown as the supported
+limits (`world_model::config`; see the
+[GPU contract](../../../reference/gpu-contract.md#supported-physical-envelope-fixed-in-01)) and
+captured the baseline settings in the frozen scenarios. 06 proves each feature through the native
+consumer. Intentional visual changes are documented; removing a required behavior needs an explicit scope change, not a
 new label.
 
 | Feature group | Required usable behavior | Important boundary |
 | --- | --- | --- |
 | Physical terrain | Packed columns, granular movement/erosion, water/oil/magma flow, thermal freeze/thaw at ambient temperature, magma quench and boiling, combustion and biological growth. | The GPU rules are authoritative; display is not a substitute for physical accounting. |
-| Simulation controls | Toggles for liquid, granular, thermal, fire and biology; ambient temperature (−30 to 40 °C); tick rate (10–240 Hz); catch-up limit (1–16 ticks/frame); elevation scale. | Toggling a rule/climate invalidates/wakes the required state; no hidden second clock. Body substeps divide the selected tick. Elevation scale is an open conflict (below). |
+| Simulation controls | Toggles for liquid, granular, thermal, fire and biology; ambient temperature (−30 to 40 °C); tick rate (10–240 Hz); catch-up limit (1–16 ticks/frame); elevation scale. | Toggling a rule/climate invalidates/wakes the required state; no hidden second clock. Body substeps divide the selected tick. Elevation scale is physical configuration (below). |
 | Brushes | Water, lava, oil, ice, fire, sand, raise terrain, lower terrain; radius 0–64, strength 1–255; cursor preview. | Actual GPU ray/hit/edit result, capacity outcome and visible target; no full-grid CPU fetch. The preview may be provisional. |
 | Bodies | Metal (relative density 7.8) and wood (0.6) sphere spawning at the picked surface; terrain contact/rolling/crater/rut, buoyancy and fluid displacement. | Shared-cell/body conflicts are resolved, not overwritten by independent writes. |
 | Direct control | Observer flight and walking (noclip toggle, terrain-following walk, sprint); attaching/detaching the residency focus; possession/release of the nearest sphere, driven motion, grounded jump, attract and lift. | Normal commands and observed/GPU presentation state; no writable CPU physical transform. Walking and target picking use GPU queries or observations, not CPU terrain reads. |
@@ -52,15 +53,41 @@ new label.
 | Inspection | Statistics (FPS, total liquid volume, total elevation), a compass showing heading, pitch and sun, an overlay toggle, and selected physical debugging. | Totals come from exact GPU integer reductions, not a full-grid CPU fetch; add resource/tick/observation pressure; no fabricated telemetry. |
 | World controls | Active-world resize (radius 1–32 per axis), normal streaming, safe save/exit/reopen and explicit import/recovery. | Failure preserves current valid state or reports the documented loss boundary. At this cell size, radius 32 exceeds a default 128 MiB storage binding, so it is supported or visibly refused. |
 
-### Open conflicts with existing behavior
+### Baseline presentation and tuning reference (01)
 
-**Live elevation scale.** Source (`runtime/dev_tools/ui.rs`) shows the UI writing
-`GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime. Body contact heights, sphere spawn
-placement and rendering all read it, and the value is not saved with the world. A live physical
-scale conflicts with fixed physical units and with the saved-world coordinate/scale convention.
-In Checkpoint C, 01 chooses one meaning and tests it: a physical setting applied at a tick
-boundary, a world-creation parameter, or a presentation-only vertical exaggeration. Until then the
-control remains in this inventory. It is not removed silently.
+Source defaults at 01, which the native client (06) either keeps or changes with a recorded
+reason. The developer UI exposes the first group; the rest are fixed in code. Simulation ranges and
+defaults are in `world_model::config`; brush defaults are radius 5, strength 1.
+
+| Setting | Baseline default | UI range | Owner |
+| --- | --- | --- | --- |
+| Sun azimuth / elevation | 125° / 35° | 0–360° / 2–90° | `runtime/render.rs` `WorldLighting` |
+| Sky (ambient) brightness | 900 | 0–3000 | same |
+| Heightfield terrain shadows | 0.85 | 0–1 | same; 0 skips the march |
+| Ambient occlusion | 0.6 | 0–1 | same |
+| Sun light | Directional, `AMBIENT_DAYLIGHT` illuminance, sRGB (1.0, 0.95, 0.86), shadow maps on | not exposed | `spawn_sun` |
+| Sky, ground and horizon colours; sun glow | sRGB (0.55, 0.70, 0.95), (0.42, 0.36, 0.28), (0.68, 0.76, 0.86); glow (1.0, 0.85, 0.65, 0.5), exponent 24 | not exposed | `WorldLighting` |
+| Camera | HDR target, `Bloom::NATURAL`, linear distance fog from 0.55 to 0.98 of the distance to the loaded window's edge, refitted to the camera altitude every frame | not exposed | `configure_world_cameras`, `fit_fog_to_view` |
+| Terrain | Four material layers (terrain, granular, fluid, surface) per active chunk over one shared cell buffer | – | `runtime/render.rs` |
+| Overlay | Tool bar, statistics, simulation and lighting panels, compass; one toggle | – | `runtime/dev_tools` |
+
+The visual reference is a set of frames the baseline driver saved from the frozen qualification
+scenarios with these defaults, at 1920×1080 with the overlay shown:
+[`tools/evidence/baselines/legacy-visual/`](../../../../tools/evidence/baselines/legacy-visual/README.md).
+06 compares the native client with them; pixel identity is not required.
+
+### Resolved conflicts with existing behavior
+
+**Live elevation scale — decided in 01.** Source (`runtime/dev_tools/ui.rs`) shows the UI
+writing `GlobalPhysicsConfig::elevation_scale` (0.01–5.0) at runtime, and body contact heights,
+sphere spawn placement and rendering all read it; the value is not saved with the world. 01
+decided that it is **physical configuration**: a supported setting (0.01–5.0, default 0.5,
+`world_model::config::ELEVATION_SCALE`) that the GPU runtime applies at a tick boundary as a
+configuration command and records with the configuration in every checkpoint. Cells keep integer
+units. In 01, the model owns the range and default, and scenario validation refuses a scale
+outside it (`scenario::tests::location_and_ranges_are_checked`). The control stays in this
+inventory; 04 implements the tick-boundary rule and 05 saves the value. See
+[world format](../../../reference/world-format.md#existing-packed-cell).
 
 New audio/damage systems, arbitrary rigid shapes/joints, multi-species fluid fields, networking and
 unloaded-region catch-up are not implied by this inventory. Preserve existing behavior and deliver

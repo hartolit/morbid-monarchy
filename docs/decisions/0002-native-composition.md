@@ -1,8 +1,8 @@
 # 0002 — Native composition and meaningful boundaries
 
-**Date:** 2026-10-10. **State:** the native application and standalone `bevy_ecs` are the
-user-requested direction, adopted in prompt 00. The concrete package map is still a proposal,
-which 01 checks against actual consumers.
+**Date:** 2026-10-10, checked against consumers on 2026-10-12. **State:** the native application
+and standalone `bevy_ecs` are the user-requested direction, adopted in prompt 00. 01 created the
+first package of the map and recorded which others wait for a consumer ([below](#01-package-check)).
 
 ## Decision
 
@@ -33,6 +33,24 @@ Keep the old app only as a temporary baseline until native cutover in 06. Headle
 the actual new physical implementation. Remove legacy production flags, engine imports and duplicate
 paths after cutover; Git/artifacts retain the baseline. A small CPU reference remains a development
 consumer, not an app.
+
+## 01 package check
+
+- **`world-model` — created.** The CPU engine, the application, `spatial-lib` and the evidence
+  runner all consume the same cell, material, coordinate, unit, configuration and generation
+  definitions, so one framework-free crate replaces their copies. `check static` keeps engines,
+  GPU APIs, windows, UI, stores, codecs and worker pools out of its closure.
+- **`world-runtime`, `gpu-world`, `world-store`, `world-render` — not created.** Nothing consumes
+  `world-runtime` or `gpu-world` before 02, `world-store` before 05 or `world-render` before 06.
+  Each is created by the stage that first uses it, not as an empty forwarding crate. The runtime ports are recorded as signatures in the
+  [GPU contract](../reference/gpu-contract.md#runtime-ports-proposed-for-02).
+- **`spatial-lib` — reduced.** Its key and view math moved to `world_model::spatial`. The toroidal
+  grid, the chunk manager and the redb backend stay until 05 replaces them.
+- **Window, UI and GPU family — selected, pinned when used.** The lock already resolves wgpu
+  29.0.4, winit 0.30.13 and egui 0.35.0 together. `egui-wgpu` 0.35.0 requires wgpu `^29.0` and
+  winit `^0.30.13`, and `egui-winit` 0.35.0 requires winit `^0.30.13`, so the native client can
+  use one wgpu device for simulation, rendering and UI. 06 adds those crates at these versions;
+  `monarchy-evidence` already uses wgpu 29.0.4 for adapter inspection.
 
 If a proposed package has no actual boundary/consumer, use a module before creating it. A dependency
 cycle, duplicate wgpu device family or interface forcing world copies is evidence that the chosen

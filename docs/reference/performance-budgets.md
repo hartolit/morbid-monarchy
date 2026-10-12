@@ -113,6 +113,15 @@ What the baseline establishes:
   varied more; GPU utilization from other processes is recorded around each run but is not a
   quiet-host condition. Use the per-run values in the summaries, not one run, as the noise range.
 
+**After the model extraction (01).** The same protocol at `7a84a80`, after `world-model` replaced
+the engine's cell, material and generation code, for flow, body-contact and coupled
+(`--case flow --case body-contact --case coupled`; 5/5 valid runs each, none contended; report in
+`target/evidence/drift-7a84a80/` on the measuring machine). Simulation time per tick moved by −1% to
+−2% (flow 8.90 against 8.98 ms) and body time by 0% to +1% (body-contact 5.37 against 5.32 ms),
+within the run-to-run spread above. Frame medians were 3–6% lower (flow 10.34 against 11.04 ms,
+body-contact 14.15 against 14.68, coupled 16.68 against 17.12) and p95 0–5% lower; the change is
+outside the simulation and body phases and its cause was not isolated. No regression.
+
 The capacity scenarios are frozen but were not run against the baseline: it has no admission or
 refusal path, tests all body pairs, and keeps a radius-32 CPU grid of 132 MiB per array. 04–07
 run capacity against the GPU runtime.
@@ -133,8 +142,10 @@ These gates are independent of an arbitrary FPS target.
 
 ### Initial memory/transfer envelopes
 
-Use these starting envelopes for allocation planning, then validate them in 01–02 before freezing
-their effective values. If they cannot support required behavior, show the complete accounting and
+Use these starting envelopes for allocation planning. 01 kept them unchanged: the baseline has
+no GPU allocations to check them against, and its CPU payload (30.9 MiB at radius 6, 163.1 MiB at
+radius 16) is the arrangement they replace. 02 validates them against actual allocations before
+freezing their effective values. If they cannot support required behavior, show the complete accounting and
 choose an alternative before kernel tuning. Do not fit the final report by omitting resources.
 
 - GPU terrain-related state, including cell scratch, activity/proposals and a bounded checkpoint

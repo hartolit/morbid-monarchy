@@ -8,9 +8,10 @@ physically calibrated mass or claim a general 3D solver.
 ## Fix units, coordinates and time
 
 Document horizontal cell width, elevation unit, body length/mass convention, velocity, acceleration,
-tick duration and each numerical tolerance. The baseline uses a 0.5 world-unit elevation scale and
-1/60-second terrain ticks, with sphere substeps up to 1/120 second. These are current defaults, not
-universal physical constants.
+tick duration and each numerical tolerance. `world_model::{units, config, body}` own the values in
+code and the [GPU contract](../../reference/gpu-contract.md#supported-physical-envelope-fixed-in-01)
+their supported ranges: a 0.5 world-unit elevation scale by default, 1/60-second ticks, and body
+substeps of at most 1/120 second. These are current defaults, not universal physical constants.
 
 Cells and bodies must advance under one logical fixed clock after migration. State which terrain
 version each body substep reads and when its deformation becomes available. Limit catch-up work and

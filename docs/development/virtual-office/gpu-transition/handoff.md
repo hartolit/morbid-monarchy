@@ -4,23 +4,43 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 01 progress
+## 01 boundary
 
-**Assigned:** 01, by the user, on 2026-10-10. **Checkpoint A is complete.**
+**State:** 01 complete (2026-10-12), assigned by the user on 2026-10-10. Checkpoints A–D are
+committed on `experimental`. 02 has not started and needs its own assignment.
 
-- `eea8652` pins rustc 1.99.0 (`b940084d7`) in `rust-toolchain.toml` and tracks the existing
-  `Cargo.lock`, which is now verified. `cargo fetch --locked` and `cargo build --locked
-  --workspace --all-targets` both succeed, with no compiler warnings. `cargo test --locked -p
-  monarch-engine` passes 28/28, and 25 repeated runs had no failure. `spatial-lib` has no tests.
-- The baseline is not lint-clean. `cargo fmt --check` reports 3 import-order diffs (in
-  `monarch-engine` `core.rs` and `prelude.rs`). Warning-denying Clippy finds 31 warnings, all in
-  the three legacy crates. `RUSTDOCFLAGS='-D warnings' cargo doc` passes.
-- `58e9648` adds old-writer fixtures in `crates/morbid-app/tests/fixtures/legacy-v0/`. They were
-  captured from a scratch directory, and the user's save was not opened.
-- Hardware: this machine is the nominated Ryzen 9 5950X + RTX 5070 Ti (driver 615.71.09, KDE
-  Wayland). Only the compositor and Discord use the GPU.
+**Next action:** assign [02-gpu-runtime-and-transfer-lifecycle.md](02-gpu-runtime-and-transfer-lifecycle.md).
+Nothing in 01 is left to resume.
 
-**Next:** Checkpoint B, starting with the `tools/evidence` runner.
+## 01 record
+
+| Field | Record |
+| --- | --- |
+| Assigned stage / checkpoint | 01 — baseline, contracts and seams. A–D complete. |
+| Source state | `experimental`, last tested commit FINAL_COMMIT, clean tree. No unrelated work was present. |
+| Actual adoption | **A:** `eea8652` pins Rust 1.99.0 and tracks `Cargo.lock`; `58e9648` captures old-writer fixtures. **B:** `tools/evidence` (`monarchy-evidence`) with the `cargo evidence` alias; docs/static/CPU lanes; adapter inspection; GPU suites and `run` fail explicitly; 18 frozen scenario files; the `legacy-baseline` driver; work counters in the engine, renderer and persistence; `coverage.toml` maps all 28 baseline tests; `lint-baseline.toml` holds 3 exceptions. The measured baseline is `e8d49db`. The visual reference (three frames from the qualification scenarios, `tools/evidence/baselines/legacy-visual/`) and the presentation and tuning defaults ([acceptance](acceptance.md#baseline-presentation-and-tuning-reference-01)) record the rendering and tool surface. **C:** `7a84a80` adds `world-model`, migrates every consumer and deletes the duplicates; `legacy_format` keeps the old row bytes. **D:** `0c166e3` adds `deny.toml`, `cargo deny` and `cargo machete` at pinned versions, the CI workflow and its pin check, and the package-naming check. |
+| Package decisions | `world-model` exists because the engine, the application, spatial-lib and the runner all consume it. `world-runtime`, `gpu-world`, `world-store` and `world-render` are not created: no consumer exists before 02, and empty forwarding crates are not allowed. `spatial-lib` keeps only the toroidal grid, the chunk manager and the redb backend; its key math moved to `world_model::spatial`. Commands and observations are used by the evidence driver; the runtime ports are recorded as signatures in [GPU contract](../../../reference/gpu-contract.md#runtime-ports-proposed-for-02) for 02 to create. |
+| Physical limits | Fixed in [GPU contract](../../../reference/gpu-contract.md#supported-physical-envelope-fixed-in-01) and owned by `world_model::{config, body, units}`: tick 10–240 Hz, catch-up 1–16, body substep ≤ 1/120 s dividing the tick, elevation scale 0.01–5.0 as physical configuration, body radius 2–8, relative density 0.01–25, mass 0.01–1000, speed ≤ 600 world units/s, ≤ 4,096 bodies, brush radius 0–64 and strength 1–255, active radius 1–32. Tolerances are the baseline tests' own, per test in the registry. |
+| Decisions / deviations | The elevation scale is physical configuration ([world format](../../../reference/world-format.md#existing-packed-cell)); the acceptance conflict is closed. The run protocol counts a 1,800-tick window instead of 1,800 frames; the calibration and its reason are recorded in the [performance budgets](../../../reference/performance-budgets.md#regression-and-improvement-policy) before any candidate. Measurement windows update continuously when unfocused, because Bevy's default throttles them to 60 Hz. The quench ceiling defect is kept and documented for 03. `cargo deny` found advisories after the baseline was measured: `0e948bb` updates six locked crates at patch level (generator output unchanged), and `deny.toml` accepts four advisories without a compatible fix, each with its reason and stage. `0e948bb` also took the staged deletion of `runtime/hooks.rs` without its module declaration, so that commit alone does not build; `ecd9212` completes the removal. The first full baseline at `79e7ead` was rejected (compositor pacing) and is kept locally as `target/evidence/rejected-baseline-*-79e7ead`. |
+| Checks | At FINAL_COMMIT: `cargo evidence check docs` passed; `cargo evidence check static` passed; `cargo evidence test cpu` passed (CPU_RESULT). Baseline: `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --output target/evidence/baseline-qualification`, the same for `scale`; both passed at `6e108d6`. Drift after the extraction: `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --case flow --case body-contact --case coupled --output target/evidence/drift-7a84a80` at `7a84a80` passed, 5/5 valid runs per case, none contended; simulation and body time per tick within 2% of the baseline, frame medians 3–6% lower ([performance budgets](../../../reference/performance-budgets.md#measured-legacy-baseline-01)). |
+| Hardware / measurements | Ryzen 9 5950X, RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.71.09), KDE Wayland, 1920×1080 always-on-top window, no vsync. Summaries in `tools/evidence/baselines/legacy-6e108d6/`; raw samples only in `target/evidence/baseline-{qualification,scale}/` on that machine. Results in the [performance budgets](../../../reference/performance-budgets.md#measured-legacy-baseline-01). The capacity profile is frozen and not run on the baseline. |
+| Acceptance | A01 satisfied for 01's scope: source baseline, all 28 test intentions and the tool surface retained; the runner's negative cases pass and a missing suite cannot pass; consumers use the model and the fixtures keep their meaning; the baseline names its hardware and limits; profiles and tolerances are frozen before optimization. A02–A15 not run. |
+| Data safety | Every bench and visual-reference run used a new world directory under its run directory and a scratch working directory; since `6e108d6` they are deleted after validation, and the leftovers of earlier pilot runs were removed. The fixture store test works on a copy and removes it. `world_data/save.redb` was never opened by 01. It changed on 2026-10-11 at 14:24 local time (8,074,563,584 → 8,237,617,152 bytes) while no 01 work was running. |
+| Blockers | None for 02. |
+| Next action / stop | Stopped at the end of 01. Assign 02. |
+
+### Carried into later stages
+
+1. **Measured defects for their owners** (source audit, "Found while measuring"): chunks that stream
+   in are never woken (03, A05); the brush cursor marks all four material assets modified every
+   frame (06); a brush frame and a tick frame each upload the whole grid (06); the unfocused-window
+   policy of the native client (06).
+2. **Persistence baseline failures** for 05, unchanged by 01: eviction-only saves without a dirty
+   flag, stale reads while a save is pending, an exit flush that omits active and cached chunks, and
+   read or decode errors that fall through to generation.
+3. **Shader validation** joins `check static` when 02 adds standalone WGSL. The legacy Bevy shaders
+   under `crates/morbid-app/assets` are validated only at runtime and are removed in 06.
+4. **The capacity profile** runs against the GPU runtime (04–07), never against the baseline.
 
 ## 00 boundary
 
@@ -77,8 +97,8 @@ engineering choices, not measured outcomes.
    design: brush ray march, preview, spawn height and attract/lift targets; brush edits; observer
    walking floor samples; full-grid statistics sums. The residency focus freezes while the
    observer is detached.
-5. **Elevation-scale conflict.** Decide its meaning in Checkpoint C; see
-   [acceptance](acceptance.md#open-conflicts-with-existing-behavior).
+5. **Elevation-scale conflict.** Decide its meaning in Checkpoint C (decided in 01: physical
+   configuration; see [acceptance](acceptance.md#resolved-conflicts-with-existing-behavior)).
 6. **Clock limits.** The live tick-rate (10–240 Hz) and catch-up (1–16) controls need a supported
    range, plus a rule for how body substeps divide a tick.
 7. **Coordinates.** Fixture the axis mapping recorded in

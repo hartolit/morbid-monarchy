@@ -119,11 +119,68 @@ respect source/destination capacity, then commit. Body movement, grounded status
 crater/rut work and displacement are one coupled physical operation, not independent decorative
 passes. Terrain-contact interpolation agrees with the rendered physical surface.
 
-01 fixes physical limits and 04 proves them: positive radius/mass, finite inputs, supported speed,
-substep bounds and largest influence footprint. Crossing an unavailable region is explicitly
-suspended/clamped or waits through residency policy; it does not tunnel into an empty default grid.
+01 fixed the physical limits ([below](#supported-physical-envelope-fixed-in-01)) and 04 proves
+them: positive radius/mass, finite inputs, supported speed, substep bounds and largest influence
+footprint. Crossing an unavailable region is explicitly suspended/clamped or waits through
+residency policy; it does not tunnel into an empty default grid.
 Persist/suspend nonresident bodies in 05. Generation-bearing handles remain valid across live
 state movement or are explicitly invalidated and replaced—not silently recycled.
+
+### Supported physical envelope (fixed in 01)
+
+`world-model` owns these values in code (`config`, `body`, `units`). The GPU runtime handles every
+value inside them and refuses a value outside them before it changes the world; a refusal is
+visible, never a silent clamp. The baseline column shows where today's CPU application differs.
+
+| Quantity | Supported | Unit | Reason | Baseline |
+| --- | --- | --- | --- | --- |
+| Tick rate | 10–240, default 60 | ticks/s | The developer UI's range. | Same. |
+| Catch-up | 1–16, default 4 | ticks per presented frame | Backlog beyond the cap is discarded and reported. | Same; the scale profile discards 30–69 s of simulated time per run. |
+| Body substep | at most 1/120 | s | A tick is split into the fewest equal substeps no longer than this: 2 at 60 Hz, 12 at 10 Hz, 1 at 240 Hz, so at most 12 per tick and 192 per frame. | Substeps divide frame time, not the tick, at most 8 per frame. |
+| Gravity | −32 | world units/s² | Current tuning. | Same. |
+| Elevation scale | 0.01–5.0, default 0.5 | world units per elevation unit | Physical configuration, applied at a tick boundary and recorded with the configuration in a checkpoint ([world format](world-format.md#existing-packed-cell)). | Written immediately by the UI; not saved. |
+| Body radius | 2–8 | world units | The presets use 4. Below 2, contact sampling sees too few cell vertices; above 8, the footprint (up to 2.75 radii, 22 cells) outgrows the bins. | Unchecked. |
+| Body relative density | 0.01–25 | × water | 0.01 is the solver's buoyancy floor; 25 exceeds the densest metals. | Floored at 0.01. |
+| Body mass | 0.01–1000 | solver mass unit | Only ratios and the rut depth's square-root scaling use mass; it is not a calibrated kilogram. | Unchecked. |
+| Body speed | up to 600 | world units/s | Attract's terminal speed against air drag is 350 / 0.6 ≈ 583. At 1/120 s a body at this speed moves 5 units per substep, more than the smallest radius, so 04 subdivides or sweeps fast bodies. | Unbounded. |
+| Bodies | up to 4,096 | count | The capacity profile. | Unbounded; all n(n−1)/2 pairs tested every substep. |
+| Brush | radius 0–64, strength 1–255 | cells, units per cell | Radius 64 touches at most 12,853 cells per stroke. | Same. |
+| Active window | radius 1–32 | chunks per axis | At radius 32 one packed cell array is 132 MiB, beyond a default 128 MiB storage binding, so 02 requests a larger binding or splits the array. | Same range; CPU arrays. |
+
+Queues and working sets use the [performance budgets](performance-budgets.md#structural-gates):
+at most 3 outstanding frame/tick submissions, at most 256 KiB of command plus ordinary observation
+payload per presented frame, and 64 MiB for the combined CPU upload/readback/save-retry working
+set. 02 sizes the command and observation rings from these numbers and reports the occupancy.
+
+Body behavior is accepted against the tolerances the baseline tests already state, recorded per
+test in the [coverage registry](../../tools/evidence/coverage.toml). For example: horizontal drift
+under 0.05 world units at rest; sinkage at most the rut depth scale plus 0.25; a floating
+submerged fraction within 0.05 of the relative density; a grounded share of at least 90% on bumpy
+ground; analytic geometry within 1e-6. Integer quantities (cells, volumes, conservation totals)
+compare exactly. 04 does not require bitwise agreement with the CPU baseline.
+
+## Runtime ports (proposed for 02)
+
+These are the boundaries `world-runtime` will own. Each takes batches and returns identified
+results; none is a virtual call per cell. They are signatures, not code, because nothing consumes
+them before 02. 02 creates them with their first consumer and replaces this section with the
+actual interface.
+
+```text
+PhysicalWorld (implemented by gpu-world)
+  submit(tick_batch: &[Command], tick: Tick) -> Result<SubmissionTicket, Refusal>
+  poll_observations(into: &mut ObservationBuffer) -> PollOutcome      // never blocks
+  upload_chunk(slot: SlotRef, revision: Revision, cells: &[WorldCell]) -> Result<UploadTicket, Refusal>
+  capture_chunks(request: CaptureRequest) -> Result<CaptureTicket, Refusal>
+
+ChunkStore (implemented by world-store)
+  load(key: ChunkKey, generation: RequestGeneration) -> LoadTicket    // absent / corrupt / unavailable are distinct
+  commit(batch: SaveBatch) -> SaveTicket                              // payload retained until acknowledged
+```
+
+`Command`, `BodyObservation`, `BodyHandle`, `ChunkKey` and `WorldCell` already exist in
+`world-model`; the baseline driver issues the commands and reports the observations today.
+Tickets, refusals, slots and revisions are added by the stages that need them.
 
 ## GPU resource lifecycle
 
