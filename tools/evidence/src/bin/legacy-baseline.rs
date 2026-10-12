@@ -155,6 +155,7 @@ fn compose(scenario: &Scenario, arguments: &Arguments) -> App {
             physical_size: scenario.presentation.resolution,
             vsync: scenario.presentation.present_mode == PresentMode::Vsync,
             always_on_top: true,
+            continuous_when_unfocused: true,
         }),
         input: InputMode::Scripted,
     });
@@ -835,6 +836,8 @@ fn write_outputs(driver: &Driver, status: &str) {
         "window_physical": driver.window_physical,
         "window_mismatch": driver.window_mismatch,
         "present_mode": driver.scenario.presentation.present_mode,
+        "update_mode": "continuous, focused or not",
+        "window_level": "always on top",
         "first_frame_seconds": driver.first_frame_seconds,
         "residency_seconds": driver.residency_seconds,
         "samples": driver.samples.len(),

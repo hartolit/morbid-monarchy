@@ -227,7 +227,8 @@ const PACED_STRETCH_FRAMES: usize = 30;
 const PACED_SPIKE_SHARE: f64 = 0.01;
 const PACED_SPIKE_RATIO: usize = 4;
 
-/// Evidence that a compositor, not the application's work, set the frame times.
+/// Evidence that presentation pacing (an unfocused-window throttle or the compositor), not the
+/// application's work, set the frame times.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Pacing {
     pub interval_ms: f64,

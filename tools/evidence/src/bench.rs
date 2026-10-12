@@ -41,6 +41,10 @@ pub const PROTOCOL_MEASURED_FRAMES: usize = 1800;
 const QUIET_CPU_BUSY_PERCENT: f64 = 15.0;
 /// Longest wait for a quiet host before a run starts anyway and is marked contended.
 const QUIET_WAIT_LIMIT: Duration = Duration::from_secs(120);
+/// Extra attempts per case for runs rejected only for presentation (a paced or resized
+/// window), which the desktop rather than the application causes. Every attempt is reported;
+/// a crash, timeout, wrong adapter or tick error is never retried.
+const PRESENTATION_RETRIES: u32 = 2;
 
 pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, Value) {
     let Some(profile) = scenario::profile(&request.profile) else {
@@ -133,24 +137,58 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
     for loaded in &scenarios {
         let case = loaded.scenario.case.clone();
         let runs = request.runs.unwrap_or(loaded.scenario.run.runs);
-        let mut results = Vec::new();
-        for index in 1..=runs {
-            println!("bench {} {case}: run {index}/{runs}", profile.name);
-            results.push(execute_run(
-                root,
-                run_dir,
-                &driver,
-                loaded,
-                &adapter,
-                &format!("run-{index}"),
-                false,
-            ));
+        let mut results: Vec<RunResult> = Vec::new();
+        let mut retries_left = PRESENTATION_RETRIES;
+        let mut attempt = 0;
+        let mut failed_slots = 0;
+        for slot in 1..=runs {
+            loop {
+                attempt += 1;
+                println!(
+                    "bench {} {case}: run {slot}/{runs} (attempt {attempt})",
+                    profile.name
+                );
+                let result = execute_run(
+                    root,
+                    run_dir,
+                    &driver,
+                    loaded,
+                    &adapter,
+                    &format!("run-{attempt}"),
+                    false,
+                );
+                let retry = result.presentation_only_rejection() && retries_left > 0;
+                if !result.problems.is_empty() && !retry {
+                    failed_slots += 1;
+                }
+                results.push(result);
+                if !retry {
+                    break;
+                }
+                retries_left -= 1;
+            }
         }
         println!(
             "bench {} {case}: diagnostic run with GPU timestamps",
             profile.name
         );
-        let diagnostic = execute_run(root, run_dir, &driver, loaded, &adapter, "diagnostic", true);
+        let mut diagnostic =
+            execute_run(root, run_dir, &driver, loaded, &adapter, "diagnostic", true);
+        if diagnostic.presentation_only_rejection() {
+            println!(
+                "bench {} {case}: diagnostic run again after a presentation rejection",
+                profile.name
+            );
+            diagnostic = execute_run(
+                root,
+                run_dir,
+                &driver,
+                loaded,
+                &adapter,
+                "diagnostic-2",
+                true,
+            );
+        }
 
         let contended = results.iter().filter(|result| result.contended).count();
         let few_frames = results
@@ -170,7 +208,7 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
             .iter()
             .filter_map(|result| result.statistics.as_ref())
             .collect();
-        let state = if problems.is_empty() && valid.len() == runs as usize {
+        let state = if failed_slots == 0 && valid.len() == runs as usize {
             State::Passed
         } else {
             State::Failed
@@ -181,8 +219,9 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
                 format!("bench.{case}"),
                 state,
                 format!(
-                    "{}/{runs} valid runs ({contended} contended, {few_frames} below {PROTOCOL_MEASURED_FRAMES} frames); frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
+                    "{}/{runs} valid runs in {} attempts ({contended} contended, {few_frames} below {PROTOCOL_MEASURED_FRAMES} frames); frame median {:.2} ms, worst p95 {:.2} ms, worst p99 {:.2} ms",
                     valid.len(),
+                    results.len(),
                     summary.median_of_medians_ms,
                     summary.worst_p95_ms,
                     summary.worst_p99_ms
@@ -316,6 +355,9 @@ pub struct RunResult {
     pub gpu_passes_recorded: usize,
     /// True when the window held fewer than [`PROTOCOL_MEASURED_FRAMES`] frames.
     pub below_frame_protocol: bool,
+    /// How many of `problems` concern presentation (pacing, a resized window) rather than the
+    /// application's behavior.
+    pub presentation_problems: usize,
     /// Seconds spent waiting for the host to become quiet before starting.
     pub quiet_wait_seconds: f64,
     /// True when the host never fell below the quiet threshold; the run still counts, but its
@@ -323,6 +365,13 @@ pub struct RunResult {
     pub contended: bool,
     pub contention_before: Contention,
     pub contention_after: Contention,
+}
+
+impl RunResult {
+    /// Rejected only because of the desktop's presentation, so another attempt is fair.
+    pub fn presentation_only_rejection(&self) -> bool {
+        !self.problems.is_empty() && self.problems.len() == self.presentation_problems
+    }
 }
 
 fn execute_run(
@@ -346,6 +395,7 @@ fn execute_run(
         gpu_memory_mib_max: None,
         gpu_passes_recorded: 0,
         below_frame_protocol: false,
+        presentation_problems: 0,
         quiet_wait_seconds: 0.0,
         contended: false,
         contention_before: Contention::default(),
@@ -445,6 +495,8 @@ fn execute_run(
     result.contention_after = Contention::sample();
 
     validate_run(&mut result, &summary_path, &samples_path, loaded, adapter);
+    // The scratch world is only the run's input and side effect; the samples are the evidence.
+    let _ = fs::remove_dir_all(directory.join("world"));
     result
 }
 
@@ -490,6 +542,7 @@ fn validate_run(
             "invalid presentation: {}",
             summary["window_mismatch"]
         ));
+        result.presentation_problems += 1;
     }
     result.gpu_passes_recorded = summary["gpu_pass_elapsed_ms"]
         .as_object()
@@ -508,21 +561,32 @@ fn validate_run(
         Ok(samples) => {
             let plan = &loaded.scenario.run;
             let statistics = measurement::run_statistics(&samples);
+            let window_end = plan.warmup_ticks + plan.measured_ticks;
             let final_tick = samples.last().map_or(0, |sample| sample.tick);
-            if statistics.ticks < plan.measured_ticks
-                || final_tick < plan.warmup_ticks + plan.measured_ticks
-            {
-                result.problems.push(format!(
-                    "measured {} ticks ending at tick {final_tick}; the window is {} ticks ending at {}",
-                    statistics.ticks,
-                    plan.measured_ticks,
-                    plan.warmup_ticks + plan.measured_ticks
-                ));
+            // A frame is measured when it starts at or after the warm-up ticks, so the first
+            // measured frame may start up to one catch-up batch after them.
+            let latest_start =
+                plan.warmup_ticks + u64::from(loaded.scenario.world.max_ticks_per_frame) - 1;
+            match samples.iter().find(|sample| sample.measured) {
+                None => result.problems.push("no measured frames".to_owned()),
+                Some(first) => {
+                    let first_start = first.tick - first.ticks;
+                    if !(plan.warmup_ticks..=latest_start).contains(&first_start)
+                        || final_tick < window_end
+                        || statistics.ticks != final_tick - first_start
+                    {
+                        result.problems.push(format!(
+                            "measured window from tick {first_start} to {final_tick} with {} ticks; expected a start in {}..={latest_start}, an end at or after {window_end}, and no missing ticks",
+                            statistics.ticks, plan.warmup_ticks
+                        ));
+                    }
+                }
             }
             result.below_frame_protocol = statistics.measured_frames < PROTOCOL_MEASURED_FRAMES;
             if let Some(pacing) = statistics.presentation_pacing {
+                result.presentation_problems += 1;
                 result.problems.push(format!(
-                    "the compositor paced presentation at {:.2} ms ({} frames on it, {} beside, longest stretch {}); keep the window visible",
+                    "frames were paced at {:.2} ms, not by work ({} frames on it, {} beside, longest stretch {}); the window was throttled",
                     pacing.interval_ms,
                     pacing.frames_on_interval,
                     pacing.frames_beside_interval,

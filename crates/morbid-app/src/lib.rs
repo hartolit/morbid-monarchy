@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use bevy::{
     prelude::*,
     window::{PresentMode, WindowLevel, WindowResolution},
+    winit::{UpdateMode, WinitSettings},
 };
 use monarch_engine::{core::entities::observer::resolve_observer_kinematics, prelude::*};
 
@@ -37,9 +38,11 @@ pub struct AppOptions {
 pub struct WindowRequest {
     pub physical_size: [u32; 2],
     pub vsync: bool,
-    /// Keeps the window above others. Measurement runs use it because a compositor throttles
-    /// the presentation of a covered window, which would be timed as the application's work.
+    /// Keeps the window above others, so it is not covered during a measurement.
     pub always_on_top: bool,
+    /// Updates continuously even without focus. Bevy's default throttles an unfocused window to
+    /// 60 updates per second; a measurement must not depend on where the user's focus is.
+    pub continuous_when_unfocused: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,7 +95,17 @@ pub fn build_app(options: AppOptions) -> App {
     }
 
     let interactive = options.input == InputMode::Interactive;
+    let continuous = options
+        .window
+        .as_ref()
+        .is_some_and(|request| request.continuous_when_unfocused);
     let mut app = App::new();
+    if continuous {
+        app.insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        });
+    }
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
