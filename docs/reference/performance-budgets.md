@@ -131,8 +131,9 @@ run capacity against the GPU runtime.
 
 Executed evidence of the GPU boundary, not an application speedup: no physical rule runs on the
 GPU before 03, so nothing here compares with the baseline's frame times. Measured on 2026-10-13
-with `cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05` (RTX 5070 Ti, Vulkan,
-NVIDIA 615.71.09; release build), case `steady-state-reuse`: a radius-2 window with nine generated
+08:52 UTC at `f740577` (clean tree) with `cargo evidence test gpu --suite transfers --adapter
+vulkan-10de-2c05 --output target/evidence/final-02-transfers` (RTX 5070 Ti, Vulkan, NVIDIA
+615.71.09; release build), case `steady-state-reuse`: a radius-2 window with nine generated
 chunks, 120 warm-up ticks, then 1,200 measured ticks of 8 brush strokes (radius 3) and 8 column
 queries each, a capture every 60 ticks and a chunk retired and uploaded every 120. The harness
 submits as fast as backpressure allows, so its tick rate is not a frame rate.
@@ -146,8 +147,8 @@ submits as fast as backpressure allows, so its tick rate is not a frame rate.
 | Upload per tick | commands 768 B, tick parameters and event reset 80 B, slot metadata 0.6 B; chunk uploads 273 B (residency churn, labelled streaming) |
 | Readback per tick | results 768 B, event buffer 1,040 B, timestamps 16 B; captures 546 B (labelled) |
 | Command plus ordinary observation payload | 2,673 B per tick: 10.7 KiB per presented frame at four ticks, 160 KiB/s at 60 ticks/s (budgets: 256 KiB and 16 MiB/s) |
-| Command pass device time (timestamps, period 1 ns) | median 24 µs, maximum 38 µs |
-| Submission to decoded results | median 0.09 ms, p95 0.14 ms, maximum 2.1 ms (unpaced) |
+| Command pass device time (timestamps, period 1 ns) | median 24 µs, maximum 179 µs (the maximum ranged 38–182 µs over three runs that day) |
+| Submission to decoded results | median 0.09 ms, p95 0.16 ms, maximum 1.9 ms (unpaced) |
 | Process heap allocations per tick | 105: 103 on the submit path (wgpu's command recording and tracking, and the boxed completion and map callbacks its API takes), 2.1 on the poll path; application-owned pools allocate nothing after warm-up |
 
 The full-resolution case reports and every case's metrics are in `report.json` and
