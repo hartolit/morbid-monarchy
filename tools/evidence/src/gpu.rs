@@ -1,16 +1,31 @@
 //! Adapter inventory and GPU lanes.
 //!
-//! `inspect-adapter` enumerates every adapter on every backend and assigns each a stable
-//! identifier; GPU commands then name that identifier explicitly. Nothing here picks a
-//! "preferred" GPU. Suites and scenarios that later stages own are registered by name so that
-//! requesting them fails explicitly instead of passing an empty selection.
+//! `inspect-adapter` lists every adapter on every backend with the stable identifier
+//! `gpu-world` assigns; GPU commands then name that identifier explicitly. Nothing here picks
+//! a "preferred" GPU. A suite runs only when its owner stage has registered real cases; the
+//! others fail explicitly, so a requested GPU lane can never pass on an empty selection.
+
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde::Serialize;
 
 use crate::{
     cli::GpuSuite,
+    paths,
+    process::{Step, run_logged},
     report::{Item, State},
+    suites::{self, CaseResult},
+    tests_cpu::Registry,
 };
+
+/// The binary that runs one suite case per process.
+const SUITE_BINARY: &str = "gpu-suite";
+/// The longest one case may run before it is killed and failed.
+const CASE_TIME_LIMIT: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AdapterRecord {
@@ -33,60 +48,23 @@ pub struct AdapterRecord {
     pub limits: Vec<(String, String)>,
 }
 
-/// Enumerates adapters on all compiled backends.
+/// Enumerates adapters on all compiled backends, through the GPU owner's inventory.
 pub fn enumerate() -> Vec<AdapterRecord> {
-    let descriptor = wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    };
-    let instance = wgpu::Instance::new(descriptor);
-    let adapters =
-        futures_lite::future::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-    let mut records: Vec<AdapterRecord> = adapters.iter().map(record).collect();
-    disambiguate(&mut records);
-    records
-}
-
-fn record(adapter: &wgpu::Adapter) -> AdapterRecord {
-    let info = adapter.get_info();
-    let backend = format!("{:?}", info.backend).to_lowercase();
-    AdapterRecord {
-        id: format!("{backend}-{:04x}-{:04x}", info.vendor, info.device),
-        name: info.name.clone(),
-        software: matches!(info.device_type, wgpu::DeviceType::Cpu),
-        device_type: format!("{:?}", info.device_type),
-        vendor: format!("0x{:04x}", info.vendor),
-        device: format!("0x{:04x}", info.device),
-        pci_bus: info.device_pci_bus_id.clone(),
-        driver: info.driver.clone(),
-        driver_info: info.driver_info.clone(),
-        backend,
-        features: adapter
-            .features()
-            .iter_names()
-            .map(|(name, _)| name.to_owned())
-            .collect(),
-        limits: debug_fields(&format!("{:#?}", adapter.limits())),
-    }
-}
-
-fn disambiguate(records: &mut [AdapterRecord]) {
-    let ids: Vec<String> = records.iter().map(|record| record.id.clone()).collect();
-    for (index, record) in records.iter_mut().enumerate() {
-        let duplicates = ids.iter().filter(|id| **id == record.id).count();
-        if duplicates > 1 {
-            let ordinal = ids[..index].iter().filter(|id| **id == record.id).count();
-            record.id = format!("{}-{ordinal}", record.id);
-        }
-    }
-}
-
-/// Splits pretty `Debug` output of a flat struct into `(field, value)` pairs.
-fn debug_fields(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter_map(|line| {
-            let (name, value) = line.trim().split_once(": ")?;
-            Some((name.to_owned(), value.trim_end_matches(',').to_owned()))
+    gpu_world::context::AdapterInventory::enumerate()
+        .records()
+        .map(|record| AdapterRecord {
+            id: record.id.clone(),
+            name: record.name.clone(),
+            backend: record.backend.clone(),
+            device_type: record.device_type.clone(),
+            software: record.software,
+            vendor: format!("0x{:04x}", record.vendor),
+            device: format!("0x{:04x}", record.device),
+            pci_bus: record.pci_bus.clone(),
+            driver: record.driver.clone(),
+            driver_info: record.driver_info.clone(),
+            features: record.features.clone(),
+            limits: record.limits.clone(),
         })
         .collect()
 }
@@ -140,17 +118,45 @@ pub fn resolve<'a>(records: &'a [AdapterRecord], id: &str) -> Result<&'a Adapter
         })
 }
 
-/// Executes a GPU suite. No suite is implemented before its owner stage; each fails
-/// explicitly so a requested GPU lane can never pass on an empty selection.
-pub fn suite_items(suite: GpuSuite, adapter: &AdapterRecord) -> Vec<Item> {
-    let suites: Vec<GpuSuite> = match suite {
+/// Where a lane builds and finds its helper binaries.
+pub struct LaneContext<'a> {
+    pub root: &'a Path,
+    pub run_dir: &'a Path,
+}
+
+/// Executes a GPU suite (or all of them) on `adapter`.
+pub fn suite_items(
+    suite: GpuSuite,
+    adapter: &AdapterRecord,
+    lane: &LaneContext<'_>,
+) -> (Vec<Item>, serde_json::Value) {
+    let requested: Vec<GpuSuite> = match suite {
         GpuSuite::All => GpuSuite::NAMED.to_vec(),
         single => vec![single],
     };
-    suites
-        .into_iter()
-        .map(|suite| {
+    let mut items = Vec::new();
+    let mut data = serde_json::Map::new();
+    if adapter.software {
+        items.push(
             Item::new(
+                "gpu.adapter.software",
+                State::Passed,
+                format!("{} is a software adapter: correctness coverage only, never hardware qualification", adapter.id),
+            )
+            .optional(),
+        );
+    }
+    for suite in requested {
+        match suites::cases(suite) {
+            Some(cases) => {
+                let (suite_items, results) = run_suite(suite, cases, adapter, lane);
+                items.extend(suite_items);
+                data.insert(
+                    suite.name().to_owned(),
+                    serde_json::to_value(results).unwrap_or_default(),
+                );
+            }
+            None => items.push(Item::new(
                 format!("gpu.suite.{}", suite.name()),
                 State::Failed,
                 format!(
@@ -159,9 +165,185 @@ pub fn suite_items(suite: GpuSuite, adapter: &AdapterRecord) -> Vec<Item> {
                     suite.owner_stage(),
                     adapter.id
                 ),
-            )
-        })
+            )),
+        }
+    }
+    (items, serde_json::Value::Object(data))
+}
+
+/// The registry's behaviors for `suite`: entries whose target is `gpu:<suite>`.
+pub fn registered_cases(registry: &Registry, suite: GpuSuite) -> BTreeSet<String> {
+    let target = format!("gpu:{}", suite.name());
+    registry
+        .behaviors
+        .iter()
+        .filter(|behavior| behavior.target == target)
+        .map(|behavior| behavior.test.clone())
         .collect()
+}
+
+/// Differences between the cases a suite defines and the ones the registry expects.
+pub fn registry_problems(defined: &BTreeSet<String>, registered: &BTreeSet<String>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for missing in registered.difference(defined) {
+        problems.push(format!(
+            "registered case `{missing}` is not defined by the suite"
+        ));
+    }
+    for unregistered in defined.difference(registered) {
+        problems.push(format!(
+            "case `{unregistered}` has no coverage registry entry"
+        ));
+    }
+    if registered.is_empty() {
+        problems.push("the registry expects no case: an empty suite cannot pass".to_owned());
+    }
+    problems
+}
+
+fn suite_binary(root: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|dir| {
+            if dir.is_absolute() {
+                dir
+            } else {
+                root.join(dir)
+            }
+        })
+        .unwrap_or_else(|| root.join("target"));
+    target.join("release").join(SUITE_BINARY)
+}
+
+fn run_suite(
+    suite: GpuSuite,
+    cases: &[suites::Case],
+    adapter: &AdapterRecord,
+    lane: &LaneContext<'_>,
+) -> (Vec<Item>, Vec<CaseResult>) {
+    let name = suite.name();
+    let mut items = Vec::new();
+    let registry = match Registry::load(&lane.root.join(paths::COVERAGE_REGISTRY)) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return (
+                vec![Item::new(
+                    format!("gpu.{name}.registry"),
+                    State::Failed,
+                    error,
+                )],
+                Vec::new(),
+            );
+        }
+    };
+    let defined: BTreeSet<String> = cases.iter().map(|case| case.name.to_owned()).collect();
+    let problems = registry_problems(&defined, &registered_cases(&registry, suite));
+    items.push(
+        Item::new(
+            format!("gpu.{name}.registry"),
+            if problems.is_empty() {
+                State::Passed
+            } else {
+                State::Failed
+            },
+            format!("{} cases defined and registered", defined.len()),
+        )
+        .with_details(problems),
+    );
+
+    let build = run_logged(
+        &Step::new("cargo", lane.root).args([
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "monarchy-evidence",
+            "--bin",
+            SUITE_BINARY,
+        ]),
+        lane.run_dir,
+        &format!("gpu-{name}-build"),
+    );
+    if build.state != State::Passed {
+        items.push(
+            Item::new(
+                format!("gpu.{name}.build"),
+                build.state,
+                format!("suite build {}", build.reason.unwrap_or_default()),
+            )
+            .with_log(build.log),
+        );
+        return (items, Vec::new());
+    }
+    let binary = suite_binary(lane.root);
+    let results_dir = lane.run_dir.join(format!("gpu-{name}"));
+    if let Err(error) = std::fs::create_dir_all(&results_dir) {
+        items.push(Item::new(
+            format!("gpu.{name}.results"),
+            State::Failed,
+            error.to_string(),
+        ));
+        return (items, Vec::new());
+    }
+    let mut results = Vec::new();
+    for case in cases {
+        let result_path = results_dir.join(format!("{}.json", case.name));
+        let _ = std::fs::remove_file(&result_path);
+        let mut step = Step::new(binary.as_os_str(), lane.root)
+            .args([
+                "--suite",
+                name,
+                "--adapter",
+                &adapter.id,
+                "--case",
+                case.name,
+                "--result",
+            ])
+            .arg(result_path.as_os_str())
+            .timeout(CASE_TIME_LIMIT);
+        if adapter.software {
+            step = step.arg("--allow-software");
+        }
+        let outcome = run_logged(&step, lane.run_dir, &format!("gpu-{name}-{}", case.name));
+        let id = format!("gpu.{name}.{}", case.name);
+        let parsed = std::fs::read_to_string(&result_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<CaseResult>(&text).ok());
+        let item = match parsed {
+            Some(result) => {
+                let state = if result.passed && outcome.state == State::Passed {
+                    State::Passed
+                } else {
+                    State::Failed
+                };
+                let mut details: Vec<String> = result
+                    .failures
+                    .iter()
+                    .map(|failure| format!("FAILED {failure}"))
+                    .collect();
+                details.extend(result.notes.iter().map(|note| format!("note: {note}")));
+                let item = Item::new(id, state, case.summary)
+                    .with_details(details)
+                    .with_log(outcome.log);
+                results.push(result);
+                item
+            }
+            None => Item::new(
+                id,
+                State::Failed,
+                format!(
+                    "{}: no result ({})",
+                    case.summary,
+                    outcome
+                        .reason
+                        .unwrap_or_else(|| "exited without writing one".to_owned())
+                ),
+            )
+            .with_log(outcome.log),
+        };
+        items.push(item);
+    }
+    (items, results)
 }
 
 /// Connected scenarios run through the production runtime. They are registered here by the
@@ -203,30 +385,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_identifiers_get_ordinals() {
-        let mut records = vec![
-            named("vulkan-10de-2c05"),
-            named("gl-10de-2c05"),
-            named("vulkan-10de-2c05"),
-        ];
-        disambiguate(&mut records);
-        let ids: Vec<&str> = records.iter().map(|record| record.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            ["vulkan-10de-2c05-0", "gl-10de-2c05", "vulkan-10de-2c05-1"]
-        );
-    }
-
-    #[test]
     fn unimplemented_suites_and_scenarios_fail_and_missing_adapters_are_unavailable() {
         let adapter = named("vulkan-10de-2c05");
-        for item in suite_items(GpuSuite::All, &adapter) {
-            assert_eq!(item.state, State::Failed, "{}", item.id);
+        let dir =
+            std::env::temp_dir().join(format!("monarchy-evidence-gpu-{}", std::process::id()));
+        let lane = LaneContext {
+            root: &dir,
+            run_dir: &dir,
+        };
+        for suite in [
+            GpuSuite::Cells,
+            GpuSuite::Bodies,
+            GpuSuite::Streaming,
+            GpuSuite::Render,
+        ] {
+            let (items, _) = suite_items(suite, &adapter, &lane);
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].state, State::Failed, "{}", items[0].id);
         }
-        assert_eq!(
-            suite_items(GpuSuite::All, &adapter).len(),
-            GpuSuite::NAMED.len()
-        );
         assert_eq!(
             scenario_items("resident-world", &adapter)[0].state,
             State::Failed
@@ -236,14 +412,41 @@ mod tests {
     }
 
     #[test]
-    fn limits_debug_output_becomes_fields() {
-        let fields = debug_fields(
-            "Limits {\n    max_texture_dimension_1d: 8192,\n    max_bind_groups: 4,\n}",
+    fn a_suite_must_match_its_registry_and_cannot_be_empty() {
+        let set = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<BTreeSet<String>>()
+        };
+        assert!(registry_problems(&set(&["a", "b"]), &set(&["a", "b"])).is_empty());
+        assert_eq!(
+            registry_problems(&set(&["a"]), &set(&["a", "b"])).len(),
+            1,
+            "a registered case vanished"
         );
         assert_eq!(
-            fields[0],
-            ("max_texture_dimension_1d".to_owned(), "8192".to_owned())
+            registry_problems(&set(&["a", "b"]), &set(&["a"])).len(),
+            1,
+            "an unregistered case"
         );
-        assert_eq!(fields.len(), 2);
+        assert!(
+            !registry_problems(&set(&[]), &set(&[])).is_empty(),
+            "an empty suite"
+        );
+    }
+
+    #[test]
+    fn every_transfers_case_is_registered() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let registry = Registry::load(&root.join("coverage.toml")).expect("registry");
+        let defined: BTreeSet<String> = suites::transfers::CASES
+            .iter()
+            .map(|case| case.name.to_owned())
+            .collect();
+        assert_eq!(
+            registry_problems(&defined, &registered_cases(&registry, GpuSuite::Transfers)),
+            Vec::<String>::new()
+        );
     }
 }

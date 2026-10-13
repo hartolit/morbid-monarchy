@@ -1,6 +1,7 @@
 //! `check static`: formatting, compilation of each declared feature combination, Clippy and
-//! compiler warnings against the finite baseline, warning-denying rustdoc, dependency policy
-//! (`cargo deny`), unused dependencies (`cargo machete`) and repository contracts.
+//! compiler warnings against the finite baseline, warning-denying rustdoc, assembled-shader
+//! validation, dependency policy (`cargo deny`), unused dependencies (`cargo machete`) and
+//! repository contracts.
 
 use std::path::Path;
 
@@ -109,13 +110,17 @@ pub fn run(root: &Path, run_dir: &Path, lint_baseline: &Path) -> Vec<Item> {
         doc,
     ));
 
+    items.push(shaders_item(run_dir));
+
     for tool in REQUIRED_TOOLS {
         items.push(tool_item(root, run_dir, tool));
     }
 
-    match (Workspace::load(root, true), Workspace::load(root, false)) {
-        (Ok(all), Ok(default)) => items.push(contracts::dependency_item(&all, &default)),
-        (Err(error), _) | (_, Err(error)) => {
+    match Workspace::load(root, true) {
+        Ok(all) => items.push(contracts::dependency_item(&all, &|package| {
+            Workspace::load_package(root, package)
+        })),
+        Err(error) => {
             items.push(Item::new(
                 "static.contracts.dependencies",
                 State::Failed,
@@ -126,6 +131,42 @@ pub fn run(root: &Path, run_dir: &Path, lint_baseline: &Path) -> Vec<Item> {
     items.push(contracts::pins_item(root));
     items.push(contracts::ci_item(root, REQUIRED_TOOLS));
     items
+}
+
+/// Validates every assembled production shader with naga, as wgpu compiles it, and writes the
+/// assembled sources to `shaders/` in the run directory for inspection and editor diagnostics.
+/// The legacy Bevy shaders under `crates/morbid-app/assets` are validated only by Bevy at
+/// runtime and leave with the baseline in 06.
+pub fn shaders_item(run_dir: &Path) -> Item {
+    let directory = run_dir.join("shaders");
+    let mut problems = Vec::new();
+    let assemblies = gpu_world::shader::production_assemblies();
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        problems.push(format!("{}: {error}", directory.display()));
+    }
+    for assembly in &assemblies {
+        let path = directory.join(format!("{}.wgsl", assembly.name()));
+        if let Err(error) = std::fs::write(&path, assembly.source()) {
+            problems.push(format!("{}: {error}", path.display()));
+        }
+        if let Err(diagnostic) = assembly.validate() {
+            problems.push(diagnostic.to_string());
+        }
+    }
+    let state = if problems.is_empty() && !assemblies.is_empty() {
+        State::Passed
+    } else {
+        State::Failed
+    };
+    Item::new(
+        "static.shaders",
+        state,
+        format!(
+            "{} assembled shader(s) validated with naga; sources in shaders/",
+            assemblies.len()
+        ),
+    )
+    .with_details(problems)
 }
 
 /// Runs a required checker after confirming its version.

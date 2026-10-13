@@ -14,6 +14,7 @@ pub mod measurement;
 pub mod process;
 pub mod report;
 pub mod scenario;
+pub mod suites;
 pub mod tests_cpu;
 pub mod workspace;
 
@@ -154,7 +155,14 @@ fn run_command(command: &Command, root: &Path, run_dir: &Path) -> (Vec<Item>, se
         Command::TestGpu { suite, adapter } => {
             let records = gpu::enumerate();
             match gpu::resolve(&records, adapter) {
-                Ok(record) => (gpu::suite_items(*suite, record), adapter_data(record)),
+                Ok(record) => {
+                    let lane = gpu::LaneContext { root, run_dir };
+                    let (items, results) = gpu::suite_items(*suite, record, &lane);
+                    (
+                        items,
+                        serde_json::json!({ "adapter": record, "suites": results }),
+                    )
+                }
                 Err(item) => (vec![item], serde_json::Value::Null),
             }
         }
@@ -172,9 +180,15 @@ fn run_command(command: &Command, root: &Path, run_dir: &Path) -> (Vec<Item>, se
             let records = gpu::enumerate();
             match gpu::resolve(&records, adapter) {
                 Ok(record) => {
-                    items.extend(gpu::suite_items(cli::GpuSuite::All, record));
+                    let lane = gpu::LaneContext { root, run_dir };
+                    let (suite_items, results) =
+                        gpu::suite_items(cli::GpuSuite::All, record, &lane);
+                    items.extend(suite_items);
                     items.extend(gpu::scenario_items("resident-world", record));
-                    (items, adapter_data(record))
+                    (
+                        items,
+                        serde_json::json!({ "adapter": record, "suites": results }),
+                    )
                 }
                 Err(item) => {
                     items.push(item);

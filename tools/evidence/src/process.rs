@@ -8,9 +8,11 @@
 use std::{
     ffi::OsString,
     fs::{self, File},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use crate::report::State;
@@ -24,6 +26,8 @@ pub struct Step {
     pub env: Vec<(OsString, OsString)>,
     /// Inherited variables removed before the program starts.
     pub env_remove: Vec<OsString>,
+    /// Kill the program and fail the step when it runs longer than this.
+    pub timeout: Option<Duration>,
 }
 
 impl Step {
@@ -34,7 +38,13 @@ impl Step {
             cwd: cwd.to_path_buf(),
             env: Vec::new(),
             env_remove: Vec::new(),
+            timeout: None,
         }
+    }
+
+    pub fn timeout(mut self, limit: Duration) -> Self {
+        self.timeout = Some(limit);
+        self
     }
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
@@ -117,7 +127,10 @@ pub fn run_logged(step: &Step, run_dir: &Path, log_name: &str) -> Outcome {
         command.env(key, value);
     }
 
-    let result = command.output();
+    let result = match step.timeout {
+        None => command.output(),
+        Some(limit) => output_within(&mut command, limit),
+    };
     let (state, exit_code, stdout, stderr, reason) = match result {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -132,6 +145,11 @@ pub fn run_logged(step: &Step, run_dir: &Path, log_name: &str) -> Outcome {
                 };
                 (State::Failed, code, stdout, stderr, Some(reason))
             }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            let text = error.to_string();
+            let reason = text.lines().next().unwrap_or("timed out").to_owned();
+            (State::Failed, None, String::new(), text, Some(reason))
         }
         Err(error) => (
             State::Unavailable,
@@ -161,6 +179,63 @@ pub fn run_logged(step: &Step, run_dir: &Path, log_name: &str) -> Outcome {
         stderr,
         log,
         reason,
+    }
+}
+
+/// Runs `command` like `Command::output`, killing it after `limit`. A killed program reports
+/// a timeout error, which the caller records as a failed step with the output it produced.
+fn output_within(command: &mut Command, limit: Duration) -> std::io::Result<std::process::Output> {
+    let mut child = command.spawn()?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if started.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    match status {
+        Some(status) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "timed out after {} s\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                limit.as_secs(),
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            ),
+        )),
     }
 }
 

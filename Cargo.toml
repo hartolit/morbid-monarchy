@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "adapters/gpu-world",
     "crates/morbid-app",
     "crates/monarch-engine",
     "crates/spatial-lib",
@@ -17,6 +18,8 @@ bevy_ecs = { version = "0.19.0", default-features = false, features = ["std"] }
 bitcode = { version = "0.6.9", features = ["derive"] }
 bytemuck = { version = "1.25.0", features = ["derive"] }
 lru = "0.16.3"
+# Offline WGSL validation; the same version wgpu 29.0.4 compiles shaders with.
+naga = { version = "29.0.4", features = ["wgsl-in"] }
 rand = "0.10.0"
 rustc-hash = "2.1.2"
 redb = "4.0.0"
@@ -36,3 +39,4 @@ morbid-app = { path = "crates/morbid-app" }
 spatial-lib = { path = "crates/spatial-lib" }
 world-model = { path = "crates/world-model" }
 world-runtime = { path = "crates/world-runtime" }
+gpu-world = { path = "adapters/gpu-world" }

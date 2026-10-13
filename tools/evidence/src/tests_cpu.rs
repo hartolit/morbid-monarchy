@@ -23,6 +23,9 @@ use crate::{
 /// The number of `#[test]` functions in the baseline source (source audit, prompt 00).
 pub const BASELINE_TEST_COUNT: usize = 28;
 
+/// Registry targets of GPU suite cases (`gpu:<suite>`), which the GPU lane checks.
+pub const GPU_TARGET_PREFIX: &str = "gpu:";
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {
@@ -326,9 +329,11 @@ pub fn registry_item(
     executed: &BTreeMap<(String, String, String), Outcome>,
 ) -> Item {
     let mut problems = Vec::new();
+    // `gpu:<suite>` behaviors are GPU suite cases; `test gpu` checks them, not this lane.
     let registered: BTreeMap<(&str, &str, &str), &Behavior> = registry
         .behaviors
         .iter()
+        .filter(|behavior| !behavior.target.starts_with(GPU_TARGET_PREFIX))
         .map(|behavior| {
             (
                 (
@@ -390,8 +395,8 @@ pub fn registry_item(
         "cpu.registry",
         state,
         format!(
-            "{} registered behaviors ({baseline} baseline), {tooling_tests} runner tests",
-            registry.behaviors.len()
+            "{} registered CPU behaviors ({baseline} baseline), {tooling_tests} runner tests",
+            registered.len()
         ),
     )
     .with_details(problems)

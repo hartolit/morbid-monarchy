@@ -74,6 +74,12 @@ impl Item {
         self.log = log;
         self
     }
+
+    /// Marks an informational item the lane does not need to pass.
+    pub fn optional(mut self) -> Self {
+        self.required = false;
+        self
+    }
 }
 
 /// The overall outcome of a set of items.

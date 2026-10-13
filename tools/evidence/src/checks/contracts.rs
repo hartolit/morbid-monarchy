@@ -24,8 +24,23 @@ pub const EVIDENCE_ALIAS: &str = "run --locked --release -p monarchy-evidence --
 struct ForbiddenClosure {
     package: &'static str,
     forbidden_prefixes: &'static [&'static str],
+    /// Exact package names a forbidden prefix would otherwise match.
+    allowed: &'static [&'static str],
     reason: &'static str,
 }
+
+/// The standalone ECS and the crates it brings with `default-features = false, features =
+/// ["std"]` (`cargo tree -p world-runtime`). Every other `bevy*` package is the engine.
+const STANDALONE_ECS: &[&str] = &[
+    "bevy_ecs",
+    "bevy_ecs_macros",
+    "bevy_ecs_macro_logic",
+    "bevy_macro_utils",
+    "bevy_platform",
+    "bevy_ptr",
+    "bevy_tasks",
+    "bevy_utils",
+];
 
 /// Dependency-direction rules in force. Later stages add their packages here when they create
 /// them, so a rule never passes vacuously for a package that does not exist.
@@ -33,6 +48,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
     ForbiddenClosure {
         package: EVIDENCE_PACKAGE,
         forbidden_prefixes: &["bevy", "morbid-app", "monarch-engine"],
+        allowed: STANDALONE_ECS,
         reason: "default evidence builds must not compile the Bevy baseline; it is behind `legacy-baseline`",
     },
     ForbiddenClosure {
@@ -50,14 +66,61 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "monarch-engine",
             "morbid-app",
             "spatial-lib",
+            "world-runtime",
+            "gpu-world",
             EVIDENCE_PACKAGE,
         ],
+        allowed: &[],
         reason: "the world model is framework-free: no engine, GPU API, window, UI, store, codec, worker pool or other workspace package",
+    },
+    ForbiddenClosure {
+        package: "world-runtime",
+        forbidden_prefixes: &[
+            "bevy",
+            "wgpu",
+            "naga",
+            "winit",
+            "egui",
+            "redb",
+            "bitcode",
+            "rayon",
+            "flume",
+            "monarch-engine",
+            "morbid-app",
+            "spatial-lib",
+            "gpu-world",
+            EVIDENCE_PACKAGE,
+        ],
+        allowed: STANDALONE_ECS,
+        reason: "the runtime's ports name no GPU, window, UI or store type; its only framework is the standalone ECS",
+    },
+    ForbiddenClosure {
+        package: "gpu-world",
+        forbidden_prefixes: &[
+            "bevy",
+            "winit",
+            "egui",
+            "redb",
+            "bitcode",
+            "rayon",
+            "flume",
+            "monarch-engine",
+            "morbid-app",
+            "spatial-lib",
+            EVIDENCE_PACKAGE,
+        ],
+        allowed: STANDALONE_ECS,
+        reason: "the GPU owner has no window, UI, store, engine or baseline dependency; the ECS arrives only through world-runtime",
     },
 ];
 
-/// `default_features` is the workspace resolved without `--all-features`.
-pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -> Item {
+/// `package_graph` returns the graph one package resolves when built alone with its default
+/// features ([`Workspace::load_package`]). Workspace-wide metadata would unify features with
+/// every other member, so the Bevy baseline's features would appear in the standalone ECS.
+pub fn dependency_item(
+    all_features: &Workspace,
+    package_graph: &dyn Fn(&str) -> Result<Workspace, String>,
+) -> Item {
     let mut problems = Vec::new();
 
     for package in all_features.members() {
@@ -84,7 +147,7 @@ pub fn dependency_item(all_features: &Workspace, default_features: &Workspace) -
         }
     }
 
-    problems.extend(closure_violations(default_features, FORBIDDEN_CLOSURES));
+    problems.extend(closure_violations(package_graph, FORBIDDEN_CLOSURES));
 
     let state = if problems.is_empty() {
         State::Passed
@@ -142,9 +205,19 @@ fn ci_problems(workflow: &str, tools: &[RequiredTool]) -> Vec<String> {
     problems
 }
 
-fn closure_violations(workspace: &Workspace, rules: &[ForbiddenClosure]) -> Vec<String> {
+fn closure_violations(
+    package_graph: &dyn Fn(&str) -> Result<Workspace, String>,
+    rules: &[ForbiddenClosure],
+) -> Vec<String> {
     let mut problems = Vec::new();
     for rule in rules {
+        let workspace = match package_graph(rule.package) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                problems.push(format!("{}: {error}", rule.package));
+                continue;
+            }
+        };
         let Some(package) = workspace.member(rule.package) else {
             problems.push(format!(
                 "rule target {} is not a workspace member",
@@ -160,6 +233,7 @@ fn closure_violations(workspace: &Workspace, rules: &[ForbiddenClosure]) -> Vec<
                 .forbidden_prefixes
                 .iter()
                 .any(|prefix| dependency.name.starts_with(prefix))
+                && !rule.allowed.contains(&dependency.name.as_str())
             {
                 problems.push(format!(
                     "{} reaches {} via {}: {}",
@@ -280,12 +354,39 @@ mod tests {
     }
 
     #[test]
+    fn the_standalone_ecs_is_allowed_where_listed_and_the_engine_never() {
+        let runtime_rule = &FORBIDDEN_CLOSURES[2..3];
+        assert_eq!(runtime_rule[0].package, "world-runtime");
+        // The runtime depending directly on one package called `name`.
+        let renamed = |name: &str| {
+            let workspace = Workspace::from_metadata(&serde_json::json!({
+                "workspace_members": ["world-runtime"],
+                "packages": [
+                    {"id": "world-runtime", "name": "world-runtime", "manifest_path": "/w/r/Cargo.toml"},
+                    {"id": name, "name": name, "manifest_path": "/r/x/Cargo.toml"}
+                ],
+                "resolve": {"nodes": [
+                    {"id": "world-runtime", "deps": [{"pkg": name, "dep_kinds": [{"kind": null}]}]},
+                    {"id": name, "deps": []}
+                ]}
+            }))
+            .expect("metadata");
+            closure_violations(&|_| Ok(workspace.clone()), runtime_rule)
+        };
+        assert!(renamed("bevy_ecs").is_empty());
+        assert!(renamed("bevy_tasks").is_empty());
+        assert_eq!(renamed("bevy_render").len(), 1);
+        assert_eq!(renamed("bevy").len(), 1);
+        assert_eq!(renamed("wgpu-core").len(), 1);
+    }
+
+    #[test]
     fn the_model_may_not_reach_an_engine_or_store_even_indirectly() {
-        let model_rule = &FORBIDDEN_CLOSURES[1..];
+        let model_rule = &FORBIDDEN_CLOSURES[1..2];
         assert_eq!(model_rule[0].package, "world-model");
-        assert!(closure_violations(&workspace(None), model_rule).is_empty());
+        assert!(closure_violations(&|_| Ok(workspace(None)), model_rule).is_empty());
         for forbidden in ["bevy_ecs", "wgpu-core", "redb", "monarch-engine"] {
-            let problems = closure_violations(&workspace(Some(forbidden)), model_rule);
+            let problems = closure_violations(&|_| Ok(workspace(Some(forbidden))), model_rule);
             assert_eq!(problems.len(), 1, "{forbidden}: {problems:?}");
             assert!(
                 problems[0].contains("helper"),
@@ -308,8 +409,24 @@ mod tests {
     }
 
     #[test]
+    fn package_graphs_come_from_one_package_s_own_resolution() {
+        let tree = "0world-runtime v0.1.0 (/w/crates/world-runtime)\n1bevy_ecs v0.19.0\n2bevy_ptr v0.19.0\n1world-model v0.1.0 (/w/crates/world-model)\n2glam v0.32.1\n2bevy_ptr v0.19.0 (*)\n";
+        let workspace = Workspace::from_tree(tree).expect("tree");
+        let rule = &FORBIDDEN_CLOSURES[2..3];
+        assert!(closure_violations(&|_| Ok(workspace.clone()), rule).is_empty());
+        let engine = "0world-runtime v0.1.0 (/w)\n1bevy_ecs v0.19.0\n2bevy_reflect v0.19.0\n";
+        let workspace = Workspace::from_tree(engine).expect("tree");
+        let problems = closure_violations(&|_| Ok(workspace.clone()), rule);
+        assert_eq!(problems.len(), 1);
+        assert!(
+            problems[0].contains("bevy_ecs -> bevy_reflect"),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
     fn a_rule_for_a_missing_package_fails_instead_of_passing_vacuously() {
-        let problems = closure_violations(&workspace(None), &FORBIDDEN_CLOSURES[..1]);
+        let problems = closure_violations(&|_| Ok(workspace(None)), &FORBIDDEN_CLOSURES[..1]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("not a workspace member"));
     }

@@ -1,4 +1,5 @@
-# Behavioral coverage registry, checked by `cargo evidence test cpu`.
+# Behavioral coverage registry, checked by `cargo evidence test cpu` (test executables) and
+# `cargo evidence test gpu` (suite cases, `target = "gpu:<suite>"`).
 #
 # Every test in a covered package must appear here, and every entry must run and pass. `id` is
 # the stable coverage identity: when a test is renamed or moves to another owner, update
@@ -733,4 +734,539 @@ test = "runtime::tests::the_runtime_starts_at_the_world_s_next_tick"
 origin = "transition"
 expectation = "A runtime attaching to a live world starts at the tick the world expects next."
 destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+# --- GPU owner, CPU contracts: gpu-world (02) ---
+
+[[behavior]]
+id = "gpu.commands.window-local"
+package = "gpu-world"
+target = "lib"
+test = "commands::tests::coordinates_become_window_local"
+origin = "transition"
+expectation = "Absolute command coordinates become window-local cells with 64-bit arithmetic; identities split into words."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.commands.far-not-dispatched"
+package = "gpu-world"
+target = "lib"
+test = "commands::tests::far_strokes_are_not_dispatched_and_far_queries_are_outside"
+origin = "transition"
+expectation = "Strokes that miss the window are not dispatched and count their cells as not resident; far queries are reported outside."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.commands.stroke-footprint"
+package = "gpu-world"
+target = "lib"
+test = "commands::tests::stroke_counts_match_the_brush_footprint"
+origin = "transition"
+expectation = "Stroke cell counts match the brush disc (12,853 cells at radius 64)."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.context.adapter-ordinals"
+package = "gpu-world"
+target = "lib"
+test = "context::tests::duplicate_identifiers_get_ordinals"
+origin = "transition"
+expectation = "Adapters sharing an identifier get ordinals in enumeration order."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.context.limit-fields"
+package = "gpu-world"
+target = "lib"
+test = "context::tests::limits_debug_output_becomes_fields"
+origin = "transition"
+expectation = "Adapter limits are reported as named fields."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.layout.no-straddling-fields"
+package = "gpu-world"
+target = "lib"
+test = "layout::tests::a_field_across_the_word_boundary_is_refused"
+origin = "transition"
+expectation = "A cell field crossing the 32-bit word boundary cannot be declared for the kernels."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.layout.generated-wgsl"
+package = "gpu-world"
+target = "lib"
+test = "layout::tests::generated_wgsl_declares_records_and_cell_fields"
+origin = "transition"
+expectation = "The generated WGSL declares every record and each cell field's word, shift and mask from WorldCell::LAYOUT."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.layout.record-strides"
+package = "gpu-world"
+target = "lib"
+test = "layout::tests::record_sizes_and_offsets_are_fixed"
+origin = "transition"
+expectation = "Record strides and selected offsets equal values written out by hand; uniform records are multiples of 16 bytes."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.layout.golden-words"
+package = "gpu-world"
+target = "lib"
+test = "layout::tests::records_match_words_written_out_by_hand"
+origin = "transition"
+expectation = "Command and body records encode to hand-written words and little-endian bytes and decode back."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.aligned-and-counted"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::layouts_are_aligned_and_staging_is_counted"
+origin = "transition"
+expectation = "Staging layouts are copy-aligned, dynamic offsets use the uniform alignment, and staging and terrain bytes are counted."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.radius-32-binding"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::radius_32_exceeds_a_default_storage_binding_and_radius_31_fits"
+origin = "transition"
+expectation = "Under default limits the radius-32 cell array (138,444,800 bytes) is refused as a storage binding and radius 31 fits."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.budget-arithmetic"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::the_budgets_arithmetic_is_reproduced"
+origin = "transition"
+expectation = "Cell array sizes at radius 6, 16 and 32 reproduce the budgets' arithmetic."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.device-needs"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::the_device_is_asked_for_what_radius_32_needs"
+origin = "transition"
+expectation = "The device is asked for the largest buffer and binding the radius-32 plan needs."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.refusals"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::unsupported_configurations_and_budgets_are_refused"
+origin = "transition"
+expectation = "Transfer sizes outside their ranges, staging and device budgets and too few storage buffers per stage are refused."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.missing-overflow-specimen"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::a_missing_overflow_signal_is_rejected"
+origin = "transition"
+expectation = "Deliberate failure specimen: an event header whose drops do not account for its overflow is rejected without outcomes."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.identity-checked"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::a_result_from_another_command_or_tick_is_rejected_without_partial_outcomes"
+origin = "transition"
+expectation = "Results naming another command, position or tick, or an unanswered status, are rejected with no partial outcomes."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.event-overflow"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::overflowing_events_report_their_drops"
+origin = "transition"
+expectation = "A full event buffer delivers its recorded events and one overflow outcome with the drop count."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.results"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::results_decode_to_outcomes_with_cpu_side_counts"
+origin = "transition"
+expectation = "Result records decode to edit counts (adding cells known to be outside the window) and query columns."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.timestamps"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::timestamps_convert_with_the_period_and_refuse_unordered_pairs"
+origin = "transition"
+expectation = "Timestamp pairs convert with the period; an unordered pair is not a measurement."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.shader.diagnostics"
+package = "gpu-world"
+target = "lib"
+test = "shader::tests::errors_point_at_the_module_file_and_line"
+origin = "transition"
+expectation = "A shader error is reported at its module file and line, not the assembled line."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.shader.production-validates"
+package = "gpu-world"
+target = "lib"
+test = "shader::tests::every_production_assembly_validates"
+origin = "transition"
+expectation = "Every production assembly parses and validates with naga's full validation."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.shader.line-map"
+package = "gpu-world"
+target = "lib"
+test = "shader::tests::the_line_map_covers_each_module_once"
+origin = "transition"
+expectation = "The assembly's line map covers every module line exactly once."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.slots.resize-keeps-inside"
+package = "gpu-world"
+target = "lib"
+test = "slots::tests::a_resize_keeps_resident_chunks_inside_and_refuses_to_drop_others"
+origin = "transition"
+expectation = "A resize keeps resident chunks inside the new window under newer generations; it refuses while activations are in flight or chunks would be dropped."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.slots.activation-on-completion"
+package = "gpu-world"
+target = "lib"
+test = "slots::tests::a_slot_becomes_resident_only_when_its_tick_completes"
+origin = "transition"
+expectation = "A staged slot becomes resident only when its tick's submission completes; a key cannot be reserved twice."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.slots.stale-after-retire"
+package = "gpu-world"
+target = "lib"
+test = "slots::tests::retired_slots_are_reused_only_after_their_tick_and_old_references_are_stale"
+origin = "transition"
+expectation = "A retired slot is reused only after its clearing tick completes; its old reference and another session's references are refused."
+destination = "gpu-world (02)"
+determinism = "exact"
+
+# --- GPU suite `transfers`: cases run by `cargo evidence test gpu` on an adapter (02). The CPU lane
+# skips `gpu:` targets; the GPU lane requires every case to be defined, registered and passed. ---
+
+[[behavior]]
+id = "gpu.transfers.adapter-selection"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "adapter-selection"
+origin = "transition"
+expectation = "The named adapter is opened; a missing identifier is refused with the list of adapters; a software adapter needs explicit consent."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.requested-limits"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "requested-limits"
+origin = "transition"
+expectation = "The device is granted exactly the storage binding and buffer size the radius-32 plan needs, capped by the adapter, and TIMESTAMP_QUERY only when requested and supported."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.limited-capability"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "limited-capability"
+origin = "transition"
+expectation = "Under WebGPU default limits radius 32 is refused at open and at resize while a radius-31 world keeps running and keeps its cells."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.radius-32-allocation"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "radius-32-allocation"
+origin = "transition"
+expectation = "A radius-32 world allocates (138,444,800-byte cell array) and edits, queries and captures chunks at its far corners."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.invalid-configuration"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "invalid-configuration"
+origin = "transition"
+expectation = "Unsupported transfer sizes, staging budgets and device budgets are refused before allocation."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.cell-layout-probe"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "cell-layout-probe"
+origin = "transition"
+expectation = "A kernel built from the shared declarations reads and sets every packed field of boundary and arbitrary cells as world-model does, over 1 to 4,096 cells, with partial workgroups writing nothing and reducing correctly."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.record-layout-probe"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "record-layout-probe"
+origin = "transition"
+expectation = "Every shared record reads back word for word on the device for zero, all-ones-like and per-field boundary samples."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.layout-specimens-detected"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "layout-specimens-detected"
+origin = "transition"
+expectation = "Deliberate failure specimens: a shifted cell field and two swapped record fields are detected by the probes, which pass on the true declarations."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.upload-capture-roundtrip"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "upload-capture-roundtrip"
+origin = "transition"
+expectation = "Uploaded chunks, including negative keys and generated terrain, come back from the device byte for byte."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.ordered-edit-query"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "ordered-edit-query"
+origin = "transition"
+expectation = "Edits in one tick apply in command order, a query sees the earlier edits, the next tick sees the same, and a stroke crosses a chunk seam."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.edit-tools-match-rules"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "edit-tools-match-rules"
+origin = "transition"
+expectation = "Every brush tool at several strengths, alone and in sequence on one cell, matches the CPU column-rule reference on arbitrary and generated cells."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.edit-partial-workgroups"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "edit-partial-workgroups"
+origin = "transition"
+expectation = "Strokes of radius 0 to 64 change exactly their disc, with no cell outside it touched."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.edit-outside-window"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "edit-outside-window"
+origin = "transition"
+expectation = "Stroke cells outside the window or in missing chunks are counted as not resident and never written; such queries report not resident."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.empty-batches"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "empty-batches"
+origin = "transition"
+expectation = "Ticks without commands complete in order with no command outcomes and only the tick parameters and event buffer transferred."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.command-count-boundaries"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "command-count-boundaries"
+origin = "transition"
+expectation = "Batches of 1, 63, 64, 65, 255 and 256 commands complete correctly; 257 are refused without consuming the tick."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.runtime-retry-conflict-expiry"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "runtime-retry-conflict-expiry"
+origin = "transition"
+expectation = "Through the runtime: a retried identity applies once, a reused one conflicts, and an acknowledged one expires."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.stale-session-and-slot"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "stale-session-and-slot"
+origin = "transition"
+expectation = "Retired slot references and references or ticks of another session are refused; a reused slot has a new generation."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.out-of-bounds-payload"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "out-of-bounds-payload"
+origin = "transition"
+expectation = "Short payloads, keys outside the window, double reservations or uploads, out-of-order ticks and unsupported commands are refused with their reason."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.full-receipts-before-admission"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "full-receipts-before-admission"
+origin = "transition"
+expectation = "Full receipt and command queues refuse admission before anything is applied; acknowledging frees room."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.in-flight-backpressure"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "in-flight-backpressure"
+origin = "transition"
+expectation = "A fourth uncompleted tick is refused at once without a frame wait and is admitted after a completion."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.staging-exhaustion-and-reuse"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "staging-exhaustion-and-reuse"
+origin = "transition"
+expectation = "Exhausted upload and capture pools refuse, then reuse their buffers under new generations after completion; stale tickets are refused."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.delayed-delivery"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "delayed-delivery"
+origin = "transition"
+expectation = "Held map deliveries stop admission at the pool bound and later deliver every outcome intact with its larger latency; held completion callbacks keep admission at the in-flight limit while results still decode."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.out-of-order-delivery"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "out-of-order-delivery"
+origin = "transition"
+expectation = "Reversed deliveries still complete every receipt with its own result, and the consumer keeps the latest tick as observed."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.event-overflow-and-reset"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "event-overflow-and-reset"
+origin = "transition"
+expectation = "A flooded event buffer delivers its capacity and reports every drop; the next tick's buffer starts empty."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.resize-success-and-refusal"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "resize-success-and-refusal"
+origin = "transition"
+expectation = "A resize migrates resident chunks on the device with the reported old/new overlap and releases the old window; resizes that would drop chunks, keep reservations or exceed a device budget are refused with the world intact."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.device-loss-and-recreation"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "device-loss-and-recreation"
+origin = "transition"
+expectation = "A lost device abandons every obligation, closes admission and is reported by its callback; a new session refuses old slots, tickets and ticks and runs."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.stop-and-drain"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "stop-and-drain"
+origin = "transition"
+expectation = "An orderly stop delivers outstanding results, abandons unsubmitted requests and leaves ready captures collectable; a stalled stop times out and abandons the rest."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.transfers.steady-state-reuse"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "steady-state-reuse"
+origin = "transition"
+expectation = "1,200 ticks of edits, queries, captures and residency churn create no buffers or pipelines, keep requested bytes constant, never wait on the frame path, and report bytes by purpose, allocations and pass times."
+destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
 determinism = "exact"

@@ -1,0 +1,13 @@
+[package]
+name = "gpu-world"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "GPU execution of the live world: one device context and submission timeline, resource plans, packed layouts, assembled shaders, ordered commands and bounded transfers."
+
+[dependencies]
+futures-lite.workspace = true
+naga.workspace = true
+wgpu.workspace = true
+world-model.workspace = true
+world-runtime.workspace = true

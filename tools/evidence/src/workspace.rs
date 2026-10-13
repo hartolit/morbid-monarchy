@@ -54,6 +54,74 @@ impl Workspace {
         Self::from_metadata(&json)
     }
 
+    /// The graph `package` resolves when built alone with its default features, from
+    /// `cargo tree -p`. `cargo metadata` unifies features across every workspace member, so an
+    /// optional dependency another member enables would appear here although a build of
+    /// `package` never compiles it.
+    pub fn load_package(root: &Path, package: &str) -> Result<Self, String> {
+        let output = Command::new("cargo")
+            .current_dir(root)
+            .args([
+                "tree",
+                "--locked",
+                "-p",
+                package,
+                "-e",
+                "normal,build",
+                "--prefix",
+                "depth",
+                "--format",
+                "{p}",
+            ])
+            .output()
+            .map_err(|error| format!("could not start cargo tree: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "cargo tree -p {package} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Self::from_tree(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    /// Parses `cargo tree --prefix depth --format {p}` output: one `<depth><name> v<version>`
+    /// line per package in depth-first order, repeated subtrees marked `(*)`. The depth-0
+    /// package is the only member.
+    pub fn from_tree(text: &str) -> Result<Self, String> {
+        let mut packages = BTreeMap::new();
+        let mut edges: BTreeMap<String, Vec<(String, BTreeSet<DependencyKind>)>> = BTreeMap::new();
+        let mut stack: Vec<String> = Vec::new();
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let digits = line.chars().take_while(char::is_ascii_digit).count();
+            let depth: usize = line[..digits]
+                .parse()
+                .map_err(|_| format!("cargo tree line without a depth: {line}"))?;
+            let mut words = line[digits..].split_whitespace();
+            let (Some(name), Some(version)) = (words.next(), words.next()) else {
+                return Err(format!("cargo tree line without a package: {line}"));
+            };
+            let id = format!("{name} {version}");
+            packages.entry(id.clone()).or_insert_with(|| Package {
+                id: id.clone(),
+                name: name.to_owned(),
+                dir: PathBuf::new(),
+                is_member: depth == 0,
+            });
+            stack.truncate(depth);
+            if let Some(parent) = stack.last() {
+                let children = edges.entry(parent.clone()).or_default();
+                if !children.iter().any(|(child, _)| *child == id) {
+                    children.push((id.clone(), BTreeSet::from([DependencyKind::Normal])));
+                }
+            }
+            stack.push(id);
+        }
+        if packages.is_empty() {
+            return Err("cargo tree printed no package".to_owned());
+        }
+        Ok(Self { packages, edges })
+    }
+
     pub fn from_metadata(json: &Value) -> Result<Self, String> {
         let members: BTreeSet<&str> = json["workspace_members"]
             .as_array()
