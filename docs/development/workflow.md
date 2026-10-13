@@ -67,17 +67,18 @@ not success.
 | Command | State | Contract |
 | --- | --- | --- |
 | `cargo evidence check docs` | Runnable (01) | Local links and anchors, the owner index, sprint structure, retired rule files; every workspace package has a README and is named in the architecture. |
-| `cargo evidence check static` | Runnable (01) | rustfmt; `cargo check` for the declared feature combinations; Clippy against the finite lint baseline; rustdoc with warnings denied; `cargo deny` (advisories, licenses, bans, sources) and `cargo machete` at their required versions; dependency direction; toolchain/lock/alias pins; CI uses the same lanes and checker versions. Shader validation joins when 02 adds standalone shaders. |
+| `cargo evidence check static` | Runnable (01; shaders since 02) | rustfmt; `cargo check` for the declared feature combinations; Clippy against the finite lint baseline; rustdoc with warnings denied; naga validation of every assembled `gpu-world` shader, with the sources written to the run directory; `cargo deny` (advisories, licenses, bans, sources) and `cargo machete` at their required versions; dependency direction on each package's own closure; toolchain/lock/alias pins; CI uses the same lanes and checker versions. |
 | `cargo evidence test cpu` | Runnable (01) | Every test executable on the production owners, checked against the coverage registry. |
 | `cargo evidence inspect-adapter` | Runnable (01) | Enumerates adapters with stable identifiers, backend, driver, limits and features; picks none. |
-| `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Fails until the owning stage registers the suite | Executes the named shader/lifecycle suite on the explicit adapter; reports unavailable and failure distinctly. |
+| `cargo evidence test gpu --suite transfers --adapter ADAPTER_ID` | Runnable (02) | Runs each case of the suite in its own `gpu-suite` process on the explicit adapter, with a time limit, and checks the executed cases against the registry; a missing adapter is unavailable, a failed or missing case fails. |
+| `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Fails until the owning stage registers the suite | The same, for the suites of 03–06. |
 | `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Fails until 04–05 | Executes the connected scenario through the same runtime/adapter as the app. |
 | `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01, baseline driver) | Release measurements of the frozen scenarios, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
 | `cargo evidence check all --adapter ADAPTER_ID` | Fails until every lane exists | Docs, static, CPU, all GPU suites and the connected scenario; no silent skipping. |
 
-Additional GPU suite names are `transfers`, `bodies`, `streaming`, `render` and `all`. They fail
-explicitly until their owners register them. The runner never invokes itself recursively or hides
-a nested Cargo failure.
+The GPU suite names are `transfers` (02), `cells` (03), `bodies` (04), `streaming` (05), `render`
+(06) and `all`. A suite fails explicitly until its owner registers it. The runner never invokes
+itself recursively or hides a nested Cargo failure.
 
 ### Continuous integration
 
@@ -113,9 +114,9 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 Run declared additional feature combinations separately. `check static` runs `cargo deny --locked
 check` against [`deny.toml`](../../deny.toml) and `cargo machete`, and requires the versions in
 `tools/evidence/src/checks/static_lane.rs`; a missing or different version fails the lane and is
-not printed as green. Assembled-shader validation becomes a required item of the same lane when
-02 introduces standalone WGSL. The legacy Bevy shaders under `crates/morbid-app/assets` are
-validated only when Bevy creates their pipelines; they are exempt until 06 removes them. 01
+not printed as green. Assembled-shader validation is a required item of the same lane since 02.
+The legacy Bevy shaders under `crates/morbid-app/assets` are validated only when Bevy creates
+their pipelines; they are exempt until 06 removes them. 01
 records the supported toolchain and resolves a compatible dependency set; the package does not
 invent its versions. Track `Cargo.lock` for this
 application workspace. CI uses the same runner/commands, not a weaker hand-maintained copy.

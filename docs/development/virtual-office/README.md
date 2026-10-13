@@ -7,7 +7,7 @@ status system. [Workflow](../workflow.md) owns implementation procedure and evid
 
 | Sprint | State | Next authorized starting point |
 | --- | --- | --- |
-| [GPU transition](gpu-transition/README.md) | 00 complete (documentation adoption); 01–07 not started | 01, when assigned. |
+| [GPU transition](gpu-transition/README.md) | 00–02 complete; 03–07 not started | 03, when assigned. |
 
 ## Execute one assignment
 

@@ -1,6 +1,7 @@
 # Performance budgets
 
-**Frozen qualification contract plus one measured baseline.** 00 adopted the evidence policy in
+**Frozen qualification contract, the measured baseline (01) and the measured transfer lifecycle
+(02).** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -126,6 +127,51 @@ The capacity scenarios are frozen but were not run against the baseline: it has 
 refusal path, tests all body pairs, and keeps a radius-32 CPU grid of 132 MiB per array. 04–07
 run capacity against the GPU runtime.
 
+## Measured transfer lifecycle (02)
+
+Executed evidence of the GPU boundary, not an application speedup: no physical rule runs on the
+GPU before 03, so nothing here compares with the baseline's frame times. Measured on 2026-10-13
+with `cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05` (RTX 5070 Ti, Vulkan,
+NVIDIA 615.71.09; release build), case `steady-state-reuse`: a radius-2 window with nine generated
+chunks, 120 warm-up ticks, then 1,200 measured ticks of 8 brush strokes (radius 3) and 8 column
+queries each, a capture every 60 ticks and a chunk retired and uploaded every 120. The harness
+submits as fast as backpressure allows, so its tick rate is not a frame rate.
+
+| Measured over 1,200 ticks | Value |
+| --- | --- |
+| Buffers and pipelines created after warm-up | 0 and 0; requested device bytes constant at 3,125,396 |
+| Blocking waits on the submit/poll path | 0 (maintenance waits: 0) |
+| Submissions in flight, high water | 3 (the limit) |
+| Staging buffers in use, high water | upload 5 of 36, readback 4 of 36 |
+| Upload per tick | commands 768 B, tick parameters and event reset 80 B, slot metadata 0.6 B; chunk uploads 273 B (residency churn, labelled streaming) |
+| Readback per tick | results 768 B, event buffer 1,040 B, timestamps 16 B; captures 546 B (labelled) |
+| Command plus ordinary observation payload | 2,673 B per tick: 10.7 KiB per presented frame at four ticks, 160 KiB/s at 60 ticks/s (budgets: 256 KiB and 16 MiB/s) |
+| Command pass device time (timestamps, period 1 ns) | median 24 µs, maximum 38 µs |
+| Submission to decoded results | median 0.09 ms, p95 0.14 ms, maximum 2.1 ms (unpaced) |
+| Process heap allocations per tick | 105: 103 on the submit path (wgpu's command recording and tracking, and the boxed completion and map callbacks its API takes), 2.1 on the poll path; application-owned pools allocate nothing after warm-up |
+
+The full-resolution case reports and every case's metrics are in `report.json` and
+`gpu-transfers/*.json` of the run directory; a later run regenerates them. Per-tick allocations
+inside wgpu are reported, not tuned: the budgets' allocation gate applies to application-owned
+pools, which this run shows are reused.
+
+**Planned allocations against the envelopes** (default transfer configuration: 256 commands and
+64 events per tick, 32 chunk upload and 32 capture buffers, timestamps off). Terrain-related state
+is the cell array (8 B per cell), one window entry and one slot record per chunk (36 B per chunk);
+staging is 2,213,824 B (2.1 MiB) at every radius; fixed device buffers are 91,216 B.
+
+| Equal radius | Terrain-related bytes | Envelope `48*N + 64` B per chunk | Device bytes requested |
+| --- | ---: | ---: | ---: |
+| 6 | 5,543,876 | 33,237,568 | 7,848,916 |
+| 16 | 35,723,556 | 214,175,808 | 38,028,596 |
+| 32 | 138,596,900 | 830,939,200 | 140,901,940 (measured: `radius-32-allocation`) |
+
+A resize keeps the old window buffers until the migrating submission completes: measured radius 1
+to radius 2, 2,600,276 B before, 3,125,140 B after, 3,420,376 B at the peak, which is the old total
+plus the new window's buffers, released afterwards. The CPU staging working set (2.1 MiB) is
+within the 64 MiB budget; 03 adds activity and scratch to the terrain account and 05 the snapshot
+image, against the same envelope.
+
 ## Structural gates
 
 These gates are independent of an arbitrary FPS target.
@@ -151,7 +197,9 @@ choose an alternative before kernel tuning. Do not fit the final report by omitt
 - GPU terrain-related state, including cell scratch, activity/proposals and a bounded checkpoint
   image: target at most `48*N` bytes plus explicit per-chunk/fixed overhead. This is an envelope,
   not a requirement to allocate 48 bytes for every cell. Body/renderer resources have separate
-  declared formulas and are included in the total peak.
+  declared formulas and are included in the total peak. Since 02 the resource plan refuses a
+  window whose terrain-related buffers exceed `48*N` plus 64 B per chunk
+  ([measured allocations](#measured-transfer-lifecycle-02)).
 - Combined CPU upload/readback/save-retry payload working set: initial budget 64 MiB. Large
   checkpoints drain in bounded pieces from an independent snapshot; the CPU need not hold them
   all at once. Metadata and any optional clean cache have their own byte-limited accounts.

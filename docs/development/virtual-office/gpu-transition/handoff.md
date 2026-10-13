@@ -4,13 +4,53 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 01 boundary
+## 02 boundary
 
-**State:** 01 complete (2026-10-12), assigned by the user on 2026-10-10. Checkpoints A–D are
-committed on `experimental`. 02 has not started and needs its own assignment.
+**State:** 02 complete (2026-10-13), assigned by the user on 2026-10-13. Checkpoints A–D are
+committed on `experimental`. 03 has not started and needs its own assignment.
 
-**Next action:** assign [02-gpu-runtime-and-transfer-lifecycle.md](02-gpu-runtime-and-transfer-lifecycle.md).
-Nothing in 01 is left to resume.
+**Next action:** assign [03-gpu-cell-simulation.md](03-gpu-cell-simulation.md). Nothing in 02 is
+left to resume.
+
+## 02 record
+
+| Field | Record |
+| --- | --- |
+| Assigned stage / checkpoint | 02 — shared GPU runtime and bounded transfer lifecycle. A–D complete. |
+| Source state | `experimental`: `1440bf5` (world-runtime and model additions), `6d334a0` (gpu-world, evidence integration, the `transfers` suite), then the documentation commit and this record. The tree was clean before 02; no unrelated work was present. |
+| Actual adoption | **A:** `world-runtime` (identities, the `PhysicalWorld` port, receipts, ledger, clock, standalone `bevy_ecs` runtime) and `gpu-world` `context`/`plan`/`resources`: adapter selection by the stable identifier (which `inspect-adapter` now takes from `gpu-world`), limits raised from WebGPU defaults only to the radius-32 plan's needs, error-scoped counted allocation, one timeline (≤ 3 in flight), loss and uncaptured-error health, pipelines compiled once per session. **B:** `layout` (records declared once, WGSL generated; cell constants from `WorldCell::LAYOUT`), `shader` (assembly with line map, naga validation), ordered `apply_edit`/`query_column` kernels over resident slots, identity-checked decoding. **C:** `staging` (four pools, generation-checked map mailbox), `slots` (slot lifecycle, window map), resize with device-to-device migration, the ledger as the CPU consumer, fault injection, stop/drain. **D:** `cargo evidence test gpu --suite transfers` (28 cases, one `gpu-suite` process each, registry-checked), `static.shaders`, per-package dependency rules, pass timestamps. Superseded: evidence's own adapter enumeration (now `gpu-world`'s), the "02 requests a larger binding or splits the array" open choice (a larger binding is requested; otherwise refused). |
+| Package decisions | `world-runtime` under `crates/`, `gpu-world` under `adapters/` ([ADR 0002](../../../decisions/0002-native-composition.md#02-package-check)). GPU contracts are not cargo tests (hosted CI has no GPU): the suite lives in the evidence leaf and drives the public APIs; layout probes assemble from `gpu-world`'s exported declarations and run through `submit_external`. `world-store` and `world-render` are not created. |
+| Physical limits | Unchanged from 01. New capacities with their source: 256 commands and 64 cosmetic events per tick, 32 chunk-upload and 32 capture buffers, 96 slot changes per tick ([GPU contract](../../../reference/gpu-contract.md#observations-and-reliability)). Radius 32 needs a 138,444,800-byte storage binding; under WebGPU defaults it is refused and radius 31 runs. |
+| Decisions / deviations | Edits take a centre cell (the ray is 04's) and wake nothing (activity is 03's). Body, attract/lift and temperature commands are refused as `NotSupported` until 03–04. The only cosmetic producer is fault injection until 04. Uploads activate before a tick's commands and captures copy after them. A retired slot's generation advances at retirement. wgpu 29.0.4 panics from `Device::poll` on a backend-reported loss, so the poll is isolated with `catch_unwind` and turned into the lost state. Dependency rules use `cargo tree -p` because workspace metadata unifies the Bevy baseline's features into `bevy_ecs`. The process runner gained step timeouts. |
+| Checks | Recorded in the final-checks commit that follows the documentation. |
+| Hardware / measurements | RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.71.09), Ryzen 9 5950X, Linux 7.2.8. Granted: storage binding 138,444,800 B, buffer 256 MiB, `TIMESTAMP_QUERY` when requested (period 1 ns); the adapter offers 2,147,483,644 B and 1 TiB. Measured transfer lifecycle, resize overlap and planned allocations against the envelopes: [performance budgets](../../../reference/performance-budgets.md#measured-transfer-lifecycle-02). Per-case JSON in `target/evidence/<run>/gpu-transfers/` on that machine only. No application performance claim: no physics runs on the GPU yet. |
+| Acceptance | A02 satisfied: production shader roundtrip and golden words, partial dispatch, default-limit and allocation refusal, successful and refused resize without loss, one context. A03 satisfied: real CPU consumer (runtime ledger), delayed and reordered deliveries, held completions, full pools, stale session and slot, same-ID retry and conflict, no frame waits, executed on the GPU. A04–A15 not run. |
+| Data safety | No case opens a store; worlds are generated or synthetic in memory. `world_data/save.redb` was neither opened nor changed (8,237,617,152 bytes, modified 2026-10-11 14:24 local time, as at the end of 01). |
+| Blockers | None for 03. |
+| Next action / stop | Stopped at the end of 02. Assign 03. |
+
+### Carried into later stages (02)
+
+1. **Edits wake nothing** (03): `apply_edit` changes cells without activity metadata; 03 adds
+   reactivation to the same command path.
+2. **Tool sources and sinks** (03): the sand brush keeps the baseline rule that compacts sand into
+   sandstone only up to the elevation ceiling, so sand beyond it is lost, like the quench defect;
+   03's accounting classifies tool sources and sinks.
+3. **Brush ray, body commands and cosmetic producers** (04): edits target a centre cell; spawn,
+   control, attract/lift are refused; contacts and immersion become the ledger's first producers.
+4. **Residency policy and revisions** (05): slots, uploads, captures, retirement and resize exist
+   as mechanisms; focus movement, dirty revisions, retained snapshots and the store do not. GPU
+   edits do not advance a chunk's revision yet.
+5. **A real driver loss is untested**: loss is injected with `Device::destroy`; the
+   `catch_unwind` path for a backend-reported loss has no specimen on this machine.
+6. **Software adapters** are refused without consent; no software adapter exists here, so that
+   refusal is not executed.
+7. **Per-tick allocations inside wgpu** (07): about 103 per tick on the submit path; application
+   pools allocate nothing after warm-up.
+
+## 01 boundary (closed)
+
+01 completed on 2026-10-12; its record follows.
 
 ## 01 record
 
@@ -19,7 +59,7 @@ Nothing in 01 is left to resume.
 | Assigned stage / checkpoint | 01 — baseline, contracts and seams. A–D complete. |
 | Source state | `experimental`, last tested commit `fa38fdd`, clean tree; the commit after it fills in this record only. No unrelated work was present; a pre-existing GitHub Desktop stash was left untouched. |
 | Actual adoption | **A:** `eea8652` pins Rust 1.99.0 and tracks `Cargo.lock`; `58e9648` captures old-writer fixtures. **B:** `tools/evidence` (`monarchy-evidence`) with the `cargo evidence` alias; docs/static/CPU lanes; adapter inspection; GPU suites and `run` fail explicitly; 18 frozen scenario files; the `legacy-baseline` driver; work counters in the engine, renderer and persistence; `coverage.toml` maps all 28 baseline tests; `lint-baseline.toml` holds 3 exceptions. The measured baseline is `e8d49db`. The visual reference (three frames from the qualification scenarios, `tools/evidence/baselines/legacy-visual/`) and the presentation and tuning defaults ([acceptance](acceptance.md#baseline-presentation-and-tuning-reference-01)) record the rendering and tool surface. **C:** `7a84a80` adds `world-model`, migrates every consumer and deletes the duplicates; `legacy_format` keeps the old row bytes. **D:** `0c166e3` adds `deny.toml`, `cargo deny` and `cargo machete` at pinned versions, the CI workflow and its pin check, and the package-naming check. |
-| Package decisions | `world-model` exists because the engine, the application, spatial-lib and the runner all consume it. `world-runtime`, `gpu-world`, `world-store` and `world-render` are not created: no consumer exists before 02, and empty forwarding crates are not allowed. `spatial-lib` keeps only the toroidal grid, the chunk manager and the redb backend; its key math moved to `world_model::spatial`. Commands and observations are used by the evidence driver; the runtime ports are recorded as signatures in [GPU contract](../../../reference/gpu-contract.md#runtime-ports-proposed-for-02) for 02 to create. |
+| Package decisions | `world-model` exists because the engine, the application, spatial-lib and the runner all consume it. `world-runtime`, `gpu-world`, `world-store` and `world-render` are not created: no consumer exists before 02, and empty forwarding crates are not allowed. `spatial-lib` keeps only the toroidal grid, the chunk manager and the redb backend; its key math moved to `world_model::spatial`. Commands and observations are used by the evidence driver; the runtime ports are recorded as signatures in [GPU contract](../../../reference/gpu-contract.md#runtime-ports-implemented-in-02) for 02 to create. |
 | Physical limits | Fixed in [GPU contract](../../../reference/gpu-contract.md#supported-physical-envelope-fixed-in-01) and owned by `world_model::{config, body, units}`: tick 10–240 Hz, catch-up 1–16, body substep ≤ 1/120 s dividing the tick, elevation scale 0.01–5.0 as physical configuration, body radius 2–8, relative density 0.01–25, mass 0.01–1000, speed ≤ 600 world units/s, ≤ 4,096 bodies, brush radius 0–64 and strength 1–255, active radius 1–32. Tolerances are the baseline tests' own, per test in the registry. |
 | Decisions / deviations | The elevation scale is physical configuration ([world format](../../../reference/world-format.md#existing-packed-cell)); the acceptance conflict is closed. The run protocol counts a 1,800-tick window instead of 1,800 frames; the calibration and its reason are recorded in the [performance budgets](../../../reference/performance-budgets.md#regression-and-improvement-policy) before any candidate. Measurement windows update continuously when unfocused, because Bevy's default throttles them to 60 Hz. The quench ceiling defect is kept and documented for 03. `cargo deny` found advisories after the baseline was measured: `0e948bb` updates six locked crates at patch level (generator output unchanged), and `deny.toml` accepts four advisories without a compatible fix, each with its reason and stage. `0e948bb` also took the staged deletion of `runtime/hooks.rs` without its module declaration, so that commit alone does not build; `ecd9212` completes the removal. The first full baseline at `79e7ead` was rejected (compositor pacing) and is kept locally as `target/evidence/rejected-baseline-*-79e7ead`. |
 | Checks | At `fa38fdd`, clean, 2026-10-12 20:01–20:10 UTC, with `CARGO_BUILD_JOBS=4`: `cargo evidence check docs` passed (137 local links in 48 files); `cargo evidence check static` passed (all 11 items, including `cargo deny`, `cargo machete` and the CI pin check; 7 Clippy diagnostics, all covered by the 3 recorded exceptions); `cargo evidence test cpu` passed (98 tests: all 49 registered behaviors, 28 of them baseline, and 49 runner tests). Reports in `target/evidence/final-{docs,static,cpu}/`. Baseline: `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --output target/evidence/baseline-qualification`, the same for `scale`; both passed at `6e108d6`. Drift after the extraction: `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --case flow --case body-contact --case coupled --output target/evidence/drift-7a84a80` at `7a84a80` passed, 5/5 valid runs per case, none contended; simulation and body time per tick within 2% of the baseline, frame medians 3–6% lower ([performance budgets](../../../reference/performance-budgets.md#measured-legacy-baseline-01)). |
@@ -38,7 +78,7 @@ Nothing in 01 is left to resume.
 2. **Persistence baseline failures** for 05, unchanged by 01: eviction-only saves without a dirty
    flag, stale reads while a save is pending, an exit flush that omits active and cached chunks, and
    read or decode errors that fall through to generation.
-3. **Shader validation** joins `check static` when 02 adds standalone WGSL. The legacy Bevy shaders
+3. **Shader validation** joined `check static` in 02 (`static.shaders`). The legacy Bevy shaders
    under `crates/morbid-app/assets` are validated only at runtime and are removed in 06.
 4. **The capacity profile** runs against the GPU runtime (04–07), never against the baseline.
 

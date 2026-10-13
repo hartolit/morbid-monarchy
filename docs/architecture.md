@@ -3,10 +3,11 @@
 **Target architecture for the GPU transition, adopted in prompt 00.** The checkout still runs the
 CPU-authoritative Bevy baseline described under [current baseline](#current-baseline), and
 [status](product/status.md) owns what is implemented and verified. Everything else on this page
-is the target. Package names are the proposed implementation map. 01 created the first two,
-`world-model` and `tools/evidence`, with their consumers; the others do not exist yet and are
-created by the stage that first uses them. Where no consumer justifies a crate, a module is used
-instead and recorded here and in [ADR 0002](decisions/0002-native-composition.md).
+is the target. Package names are the proposed implementation map. 01 created `world-model` and
+`tools/evidence`; 02 created `world-runtime` and `gpu-world`, each with its consumers. The others
+do not exist yet and are created by the stage that first uses them. Where no consumer justifies a
+crate, a module is used instead and recorded here and in
+[ADR 0002](decisions/0002-native-composition.md).
 
 ## One physical world, several consumers
 
@@ -31,10 +32,12 @@ and an ordered physical tick; separating them behind per-cell traits would obscu
 
 ## Current baseline
 
-This is the source at `a9c1539` with the changes of 01; the sprint
+This is the source at `a9c1539` with the changes of 01 and 02; the sprint
 [source audit](development/virtual-office/gpu-transition/source-audit.md) lists the symbols. Each
-row describes current behavior that the target replaces, except `world-model`, which is already
-the target owner. None of it is a second supported path.
+row describes current behavior that the target replaces, except the rows naming `world-model`,
+`world-runtime` and `gpu-world`, which are already the target owners. None of it is a second
+supported path: the GPU owner of 02 executes commands and transfers headlessly and does not
+simulate yet, and the baseline application does not use it.
 
 | Responsibility | Current owner and behavior | Target owner |
 | --- | --- | --- |
@@ -46,7 +49,9 @@ the target owner. None of it is a second supported path.
 | Persistence | `morbid-app` `runtime/persistence.rs` and `legacy_format.rs` (the old writer's bitcode bytes) over `spatial-lib` `chunk/storage.rs` (redb) | `world-store` |
 | Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
 | Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
-| Evidence | `monarchy-evidence` (01): docs/static/CPU lanes, adapter inspection, the frozen scenarios and the baseline driver; in-crate tests registered in `coverage.toml` | `monarchy-evidence` |
+| Runtime orchestration | `world-runtime` since 02: identities, the `PhysicalWorld` port, bounded receipts, the outcome ledger, the fixed clock and a standalone `bevy_ecs` runtime. Its consumers are the `transfers` suite now and the native client from 06; the baseline keeps its own Bevy schedule | `world-runtime` |
+| GPU execution | `gpu-world` since 02: one device context and submission timeline, checked resource plans, generated layouts, assembled WGSL, chunk slots, ordered brush edits and column queries, bounded staging, loss and stop handling. No physical rule runs on it before 03 | `gpu-world` |
+| Evidence | `monarchy-evidence` (01, 02): docs/static/CPU lanes, shader validation, adapter inspection, the `transfers` GPU suite, the frozen scenarios and the baseline driver; tests and suite cases registered in `coverage.toml` | `monarchy-evidence` |
 
 Cells, bodies and the observer are unordered `Update` systems. The only thing that serializes them
 is that each takes `ResMut<ActiveWorldGrid>`. The [one physical tick](#one-physical-tick) below
@@ -60,12 +65,12 @@ apps/morbid/                     package morbid-app; native composition
   assets/                       runtime art, fonts, UI and imported assets
 crates/world-model/             framework-free semantic values and generation (exists since 01)
   src/{cell,material,spatial,units,config,body,command,observation,generation}.rs
-crates/world-runtime/           CPU orchestration and consumer-owned ports
-  src/{clock,commands,residency,checkpoint,workers,ports}.rs
-adapters/gpu-world/             GPU execution of the physical world
-  src/{context,layout,resources,commands,simulation,readback}.rs
-  shaders/{shared,cells,bodies,queries}/
-  tests/                        layout, production shader and lifecycle contracts
+crates/world-runtime/           CPU orchestration and consumer-owned ports (exists since 02)
+  src/{ids,port,receipts,ledger,clock,runtime}.rs; residency, checkpoint and workers from 05
+adapters/gpu-world/             GPU execution of the physical world (exists since 02)
+  src/{context,plan,layout,shader,resources,staging,slots,commands,readback,world,faults}.rs
+  shaders/{shared,world,faults}/; cell and body kernels from 03 and 04
+  (contracts run on a device as `cargo evidence test gpu`, not as cargo tests: CI has no GPU)
 adapters/world-store/           saved-world format and redb mechanism
   src/{format,store,legacy}.rs
   tests/fixtures/               small supported-format and legacy byte fixtures
@@ -73,7 +78,7 @@ crates/world-render/            native rendering of GPU-owned state
   src/{renderer,terrain,bodies,lighting,visibility}.rs
   shaders/
 tools/evidence/                 Rust-only development leaf
-  src/{main,checks,scenarios,reference,measurement}.rs
+  src/{main,checks,scenario,suites,measurement}.rs; src/bin/gpu-suite.rs runs one GPU case
   scenarios/                    versioned input/configuration documents
   tests/                        runner/parser and evidence-policy checks
 docs/                          maintained explanations and active assignments
@@ -92,8 +97,8 @@ independent consumer and a meaningful boundary.
 
 ```text
 world-runtime -> world-model
-world-runtime -> bevy_ecs
-gpu-world     -> world-runtime (execution port), world-model, wgpu
+world-runtime -> bevy_ecs (standalone: default features off, `std` only)
+gpu-world     -> world-runtime (execution port), world-model, wgpu, naga (offline validation)
 world-store   -> world-runtime (storage port), world-model, redb/codec
 world-render  -> gpu-world (read-only presentation view), world-model, wgpu
 morbid-app    -> world-runtime, gpu-world, world-store, world-render, window/UI
@@ -104,7 +109,9 @@ A GPU boundary may expose wgpu types: GPU memory is precisely its subject. Do no
 handle to appear mechanism-neutral. The runtime's intent, residency and persistence ports must not
 expose those types. Ports operate on batches, tickets and snapshots, not virtual calls per cell.
 The GPU adapter's runtime dependency may bring the ECS library transitively; GPU kernels and
-adapter interfaces still must not depend on ECS entities or scheduling behavior.
+adapter interfaces still must not depend on ECS entities or scheduling behavior. `check static`
+enforces these directions on each package's own resolved closure (`cargo tree -p`), where the
+standalone ECS crates are the only `bevy*` packages allowed.
 
 `world-render` reads the GPU adapter's view; `gpu-world` never imports the renderer. The application
 constructs them with one context. The context owns one submission timeline. Compute and render

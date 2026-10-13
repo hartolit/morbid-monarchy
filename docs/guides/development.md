@@ -39,6 +39,7 @@ cargo evidence check docs
 cargo evidence check static
 cargo evidence test cpu
 cargo evidence inspect-adapter
+cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05
 ```
 
 `inspect-adapter` prints a stable identifier for every adapter (`vulkan-10de-2c05` is the RTX 5070
@@ -68,7 +69,12 @@ mirror. The UI distinguishes submitted edits, applied results and durable saves.
 In the baseline, a brush runs `handle_brush_input`, then `raymarch_grid` against the CPU grid, then
 `set_cell`/`wake_cell`; the next render sync uploads the whole grid. The target route (04–06) is
 input validation, command admission, GPU ray resolution, ordered cell edit, reactivation, returned
-result, rendered change and dirty revision. Read the source owner at each boundary rather than
+result, rendered change and dirty revision. Since 02 the middle of that route exists headlessly:
+`Runtime::submit` admits a `Command::EditMaterial` under a receipt, `submit_due_ticks` hands it to
+`GpuWorld::submit_tick` (`gpu-world` `world/tick.rs`), the `apply_edit` kernel
+(`shaders/world/edit.wgsl`) changes the cells, and `poll` decodes the result into the receipt
+through the ledger. The ray (04), reactivation (03), rendering (06) and the dirty revision (05)
+are still to come. Read the source owner at each boundary rather than
 starting from every crate's type inventory. The connected `resident-world` scenario, built up from
 02 through 07, will automate that physical/storage route; it does not exist yet. Today the baseline
 driver issues the same `world_model` commands from the frozen scenarios.

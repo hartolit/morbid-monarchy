@@ -10,7 +10,11 @@ Source: `crates/world-model/src/cell.rs`, `WorldCell(pub u64)` (in `monarch-engi
 `WorldCell::LAYOUT` is the one table of the fields below; every accessor reads it, and its tests
 compare it with this table written out by hand. Bit 0 is the low bit of the first 32-bit word;
 GPU word order is explicitly low word, high word (`WorldCell::to_words`, `from_words`). Do not
-rely on native host byte order for persisted bytes or portable interchange.
+rely on native host byte order for persisted bytes or portable interchange. On the device a cell
+is a WGSL `vec2<u32>` (`.x` = word 0), and `gpu-world` generates every field's word, shift and
+mask from `WorldCell::LAYOUT`, so the kernels cannot keep a second copy of this table; the
+`transfers` suite executes those declarations against cells written by the CPU
+([GPU contract](gpu-contract.md#cell-layout-and-authority)).
 
 | Bits | Field | Encoded capacity |
 | --- | --- | ---: |

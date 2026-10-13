@@ -1,8 +1,10 @@
 # CPU–GPU execution contract
 
-**Implementation target.** This document owns semantic obligations, not a frozen Rust API signature.
-02 creates the actual typed interfaces and executable layout tests. Change this account with the
-implementation; do not maintain a parallel prose-only protocol.
+**Implemented in 02 for the command, query and transfer path; physics follows in 03–04.** This
+document owns the semantic obligations. Since 02 the interfaces exist: the port is
+`world_runtime::port`, its GPU implementation `gpu_world::world::GpuWorld`, and the `transfers` GPU
+suite executes this contract on a device. Change this account with the implementation; do not
+maintain a parallel prose-only protocol.
 
 ## Identity and time
 
@@ -15,10 +17,25 @@ Use one monotonically advancing logical tick with explicit rollover behavior. A 
 encoded as two words; native shader `u64` is not required. Distinguish accepted, encoded, submitted,
 GPU-completed, CPU-observed and durable outcomes. A queue submission is not a save acknowledgement.
 
+*Implemented (02).* `world_runtime::ids` defines `WorldId`, `SessionEpoch` (`u32`, so a shader can
+echo it), `CommandId`, `Tick` and `ChunkRevision`; wide values travel as a low then a high word.
+`Tick::next` and `SessionEpoch::next` refuse to pass their last value instead of wrapping. A tick
+is numbered only when it is submitted, so a refused or discarded tick leaves no gap. Receipts
+record pending, submitted (with its tick), completed (with its tick and result) and abandoned;
+GPU completion of a submission and the CPU decoding its results are reported separately
+(`TransferCounters::ticks_submitted` and `ticks_observed`). Nothing is durable in 02.
+
 Normal command retries with the same ID and payload cannot apply twice within the live session;
 reuse with different payload is rejected. Keep retention bounded: an acknowledged/expired ID has
 an explicit floor or generation rule, not indefinite receipts. A restart creates a new session;
 this sprint does not promise replay of all unsaved commands after a crash.
+
+*Implemented (02), the floor rule.* `world_runtime::receipts::Receipts` holds a fixed number of
+receipts (default 4,096). Issuers choose identities. An identity at or above the floor and not
+held is admitted; the same identity with the same command is a `Duplicate` and admits nothing;
+with a different command it is a `Conflict`. `acknowledge(through)` releases final receipts up to
+`through` and raises the floor past it, so those identities are `Expired`; it is refused while
+any of them is unfinished. A full table refuses admission with `Pressure::Receipts`.
 
 ## Commands
 
@@ -44,6 +61,18 @@ return a retryable not-admitted result or apply declared backpressure. Once acce
 outcome obligations. Coalescing continuous input is allowed before admission; coalescing must not
 silently delete an already accepted discrete edit.
 
+*Implemented (02).* The live world executes `EditMaterial` (the brush tools, against a centre cell)
+and `QueryColumn`; body, attract/lift and ambient-temperature commands are refused at admission as
+`NotSupported` until 03–04 implement them. Edits have no ray yet: the GPU-resolved hit is 04's.
+Per tick the runtime takes at most `commands_per_tick` (256) queued commands in admission order;
+each has a reserved result record on the device. A stroke runs as one dispatch over its bounding
+square, one invocation per cell, so each cell has one writer; strokes of a tick run as separate
+dispatches in command order. A stroke that misses the window is not dispatched and its cells are
+counted as not resident on the CPU. The edit kernel applies the baseline brush rules
+(`world_model` `inject_fluid` for the liquid tools, fire on dry or oiled columns, sand with
+compaction into sandstone, raise and lower within the elevation range) and marks no activity: 03
+adds wake-up to the same path.
+
 ## Cell layout and authority
 
 Start with the current semantic 64-bit column, represented on the GPU as two `u32` words. Its
@@ -51,6 +80,28 @@ fields are recorded in [world format](world-format.md). Keep generation/residenc
 proposals and render-derived data separate when they have different lifetimes/access patterns.
 Do not expand every field to a persistent 32-bit array without a measured case and full memory
 accounting.
+
+*Implemented (02).* Cells are `array<vec2<u32>>`, `.x` holding bits 0–31. The cell field constants
+(`CELL_<FIELD>_WORD`, `_SHIFT`, `_MASK`) are generated from `WorldCell::LAYOUT`; no field crosses
+the word boundary, and a layout that would is refused at generation. Records shared with kernels
+are declared once in `gpu_world::layout` and generate their WGSL structs; every field is one
+little-endian 32-bit word, so field `n` is at byte `4n` in both languages:
+
+| Record | Bytes | Use |
+| --- | ---: | --- |
+| `TickParams` | 64 | Uniform: tick, epoch, command count, window size in chunks, capacities, injected events. |
+| `DispatchParams` | 16 | Uniform, one entry per command position at the uniform offset alignment; entry `i` names command `i`. |
+| `CommandRecord` | 48 | Kind, identity, sequence; edit tool, window-local centre, radius, strength; query cell. |
+| `ResultRecord` | 48 | Identity echo, status, tick, atomic changed / not-resident counts, column words, slot. |
+| `EventHeader`, `EventRecord` | 16, 16 | Cosmetic event buffer: atomic attempt and drop counts, capacity; kind and three words. |
+| `ChunkSlotRecord` | 32 | Absolute key, generation, revision, state of each slot. |
+| `BodyRecord` | 64 | Handle, flags, position, radius, velocity, mass, relative density, submerged fraction; executed by the layout probe, used from 04. |
+
+Kernels see window-local coordinates only: cell `(0, 0)` is the first cell of the window's lowest
+chunk. A window map holds one slot index per window chunk, or `SLOT_NONE`, which every kernel treats
+as a closed boundary. Goldens in `gpu-world` fix the strides and words by hand; the
+`cell-layout-probe`, `record-layout-probe` and `layout-specimens-detected` cases execute the
+declarations on the device and prove a shifted field and swapped record fields are detected.
 
 A field setter is not an atomic material transaction. One invocation owns the complete output cell
 for a phase, including interactions between elevation, granular overflow and liquid reaction.
@@ -93,6 +144,22 @@ silently truncated lists. If an unexpected mid-tick fault occurs after in-place 
 session faulted/that tick unfinished; do not render/save it as a completed physical result or claim
 a rollback that did not exist. The recovery policy can restore the last valid checkpoint with an
 explicit loss boundary. Normal supported workloads must not rely on this fault path.
+
+*Implemented order of a tick (02), before any physical phase exists:*
+
+```text
+copies: tick parameters, event header reset, command records, slot-record and window-map patches
+        (retirements first, then activations), staged chunk cells
+compute pass: begin_tick (one invocation per result record) -> one dispatch per command, in order
+copies: results and events (and resolved pass timestamps) -> tick readback;
+        requested captures -> capture staging
+```
+
+wgpu orders dispatches that use the same read-write storage buffer with a barrier (wgpu-hal 29.0.4
+treats no `STORAGE_READ_WRITE` use as ordered), so each command reads the results of the commands
+before it; the copies after the pass read the finished results. Uploads therefore activate before
+the tick's commands and a capture holds the cells after them. 03 inserts the material phases after
+the commands and before the readback; 04 the body substeps.
 
 ### Activity
 
@@ -145,12 +212,13 @@ visible, never a silent clamp. The baseline column shows where today's CPU appli
 | Body speed | up to 600 | world units/s | Attract's terminal speed against air drag is 350 / 0.6 ≈ 583. At 1/120 s a body at this speed moves 5 units per substep, more than the smallest radius, so 04 subdivides or sweeps fast bodies. | Unbounded. |
 | Bodies | up to 4,096 | count | The capacity profile. | Unbounded; all n(n−1)/2 pairs tested every substep. |
 | Brush | radius 0–64, strength 1–255 | cells, units per cell | Radius 64 touches at most 12,853 cells per stroke. | Same. |
-| Active window | radius 1–32 | chunks per axis | At radius 32 one packed cell array is 132 MiB, beyond a default 128 MiB storage binding, so 02 requests a larger binding or splits the array. | Same range; CPU arrays. |
+| Active window | radius 1–32 | chunks per axis | At radius 32 one packed cell array is 132 MiB, beyond a default 128 MiB storage binding. 02 requests the larger binding; a device that cannot grant it refuses radius 32 ([below](#gpu-resource-lifecycle)). | Same range; CPU arrays. |
 
 Queues and working sets use the [performance budgets](performance-budgets.md#structural-gates):
 at most 3 outstanding frame/tick submissions, at most 256 KiB of command plus ordinary observation
 payload per presented frame, and 64 MiB for the combined CPU upload/readback/save-retry working
-set. 02 sizes the command and observation rings from these numbers and reports the occupancy.
+set. 02 sized the command and observation rings from these numbers
+([observations](#observations-and-reliability)); `TransferCounters` reports their occupancy.
 
 Body behavior is accepted against the tolerances the baseline tests already state, recorded per
 test in the [coverage registry](../../tools/evidence/coverage.toml). For example: horizontal drift
@@ -159,28 +227,36 @@ submerged fraction within 0.05 of the relative density; a grounded share of at l
 ground; analytic geometry within 1e-6. Integer quantities (cells, volumes, conservation totals)
 compare exactly. 04 does not require bitwise agreement with the CPU baseline.
 
-## Runtime ports (proposed for 02)
+## Runtime ports (implemented in 02)
 
-These are the boundaries `world-runtime` will own. Each takes batches and returns identified
-results; none is a virtual call per cell. They are signatures, not code, because nothing consumes
-them before 02. 02 creates them with their first consumer and replaces this section with the
-actual interface.
+`world_runtime::port::PhysicalWorld` is the port; `gpu_world::world::GpuWorld` implements it, and
+the composition root chooses it. Every operation takes a batch or one bounded request and returns
+at once with a ticket or a typed `Refusal`; results arrive through `poll`, which never blocks:
 
 ```text
-PhysicalWorld (implemented by gpu-world)
-  submit(tick_batch: &[Command], tick: Tick) -> Result<SubmissionTicket, Refusal>
-  poll_observations(into: &mut ObservationBuffer) -> PollOutcome      // never blocks
-  upload_chunk(slot: SlotRef, revision: Revision, cells: &[WorldCell]) -> Result<UploadTicket, Refusal>
-  capture_chunks(request: CaptureRequest) -> Result<CaptureTicket, Refusal>
-
-ChunkStore (implemented by world-store)
-  load(key: ChunkKey, generation: RequestGeneration) -> LoadTicket    // absent / corrupt / unavailable are distinct
-  commit(batch: SaveBatch) -> SaveTicket                              // payload retained until acknowledged
+PhysicalWorld (world_runtime::port)
+  session() / capabilities() / next_tick() / counters()
+  submit_tick(&TickBatch { session, tick, commands }) -> Result<SubmissionTicket, Refusal>
+  reserve_slot(session, ChunkKey) -> Result<SlotRef, Refusal>
+  upload_chunk(SlotRef, ChunkRevision, &[WorldCell; 4096]) -> Result<UploadTicket, Refusal>
+  retire_slot(SlotRef) / capture_chunk(SlotRef) -> CaptureTicket / take_capture(ticket, &mut cells)
+  resize(&ResizeRequest { session, window }) -> Result<ResizeReport, Refusal>
+  poll(&mut Vec<Outcome>) -> PollReport                    // never blocks
+  stop(timeout, &mut Vec<Outcome>) -> DrainReport          // the explicit maintenance wait
 ```
 
-`Command`, `BodyObservation`, `BodyHandle`, `ChunkKey` and `WorldCell` already exist in
-`world-model`; the baseline driver issues the commands and reports the observations today.
-Tickets, refusals, slots and revisions are added by the stages that need them.
+`Refusal` distinguishes retryable `Pressure` (in-flight submissions, each staging pool, slots, slot
+changes, the runtime's queue and receipts), stale session or slot, out-of-order or exhausted ticks,
+invalid payloads, unsupported command kinds, capacity limits (`CapacityLimit` names the resource,
+the request and what is available), stop, loss and fault. A refused request changed nothing.
+`Outcome` carries command outcomes, completed-tick reports, upload activations, ready captures,
+cosmetic events and their overflow, and abandoned obligations with their reason.
+
+`world_runtime::runtime::Runtime` composes the runtime as a standalone `bevy_ecs` world whose
+schedule runs once per frame: `advance_clock -> submit_due_ticks -> poll_world -> consume_outcomes`.
+Issuers call `Runtime::submit(CommandId, Command)`; residency requests go through the runtime too,
+which reserves room for their outcomes first. The storage port (`ChunkStore`) is created by 05 with
+its first consumer.
 
 ## GPU resource lifecycle
 
@@ -188,6 +264,24 @@ The context owns device/queue creation, requested features/limits, submissions a
 Resource pools own allocation and high-water accounting. Encoding a render pass must not create a
 second device or trigger a CPU physical-state copy. Rendering reads the latest safely ordered view
 without requiring CPU completion first.
+
+*Implemented (02).* `gpu_world::context::GpuContext` opens only the adapter named by its stable
+identifier (a software adapter needs explicit consent) and requests WebGPU's default limits,
+raising only the largest buffer and storage binding to what the radius-32 plan needs (138,444,800
+bytes), capped by the adapter; `TIMESTAMP_QUERY` is requested only when timestamps are wanted and
+supported. Every session buffer is created through the context inside error scopes, so a refused
+allocation is a typed error and requested bytes and their peak are counted. Submissions go through
+its one timeline: at most `max_in_flight` (3) uncompleted submissions, each tracked by serial;
+completion is observed from `on_submitted_work_done` without waiting. Pipelines are compiled once
+per session from the assembled source; a new device compiles them again. Other consumers on the
+same device (the renderer in 06, layout probes now) read through `GpuWorld::view` and encode on the
+same timeline with `submit_external`.
+
+The radius-32 decision: the plan requests a larger storage binding. On a device that cannot
+grant it (as with WebGPU's default 128 MiB), a window whose cell array exceeds the granted binding
+is refused at open and at resize as `CapacityLimit { StorageBinding, requested, available }`; with
+equal radii that is radius 32, while radius 31 (130,056,192 bytes) fits. Splitting the array is not
+implemented.
 
 A resource plan includes allocation and binding sizes, alignment, workgroup/storage/dispatch
 limits, slot counts, scratch validity and all temporary replacements. An unsupported resize leaves
@@ -201,6 +295,26 @@ Mapped staging slots follow a concrete state machine:
 Late callbacks are checked against their reservation generation and session. Polling is nonblocking
 in the normal frame. Bounded submission pressure reduces new admission; it does not accumulate an
 unlimited GPU queue. Maintenance waits are explicit and counted separately.
+
+*Implemented (02).* `gpu_world::staging` keeps four pools of equally sized buffers: tick uploads and
+tick readbacks (`max_in_flight + 1` each), chunk uploads and captures (32 each by default, 32 KiB).
+Upload buffers start mapped and are remapped after the submission that read them completes;
+readback buffers are mapped right after submission and stay mapped until decoded or collected.
+Each reservation advances the buffer's generation; a map callback writes only a fixed mailbox entry
+for its buffer with that generation, and a delivery whose generation no longer matches is counted
+stale. An empty pool refuses with its `Pressure` kind. Chunk slots follow
+`free -> reserved -> staged -> activating -> resident -> retire requested -> retiring -> free`;
+retiring advances the generation at once, and the slot is reused only after the tick that cleared
+it completes. A resize plans the new window, refuses if the old and new window buffers together
+exceed the device budget, if a resident chunk would leave the window, or while slot changes or
+reservations are pending, then copies retained chunks device-to-device and keeps the old buffers
+until that submission completes (`ResizeReport::peak_overlap_bytes`).
+
+Device loss is reported by wgpu's loss callback; wgpu 29.0.4 panics from `Device::poll` when a
+backend reports a lost device, so the poll is isolated and turned into the lost state. A lost
+session, or one with an uncaptured device error or a result failing its identity check, abandons
+every outstanding obligation once and admits nothing; a new session has a later epoch and refuses
+every older slot, ticket and tick as `StaleSession`.
 
 ## Observations and reliability
 
@@ -220,6 +334,22 @@ This sprint implements a real CPU consumer for command outcomes and selected con
 observations, including an overflow/age display. It does not claim the baseline already had a
 working damage/audio system. Do not manufacture per-cell “changed” events as the normal bridge.
 
+*Implemented (02).* `world_runtime::ledger::OutcomeLedger` is that consumer; later producers report
+through it. Important outcomes are command results (one reserved receipt and one reserved device
+result record each) and residency results (room reserved in the ledger before an upload or capture
+is accepted); they are kept until acknowledged or collected. Cosmetic events are appended by
+kernels through `push_event` into a per-tick buffer of `events_per_tick` (64) records whose header
+counts every attempt; the decoder rejects a header whose drops do not account for its overflow,
+and the ledger keeps the newest events in a bounded ring, counting drops on the device and in the
+ring separately. Every tick readback is identity-checked: each result must echo its command's
+identity, position and tick. The summary reports the latest observed tick, input latency and
+observation age in ticks, tick latency and pass time. In 02 the only cosmetic producer is the
+pressure-injection kernel; contacts and immersion (04) are the first real ones.
+
+The rings are sized from the budgets: 256 commands and their results are 24 KiB per tick, at most
+96 KiB per presented frame at the default catch-up of four ticks, inside the 256 KiB budget; the
+measured steady payload is in the [performance budgets](performance-budgets.md#measured-transfer-lifecycle-02).
+
 ## Snapshots and completed ticks
 
 A snapshot identifies a completed logical boundary. Reserve independent snapshot storage, order
@@ -234,3 +364,7 @@ stale command/body/slot rejection; ordered edit plus query; delayed map completi
 observation queues; repeated resize; controlled device-loss injection; and resource-limit refusal.
 Add family-specific physics and cross-family tests as the sprint progresses. Shader validation or
 CPU emulation alone cannot satisfy this boundary.
+
+`cargo evidence test gpu --suite transfers --adapter ID` executes these on the named adapter, one
+process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 28 cases
+(`target = "gpu:transfers"`) and what each establishes. Stale body handles wait for bodies (04).

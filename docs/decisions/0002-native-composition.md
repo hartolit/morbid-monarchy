@@ -1,8 +1,10 @@
 # 0002 — Native composition and meaningful boundaries
 
-**Date:** 2026-10-10, checked against consumers on 2026-10-12. **State:** the native application
-and standalone `bevy_ecs` are the user-requested direction, adopted in prompt 00. 01 created the
-first package of the map and recorded which others wait for a consumer ([below](#01-package-check)).
+**Date:** 2026-10-10, checked against consumers on 2026-10-12 and 2026-10-13. **State:** the
+native application and standalone `bevy_ecs` are the user-requested direction, adopted in prompt
+00. 01 created the first package of the map and recorded which others wait for a consumer
+([below](#01-package-check)); 02 created the runtime and the GPU owner
+([below](#02-package-check)).
 
 ## Decision
 
@@ -42,8 +44,9 @@ consumer, not an app.
   GPU APIs, windows, UI, stores, codecs and worker pools out of its closure.
 - **`world-runtime`, `gpu-world`, `world-store`, `world-render` — not created.** Nothing consumes
   `world-runtime` or `gpu-world` before 02, `world-store` before 05 or `world-render` before 06.
-  Each is created by the stage that first uses it, not as an empty forwarding crate. The runtime ports are recorded as signatures in the
-  [GPU contract](../reference/gpu-contract.md#runtime-ports-proposed-for-02).
+  Each is created by the stage that first uses it, not as an empty forwarding crate. 01 recorded
+  the runtime ports as signatures; 02 replaced them with the implemented port in the
+  [GPU contract](../reference/gpu-contract.md#runtime-ports-implemented-in-02).
 - **`spatial-lib` — reduced.** Its key and view math moved to `world_model::spatial`. The toroidal
   grid, the chunk manager and the redb backend stay until 05 replaces them.
 - **Window, UI and GPU family — selected, pinned when used.** The lock already resolves wgpu
@@ -51,6 +54,18 @@ consumer, not an app.
   winit `^0.30.13`, and `egui-winit` 0.35.0 requires winit `^0.30.13`, so the native client can
   use one wgpu device for simulation, rendering and UI. 06 adds those crates at these versions;
   `monarchy-evidence` already uses wgpu 29.0.4 for adapter inspection.
+
+## 02 package check
+
+- **`world-runtime` — created** under `crates/`, consumed by the `transfers` suite's headless
+  composition and, from 06, the native client. Its only framework is standalone `bevy_ecs`
+  (`default-features = false, features = ["std"]`), whose closure is eight `bevy_*` crates and no
+  engine, renderer or window crate; `check static` refuses any other.
+- **`gpu-world` — created** under `adapters/`, implementing `world-runtime`'s `PhysicalWorld`
+  port. It exposes wgpu types at its GPU-specific edges (`WorldView`, `submit_external`) for
+  consumers on the same device, as decided above.
+- **Not created.** `world-store` waits for 05 and `world-render` for 06. The runtime's storage
+  port is created with the store.
 
 If a proposed package has no actual boundary/consumer, use a module before creating it. A dependency
 cycle, duplicate wgpu device family or interface forcing world copies is evidence that the chosen

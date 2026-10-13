@@ -7,7 +7,7 @@ choice is adopted or superseded.
 | Record | State |
 | --- | --- |
 | [0001 — GPU physical authority](0001-gpu-physical-authority.md) | User-requested direction; adopted in 00. Not implemented. |
-| [0002 — Native composition and meaningful boundaries](0002-native-composition.md) | Bevy-engine removal and ECS retention requested by the user and adopted in 00; package map still proposed until 01 checks consumers. |
+| [0002 — Native composition and meaningful boundaries](0002-native-composition.md) | Bevy-engine removal and ECS retention requested by the user and adopted in 00; packages created as their consumers appear (`world-model` 01, `world-runtime` and `gpu-world` 02). |
 | [0003 — Behavioral and performance evidence](0003-behavior-and-performance-evidence.md) | Engineering policy adopted in 00; profile and budget values proposed until 01 calibrates them. |
 
 "Requested" means the user fixed the direction. "Adopted" means the sprint treats it as binding.

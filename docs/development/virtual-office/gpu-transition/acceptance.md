@@ -1,7 +1,8 @@
 # GPU transition acceptance
 
-**All items are not run.** 00 reviewed this matrix against checkout `a9c1539` and found no
-existing test intention or tool missing from it. The feature inventory below adds the controls it
+**A01–A03 satisfied for their stages' scope (01, 02); A04–A15 not run.** The
+[handoff](handoff.md) records the evidence. 00 reviewed this matrix against checkout `a9c1539`
+and found no existing test intention or tool missing from it. The feature inventory below adds the controls it
 had left implicit, and one conflict is recorded under it. This is the shared outcome matrix, not a
 second implementation prompt or a substitute for the canonical contracts. A stage records concrete
 evidence in its handoff; 01 creates the machine-readable behavior registry in `monarchy-evidence`.
