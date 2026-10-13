@@ -13,6 +13,7 @@ use glam::{IVec2, Vec2};
 use crate::{
     body::{BodyHandle, BodyPreset},
     config,
+    material::FluidMat,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,32 @@ pub enum EditTool {
     Sand,
     Raise,
     Lower,
+}
+
+impl EditTool {
+    /// Every tool, in a fixed order.
+    pub const ALL: [Self; 8] = [
+        Self::Water,
+        Self::Lava,
+        Self::Oil,
+        Self::Ice,
+        Self::Fire,
+        Self::Sand,
+        Self::Raise,
+        Self::Lower,
+    ];
+
+    /// The liquid (or ice) a painting tool places with `WorldCell::inject_fluid`; `None` for
+    /// the tools that change fire, loose material or bedrock instead.
+    pub const fn fluid(self) -> Option<FluidMat> {
+        match self {
+            Self::Water => Some(FluidMat::FLUID_WATER),
+            Self::Lava => Some(FluidMat::FLUID_MAGMA),
+            Self::Oil => Some(FluidMat::FLUID_OIL),
+            Self::Ice => Some(FluidMat::FLUID_ICE),
+            Self::Fire | Self::Sand | Self::Raise | Self::Lower => None,
+        }
+    }
 }
 
 /// One brush stroke centred on a cell.
@@ -173,6 +200,40 @@ pub enum Command {
         target: IVec2,
     },
     SetAmbientTemperature(AmbientTemperature),
+    /// Reads one column as it stands after the tick's earlier commands. An observation, not a
+    /// change: the answer is a copy at a completed tick, never a writable value.
+    QueryColumn {
+        cell: IVec2,
+    },
+}
+
+/// The family of a [`Command`], without its payload. The owner of the live world reports which
+/// kinds it executes; a kind it does not execute is refused at admission, never dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandKind {
+    EditMaterial,
+    SpawnBody,
+    DriveBody,
+    JumpBody,
+    AttractBodies,
+    LiftBodies,
+    SetAmbientTemperature,
+    QueryColumn,
+}
+
+impl Command {
+    pub const fn kind(&self) -> CommandKind {
+        match self {
+            Self::EditMaterial(_) => CommandKind::EditMaterial,
+            Self::SpawnBody(_) => CommandKind::SpawnBody,
+            Self::DriveBody { .. } => CommandKind::DriveBody,
+            Self::JumpBody { .. } => CommandKind::JumpBody,
+            Self::AttractBodies { .. } => CommandKind::AttractBodies,
+            Self::LiftBodies { .. } => CommandKind::LiftBodies,
+            Self::SetAmbientTemperature(_) => CommandKind::SetAmbientTemperature,
+            Self::QueryColumn { .. } => CommandKind::QueryColumn,
+        }
+    }
 }
 
 /// Why a command could not be constructed.
@@ -241,6 +302,31 @@ mod tests {
         assert!(Direction::new(0.0, 0.0).is_err());
         assert!(AmbientTemperature::celsius(41.0).is_err());
         assert!(AmbientTemperature::celsius(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn painting_tools_name_their_liquid_and_commands_their_kind() {
+        let painted: Vec<(EditTool, FluidMat)> = EditTool::ALL
+            .iter()
+            .filter_map(|tool| tool.fluid().map(|fluid| (*tool, fluid)))
+            .collect();
+        assert_eq!(
+            painted,
+            [
+                (EditTool::Water, FluidMat::FLUID_WATER),
+                (EditTool::Lava, FluidMat::FLUID_MAGMA),
+                (EditTool::Oil, FluidMat::FLUID_OIL),
+                (EditTool::Ice, FluidMat::FLUID_ICE),
+            ]
+        );
+        let query = Command::QueryColumn {
+            cell: IVec2::new(1, 2),
+        };
+        assert_eq!(query.kind(), CommandKind::QueryColumn);
+        let edit = Command::EditMaterial(
+            MaterialEdit::new(EditTool::Fire, IVec2::ZERO, 0, 1).expect("valid"),
+        );
+        assert_eq!(edit.kind(), CommandKind::EditMaterial);
     }
 
     #[test]

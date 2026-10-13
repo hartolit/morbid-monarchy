@@ -4,6 +4,7 @@ members = [
     "crates/monarch-engine",
     "crates/spatial-lib",
     "crates/world-model",
+    "crates/world-runtime",
     "tools/evidence",
 ]
 resolver = "3"
@@ -11,6 +12,8 @@ resolver = "3"
 [workspace.dependencies]
 bevy = { version = "0.19", features = ["serialize"] }
 bevy_egui = { version = "0.41.0" }
+# Standalone ECS for CPU orchestration (world-runtime); the engine's default features are off.
+bevy_ecs = { version = "0.19.0", default-features = false, features = ["std"] }
 bitcode = { version = "0.6.9", features = ["derive"] }
 bytemuck = { version = "1.25.0", features = ["derive"] }
 lru = "0.16.3"
@@ -32,3 +35,4 @@ monarch-engine = { path = "crates/monarch-engine" }
 morbid-app = { path = "crates/morbid-app" }
 spatial-lib = { path = "crates/spatial-lib" }
 world-model = { path = "crates/world-model" }
+world-runtime = { path = "crates/world-runtime" }

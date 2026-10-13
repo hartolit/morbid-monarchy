@@ -1,0 +1,10 @@
+[package]
+name = "world-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "CPU orchestration of the live world: fixed-tick admission, command receipts, the physical-world port and the consumer of its outcomes."
+
+[dependencies]
+bevy_ecs.workspace = true
+world-model.workspace = true

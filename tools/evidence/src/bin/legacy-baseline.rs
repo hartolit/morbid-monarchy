@@ -640,6 +640,9 @@ fn execute(
         Command::SetAmbientTemperature(temperature) => {
             settings.simulation.ambient_temperature_c = temperature.degrees();
         }
+        // The frozen scenarios issue no queries, and the baseline has no query path: its tools
+        // read the CPU grid directly. The GPU runtime answers queries from 02 on.
+        Command::QueryColumn { .. } => {}
     }
 }
 

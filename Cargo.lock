@@ -6734,6 +6734,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "world-runtime"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "world-model",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

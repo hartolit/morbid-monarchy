@@ -510,3 +510,227 @@ origin = "transition"
 expectation = "Rows the old writer stored straight from the generator equal the extracted generator's output for the same keys."
 destination = "world-model generation (01); import (05)"
 determinism = "exact"
+
+# --- Command helpers for the GPU edit path: world-model (02) ---
+
+[[behavior]]
+id = "model.command.tool-liquids-and-kinds"
+package = "world-model"
+target = "lib"
+test = "command::tests::painting_tools_name_their_liquid_and_commands_their_kind"
+origin = "transition"
+expectation = "Water, lava, oil and ice tools paint water, magma, oil and ice; the other tools paint none; each command reports its kind."
+destination = "world-model command (02); the GPU edit kernel reads the same mapping"
+determinism = "exact"
+
+# --- Runtime ports and policy: world-runtime (02) ---
+
+[[behavior]]
+id = "runtime.clock.backlog-capped"
+package = "world-runtime"
+target = "lib"
+test = "clock::tests::whole_intervals_become_ticks_and_the_backlog_is_capped"
+origin = "transition"
+expectation = "Whole tick intervals become due ticks; a stalled frame runs at most the catch-up cap and the rest is discarded and counted."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.clock.refused-tick-stays-due"
+package = "world-runtime"
+target = "lib"
+test = "clock::tests::a_tick_that_could_not_be_submitted_stays_due"
+origin = "transition"
+expectation = "A due tick that was not submitted stays due on the next frame."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.clock.unsupported-rates"
+package = "world-runtime"
+target = "lib"
+test = "clock::tests::unsupported_rates_are_refused"
+origin = "transition"
+expectation = "Tick rates and catch-up caps outside the supported ranges, and non-finite rates, are refused."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ids.no-wrap"
+package = "world-runtime"
+target = "lib"
+test = "ids::tests::counters_refuse_to_wrap"
+origin = "transition"
+expectation = "Ticks and session epochs refuse to advance past their last value instead of wrapping."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ids.word-order"
+package = "world-runtime"
+target = "lib"
+test = "ids::tests::wide_identities_split_into_low_then_high_words"
+origin = "transition"
+expectation = "Command, tick and revision identities split into a low then a high 32-bit word and back."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ledger.receipt-ages"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::command_outcomes_complete_receipts_with_their_ages"
+origin = "transition"
+expectation = "Command outcomes complete receipts with input latency and observation age; a later abandonment does not undo a completion."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ledger.cosmetic-drops-counted"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::cosmetic_drops_are_counted_on_the_device_and_in_the_ring"
+origin = "transition"
+expectation = "Cosmetic events dropped on the device and overwritten in the bounded ring are counted separately; the newest are kept."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ledger.out-of-order-ticks"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::out_of_order_ticks_keep_the_latest_observation"
+origin = "transition"
+expectation = "Tick reports arriving out of order keep the latest tick as the latest observation."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ledger.residency-reservations"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::residency_reservations_bound_outstanding_requests"
+origin = "transition"
+expectation = "Residency outcomes are reserved before a request is accepted, bounding outstanding uploads and captures."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.port.whole-chunks"
+package = "world-runtime"
+target = "lib"
+test = "port::tests::chunk_payloads_must_be_whole_chunks"
+origin = "transition"
+expectation = "A chunk payload that is not exactly 4,096 cells is refused with its length."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.port.supported-kinds"
+package = "world-runtime"
+target = "lib"
+test = "port::tests::supported_kinds_are_explicit"
+origin = "transition"
+expectation = "A live world names the command kinds it executes; others are unsupported."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.port.window-ranges"
+package = "world-runtime"
+target = "lib"
+test = "port::tests::windows_refuse_unsupported_radii_and_keys"
+origin = "transition"
+expectation = "Resident windows outside radius 1–32, off the z = 0 plane or beyond i32 keys are refused."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.receipts.full-table"
+package = "world-runtime"
+target = "lib"
+test = "receipts::tests::a_full_table_refuses_until_final_receipts_are_acknowledged"
+origin = "transition"
+expectation = "A full receipt table refuses admission; only final receipts can be acknowledged, which raises the floor and expires their identities."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.receipts.retry-and-conflict"
+package = "world-runtime"
+target = "lib"
+test = "receipts::tests::a_retry_is_a_duplicate_and_reuse_with_another_command_conflicts"
+origin = "transition"
+expectation = "The same identity and command is a duplicate that admits nothing; the same identity with another command conflicts."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.receipts.latencies"
+package = "world-runtime"
+target = "lib"
+test = "receipts::tests::latencies_count_ticks_from_admission_to_observation"
+origin = "transition"
+expectation = "Input latency counts ticks from admission to application; observation age from application to consumption; unknown outcomes are counted."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.receipts.unsupported-before-receipt"
+package = "world-runtime"
+target = "lib"
+test = "receipts::tests::unsupported_kinds_are_refused_before_a_receipt_is_taken"
+origin = "transition"
+expectation = "An unsupported command kind is refused before any receipt is reserved."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.loss-abandons-queued"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::a_lost_world_abandons_queued_commands_and_closes_admission"
+origin = "transition"
+expectation = "When the live world reports loss, queued commands are abandoned with that reason and admission closes."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.backpressure"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::backpressure_keeps_commands_queued_and_the_tick_unnumbered"
+origin = "transition"
+expectation = "A pressure refusal keeps commands queued and pending and numbers no tick; the next frame submits the same tick."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.order-and-capacity"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::commands_are_submitted_in_admission_order_and_split_by_tick_capacity"
+origin = "transition"
+expectation = "Queued commands are submitted in admission order, split by the per-tick capacity, and their outcomes complete the receipts."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.elapsed-time"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::elapsed_time_drives_ticks_up_to_the_catch_up_cap"
+origin = "transition"
+expectation = "Elapsed time makes ticks due at the fixed rate, capped per frame with the backlog discarded."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.attach-at-next-tick"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::the_runtime_starts_at_the_world_s_next_tick"
+origin = "transition"
+expectation = "A runtime attaching to a live world starts at the tick the world expects next."
+destination = "world-runtime runtime ports and policy (02)"
+determinism = "exact"

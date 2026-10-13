@@ -2,6 +2,7 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use world_model::{
+    command::EditTool,
     config::{DEFAULT_BRUSH_RADIUS_CELLS, DEFAULT_BRUSH_STRENGTH},
     material::FluidMat,
 };
@@ -27,15 +28,24 @@ pub enum GridBrush {
 }
 
 impl GridBrush {
-    /// Liquid painted by fluid brushes.
+    /// The material edit this brush issues; `None` for selection and the spawning brushes.
+    pub fn edit_tool(self) -> Option<EditTool> {
+        Some(match self {
+            Self::Water => EditTool::Water,
+            Self::Lava => EditTool::Lava,
+            Self::Oil => EditTool::Oil,
+            Self::Ice => EditTool::Ice,
+            Self::Fire => EditTool::Fire,
+            Self::Sand => EditTool::Sand,
+            Self::RaiseTerrain => EditTool::Raise,
+            Self::LowerTerrain => EditTool::Lower,
+            Self::None | Self::SpawnMetalSphere | Self::SpawnWoodSphere => return None,
+        })
+    }
+
+    /// Liquid painted by fluid brushes ([`EditTool::fluid`] owns the mapping).
     pub fn fluid(self) -> Option<FluidMat> {
-        match self {
-            Self::Water => Some(FluidMat::FLUID_WATER),
-            Self::Lava => Some(FluidMat::FLUID_MAGMA),
-            Self::Oil => Some(FluidMat::FLUID_OIL),
-            Self::Ice => Some(FluidMat::FLUID_ICE),
-            _ => None,
-        }
+        self.edit_tool().and_then(EditTool::fluid)
     }
 
     pub fn spawns_entity(self) -> bool {
