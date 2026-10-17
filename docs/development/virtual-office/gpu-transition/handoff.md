@@ -6,53 +6,45 @@ artifacts. Update after each coherent checkpoint and before stopping or changing
 
 ## 03 boundary
 
-**State:** 03 implemented (2026-10-17), assigned by the user on 2026-10-17. Checkpoints A–D are
-committed on `experimental`. Every check passed, but the GPU suites ran only on a software
-adapter: the RTX 5070 Ti was unusable for the whole stage (its kernel module, 615.71.09, did not
-match the userspace driver, 615.78.08, after a package update without a reboot; NVML reported a
-version mismatch and Vulkan enumerated no NVIDIA adapter). A04/A05 are therefore not qualified on
-hardware, and 04 should not start until they are.
+**State:** 03 complete (2026-10-17), assigned by the user on 2026-10-17. Checkpoints A–D are
+committed on `experimental`, and every lane passed on the nominated hardware after the user's
+reboot restored the NVIDIA driver (during implementation the kernel module, 615.71.09, did not
+match the userspace driver, 615.78.08, so the GPU suites first ran on Mesa llvmpipe). 04 has not
+started and needs its own assignment.
 
-**Next action (inside 03):** rerun `cargo evidence test cpu` and the `cells` and `transfers`
-suites on llvmpipe at the 03 tip (not yet done on the final tree). After the user reboots, confirm `cargo evidence inspect-adapter` lists
-`vulkan-10de-2c05`, then run, at the 03 tip with `CARGO_BUILD_JOBS=4`,
-`cargo evidence test gpu --suite cells --adapter vulkan-10de-2c05` and
-`cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05`; record both here, put the
-`activity-measurement` hardware numbers in the
-[performance budgets](../../../reference/performance-budgets.md#material-phases-03) beside the
-software ones, and rework any hot spot they show within 03's scope. Then assign
-[04](04-gpu-bodies-and-interaction.md).
+**Next action:** assign [04-gpu-bodies-and-interaction.md](04-gpu-bodies-and-interaction.md).
+Nothing in 03 is left to resume.
 
 ## 03 record
 
 | Field | Record |
 | --- | --- |
-| Assigned stage / checkpoint | 03 — GPU-resident cell simulation and sparse work. A–D implemented; the hardware run of D is outstanding. |
-| Source state | `experimental`: `c14fbea` (A: specification, `world_model::rules`, ceiling fix, CPU reference), `113b184` (B–C: GPU material phases, sparse scheduling, `cells` suite), then the D commits (measurement case, keep-alive correction, documentation). The tree was clean before 03; no unrelated work was present. Another user process (`cargo-report`/`milkdrift`, started 14:21 local time from another project) ran during 03 and was not touched. |
+| Assigned stage / checkpoint | 03 — GPU-resident cell simulation and sparse work. A–D complete. |
+| Source state | `experimental`: `c14fbea` (A: specification, `world_model::rules`, ceiling fix, CPU reference), `113b184` (B–C: GPU material phases, sparse scheduling, `cells` suite), `66ce775` (D: measurement case, keep-alive correction, documentation), then the hardware commit: the `presentation-rates` harness waits for the device between simulated frames, `steady-state-reuse` reports the command pass and the whole tick separately, and these records. The tree was clean before 03; no unrelated work was present. Another user process (`cargo-report`/`milkdrift`, from another project) ran during the first session and was not touched. |
 | Actual adoption | **A:** the pass/resource table, activity scheduling, clock, keyed randomness, accounting and rule changes in the [GPU contract](../../../reference/gpu-contract.md#cell-phases-03), written before any kernel. `world_model::rules` owns rule switches, cadences, tuning constants, wake levels, the keyed hash and shuffles; the baseline engine reads them instead of its copies (its 23 tests unchanged). `WorldCell::quench` converts only what fits and `receive_fluid` refuses coolant at the ceiling without recursion (`receivable` answers without changing the column). New commands `SetSimulationRules` and `MeasureTotals`, observation `WorldTotals`. The CPU reference (`tools/evidence/src/suites/cells/reference.rs`, baseline gather form) equals `monarch-engine` cell for cell and wake level for wake level on its fixtures. **B–C:** `gpu-world` runs a tick as three compute passes (commands; scan, wake and two argument kernels; propose, resolve, react, commit) over 8 × 8 tiles with GPU-side lists and indirect arguments split at 65,535 workgroups; WGSL rule modules mirror world-model and material tables are generated from it; per-tick 64-bit accounting, totals and per-pass timestamps come back in the tick readback; dense execution is a configuration (`Execution::Dense`). `world-runtime` gained `CellReport`, the inconsistent-tick count in the ledger, `submit_at` and `set_clock`. **D:** the `cells` suite (31 cases) and the activity measurement. Superseded: the edit path that woke nothing (02), the full-grid copy as the only way to keep sleeping cells valid (the GPU path commits awake cells only). |
 | Decisions / deviations | Activity keeps the baseline's per-cell wake levels and radii exactly (scheduled per tile, evaluated as a gather), so the deterministic rules reproduce the baseline with seed 0; tile-granular activity was rejected because it would have changed which cells run their rules. Transfers are proposed once and accepted against the receiver's worst-case column, so donors drain exactly what was accepted. Biology and fire use keyed draws (a semantic change). A rule change wakes every cell (the baseline did not). Immature foliage and fire keep their cell awake only while their rule runs: found when generated terrain never slept (64% of tiles at radius 6) under the deterministic rules. Captures now hold the end of the tick. The injected-magma behavior of the mixed scenario is kept; its ceiling loss is gone. The transfers suite opens worlds with every rule off, so its arbitrary-bit fixtures stay intact. RUSTSEC-2026-0344 (`ruzstd` under Bevy, published after 02, no compatible fix, no zstd texture loaded) is accepted in `deny.toml` until 06. |
-| Checks | At `113b184`'s tree with `CARGO_BUILD_JOBS=4`: `cargo evidence check static` passed (12 items, 3 assemblies validated, Clippy 7 diagnostics all covered by the 3 recorded exceptions); `cargo evidence test cpu` passed (166 tests, 115 registered behaviors, 28 baseline); `cargo evidence test gpu --suite cells --adapter gl-10005-0000` passed (30 cases then, plus the registry); `--suite transfers` on the same adapter failed only `adapter-selection` and `radius-32-allocation`, the two cases that need hardware (as it already did before 03). `c14fbea` was tested with `check docs`, `check static` and `test cpu` (161 tests) on a clean tree. On the final D tree (keep-alive correction, measurement case, documentation): `check static` and `check docs` passed; the `activity-measurement` case passed alone on llvmpipe after the keep-alive change; `test cpu` and the full `cells` and `transfers` suites were **not** rerun on that tree before the session's usage limit. Rerun them first when resuming. |
-| Hardware / measurements | Only Mesa llvmpipe (`gl-10005-0000`, LLVM 23.1.1, 256-bit, wgpu GL backend; Ryzen 9 5950X) was available. The activity measurement at radius 6 shows the structure (idle sparse world: 0 tiles visited; dense: all 10,816 every tick; sparse at full activity no cheaper than dense) but no GPU timing: [performance budgets](../../../reference/performance-budgets.md#material-phases-03). Planned resources per radius are calculated there (`25.125 N + 40 C + 64` terrain bytes). No hardware measurement and no speedup claim. |
-| Acceptance | A04 and A05: every listed evidence item passed on the software adapter (the 10 simulation and 5 cell intentions, exact transfers and donor conflicts, frozen, mixed and full receivers, ceiling quench, keyed fire and growth, classified sinks and sources; dense/sparse agreement, sleeping receivers and the two-cell halo, climate, rule, edit and chunk reactivation, empty and full activity with the dispatch split, negative keys, seams, rebasing, rollover, presentation rates and catch-up). Not qualified on hardware. A06–A15 not run. |
+| Checks | Final, on the hardware commit's tree before this record was written (one dirty-diff digest, `e8df6ae7…`, over `66ce775` for all four runs; the commit adds only this record), 2026-10-17 15:52–15:58 UTC, `CARGO_BUILD_JOBS=4`, host load average about 3 on 32 threads: `cargo evidence test gpu --suite cells --adapter vulkan-10de-2c05` passed (32 items: the registry and 31 cases); `--suite transfers` passed (29 items: the registry and 28 cases); `cargo evidence check static` passed (12 items, 3 assemblies validated, Clippy 7 diagnostics all covered by the 3 recorded exceptions); `cargo evidence test cpu` passed (166 tests: 115 registered behaviors, 28 of them baseline, and 56 runner tests); `cargo evidence check docs` passed at the commit. Reports in `target/evidence/final-03-{cells,transfers,static,cpu,docs}/` (copied from the session scratchpad). Earlier: `c14fbea` with docs, static and `test cpu` (161 tests) on a clean tree; `113b184`'s tree with static, `test cpu` (166 tests) and both suites on llvmpipe (`transfers` failing only its two hardware-only cases there); `66ce775` with static and docs. The first hardware run of `cells` failed `presentation-rates` alone: its simulated frames came faster than the device finished ticks, so backpressure left ticks owed and the 30 Hz run hit the cap; the harness now lets each frame's ticks complete, and the case also checks 20 discarded ticks per stall. No rule or kernel changed after `66ce775`. |
+| Hardware / measurements | RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.78.08), Ryzen 9 5950X, Linux 7.2.10. At radius 6 an idle sparse tick costs 27 µs of device time (9 activity, 18 material), a fully active one 280 µs sparse or dense (0.35 ns per cell), dense idle 86 µs; encode 47–62 µs; round trip 0.26–0.51 ms one tick in flight; 110–142 process allocations per tick inside wgpu; nothing created or waited on: [performance budgets](../../../reference/performance-budgets.md#material-phases-03), with the planned resources per radius (`25.125 N + 40 C + 64` terrain bytes) and the re-measured 02 transfer path (command pass 31 µs, tick 74 µs). No hot spot needed rework. Per-case JSON in `target/evidence/final-03-cells/gpu-cells/` on that machine only. Headless physics only: no native-client frame time and no speedup claim. |
+| Acceptance | A04 and A05 satisfied on the RTX 5070 Ti: the 10 simulation and 5 cell intentions, exact transfers and donor conflicts, frozen, mixed and full receivers, ceiling quench, keyed fire and growth, classified sinks and sources; dense/sparse agreement, sleeping receivers and the two-cell halo, climate, rule, edit and chunk reactivation, empty and full activity with the dispatch split, negative keys, seams, rebasing, rollover, presentation rates and catch-up, the unmatched-transfer specimen. A06–A15 not run. |
 | Data safety | No case opens a store; every world is generated or synthetic in memory. `world_data/save.redb` was neither opened nor changed (8,237,617,152 bytes, modified 2026-10-11 14:24 local time). |
-| Blockers | The nominated adapter: needs the user to reboot (or reload the NVIDIA module) so kernel and userspace drivers match. Not something an agent may do. |
-| Next action / stop | Stopped at the end of 03's implementation. Resume with the hardware run above; then assign 04. |
+| Blockers | None for 04. |
+| Next action / stop | Stopped at the end of 03. Assign 04. |
 
 ### Carried into later stages (03)
 
-1. **Hardware qualification of 03** (03, then 07): the `cells` and `transfers` suites and the
-   activity measurement on `vulkan-10de-2c05`.
-2. **Bodies on the material phases** (04): body substeps go after `commit`; contact deformation
+1. **Bodies on the material phases** (04): body substeps go after `commit`; contact deformation
    and displacement must go through the same accepted-amount transfers and accounting, and wake
    what they change through the edited bitmap or an equivalent writer.
-3. **Rule seed from world identity** (05/06): `GpuWorldConfig::rule_seed` defaults to 0 (the
+2. **Rule seed from world identity** (05/06): `GpuWorldConfig::rule_seed` defaults to 0 (the
    baseline hashes); the composition root and the checkpoint must choose and record it.
-4. **Checkpoints and activity** (05): a capture holds the end of a tick; resuming needs the tick
+3. **Checkpoints and activity** (05): a capture holds the end of a tick; resuming needs the tick
    (`first_tick`), the rules, the climate and the seed. Activity is not checkpointed: a resumed
    world wakes its chunks as they activate.
-5. **Statistics display** (06): totals come from `MeasureTotals`, not a cell download.
-6. **The baseline engine** (06) still loses liquid when magma reaches a coolant at the ceiling
+4. **Statistics display** (06): totals come from `MeasureTotals`, not a cell download.
+5. **The baseline engine** (06) still loses liquid when magma reaches a coolant at the ceiling
    (its liquid step ignores the accepted amount); the GPU path does not. Removed with the engine.
+6. **Larger-window timing** (07): 03 measured device time at radius 6 only; the scale and
+   capacity profiles run against the GPU runtime in 04–07.
 
 ## 02 boundary (closed)
 

@@ -144,14 +144,19 @@ pub fn presentation_rates(adapter: &str, check: &mut Check) -> Result<(), String
                 .map_err(|error| format!("submit: {error:?}"))?;
         }
         let mut frame = 0;
+        let mut stalls = 0u64;
         while runtime
             .last_submitted_tick()
             .is_none_or(|tick| tick.value() < start + TARGET - 4)
         {
             let seconds = pacing.frames[frame % pacing.frames.len()];
+            stalls += u64::from(seconds > 0.1);
             runtime.frame(Duration::from_secs_f64(seconds));
             frame += 1;
-            std::thread::sleep(Duration::from_micros(200));
+            // The frames are simulated, not slept: let the device finish this frame's ticks
+            // before the next frame, as a real frame of this length would. Otherwise in-flight
+            // backpressure, not the pacing, would decide how many ticks stay owed.
+            idle(&mut runtime)?;
         }
         // Every pacing ends within the catch-up cap of the target; single ticks reach it exactly.
         while runtime
@@ -180,6 +185,15 @@ pub fn presentation_rates(adapter: &str, check: &mut Check) -> Result<(), String
             ledger.inconsistent_ticks,
             0,
         );
+        check.metric(&format!("{}_stalls", pacing.name), stalls);
+        if stalls > 0 {
+            // A 400 ms stall owes 24 ticks at 60 Hz; the cap of 4 runs and 20 are discarded.
+            check.equal(
+                &format!("{}: discarded ticks", pacing.name),
+                discarded,
+                20 * stalls,
+            );
+        }
         worlds.push((pacing.name, captured, discarded));
     }
     let (_, reference, _) = &worlds[0];
@@ -197,6 +211,22 @@ pub fn presentation_rates(adapter: &str, check: &mut Check) -> Result<(), String
         "the stalled run discarded nothing".to_owned()
     });
     Ok(())
+}
+
+/// Polls without submitting until every submitted tick has been observed.
+fn idle(runtime: &mut Runtime) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    loop {
+        let counters = runtime.counters();
+        if counters.ticks_observed == counters.ticks_submitted {
+            return Ok(());
+        }
+        if started.elapsed() > super::super::driver::DEVICE_PATIENCE {
+            return Err("submitted ticks were never observed".to_owned());
+        }
+        runtime.frame_ticks(0);
+        std::thread::sleep(Duration::from_micros(100));
+    }
 }
 
 /// Captures a resident chunk through the runtime at the end of the next tick.

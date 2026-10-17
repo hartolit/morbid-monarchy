@@ -1,8 +1,6 @@
 # GPU transition acceptance
 
-**A01–A03 satisfied for their stages' scope (01, 02). A04–A05 (03): every listed evidence item
-passed on a software adapter (Mesa llvmpipe); execution on the nominated RTX 5070 Ti was not
-possible during 03 (driver mismatch), so they are not qualified on hardware. A06–A15 not run.** The
+**A01–A05 satisfied for their stages' scope (01–03); A06–A15 not run.** The
 [handoff](handoff.md) records the evidence. 00 reviewed this matrix against checkout `a9c1539`
 and found no existing test intention or tool missing from it. The feature inventory below adds the controls it
 had left implicit, and one conflict is recorded under it. This is the shared outcome matrix, not a

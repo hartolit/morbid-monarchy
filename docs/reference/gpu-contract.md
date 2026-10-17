@@ -243,7 +243,11 @@ beyond a bound, so no list can overflow or truncate. Indirect dispatches split a
 
 **Clock and cadence.** Ticks are 64-bit, carried as two words. Granular movement runs on odd ticks,
 as in the baseline. Biology is sampled once in ten ticks per active cell and fire once in two, by
-keyed draws. Nothing reads wall time.
+keyed draws. Nothing reads wall time. The runtime's clock turns frame time into whole ticks; a
+frame runs at most the catch-up cap, and the backlog beyond it is discarded and counted
+(`Runtime::discarded_ticks`; dropped simulated time is that times the tick duration). A tick the
+device cannot take yet (in-flight backpressure) stays owed within the cap. The world at a given
+tick does not depend on the presentation rate (`cells` `presentation-rates`).
 
 **Keyed randomness and tie-breaking.** Every rule that needs a pseudo-random choice uses
 `world_model::rules`: the baseline's position-and-tick hash for flow shuffles, granular stiction,

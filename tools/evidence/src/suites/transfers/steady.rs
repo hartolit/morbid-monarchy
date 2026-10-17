@@ -203,6 +203,10 @@ pub(super) fn steady_state_reuse(adapter: &str, check: &mut Check) -> Result<(),
         per_tick(after.readback.events - before.readback.events),
     );
     check.metric(
+        "readback_diagnostics_bytes_per_tick",
+        per_tick(after.readback.diagnostics - before.readback.diagnostics),
+    );
+    check.metric(
         "readback_timestamps_bytes_per_tick",
         per_tick(after.readback.timestamps - before.readback.timestamps),
     );
@@ -263,16 +267,19 @@ pub(super) fn steady_state_reuse(adapter: &str, check: &mut Check) -> Result<(),
         check.metric("tick_latency_ms_p95", sorted[sorted.len() * 95 / 100]);
         check.metric("tick_latency_ms_max", sorted[sorted.len() - 1]);
     }
-    let gpu_times: Vec<f64> = driver
+    // Since 03 a tick is three passes; the command pass is the first, the whole tick all three.
+    let micros = |time: Duration| time.as_secs_f64() * 1_000_000.0;
+    let (gpu_times, tick_times): (Vec<f64>, Vec<f64>) = driver
         .outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            Outcome::TickCompleted(report) => {
-                report.gpu_time.map(|time| time.as_secs_f64() * 1_000_000.0)
-            }
+            Outcome::TickCompleted(report) => report
+                .phases
+                .zip(report.gpu_time)
+                .map(|(phases, total)| (micros(phases.commands), micros(total))),
             _ => None,
         })
-        .collect();
+        .unzip();
     match driver.world.report().timestamps {
         TimestampSupport::Enabled { period_ns } => {
             check.that(!gpu_times.is_empty(), || {
@@ -283,6 +290,10 @@ pub(super) fn steady_state_reuse(adapter: &str, check: &mut Check) -> Result<(),
                 times.sort_by(f64::total_cmp);
                 check.metric("command_pass_us_median", times[times.len() / 2]);
                 check.metric("command_pass_us_max", times[times.len() - 1]);
+                let mut ticks = tick_times.clone();
+                ticks.sort_by(f64::total_cmp);
+                check.metric("tick_gpu_us_median", ticks[ticks.len() / 2]);
+                check.metric("tick_gpu_us_max", ticks[ticks.len() - 1]);
                 check.metric("timestamp_period_ns", f64::from(period_ns));
             }
         }

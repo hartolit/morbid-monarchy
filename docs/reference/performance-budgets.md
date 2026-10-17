@@ -1,7 +1,7 @@
 # Performance budgets
 
 **Frozen qualification contract, the measured baseline (01), the measured transfer lifecycle
-(02) and the material phases' resources and software-adapter measurement (03).** 00 adopted the evidence policy in
+(02) and the material phases' resources and measurement (03).** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -203,33 +203,54 @@ requests and the diagnostics are `64 + 4 C + 144` B, plus 4,096 B per activated 
 material passes write 16 B per awake cell (flow words and scratch) and 8 B per changed cell
 (commit) in sparse execution, and 24 B per resident cell in dense execution.
 
-**Measured on a software adapter, not hardware.** The RTX 5070 Ti was unavailable for all of 03:
-its kernel module (615.71.09) and userspace driver (615.78.08) mismatched after a package update
-without a reboot, so Vulkan enumerated no NVIDIA adapter. The `activity-measurement` case of the
-`cells` suite ran on Mesa llvmpipe (`gl-10005-0000`, LLVM 23.1.1, 256-bit; wgpu GL backend) at the
-qualification window (radius 6, 10,816 tiles, generated terrain, seed 69), 40 ticks per scenario
-after 10 warm-up ticks, one tick in flight. llvmpipe executes compute on CPU threads during the
-submit call, so its "encode" time includes the work and its pass timestamps are CPU-emulation
-times; neither is evidence about the GPU target. What the run does establish is structural:
+**Measured on the nominated hardware.** Run on 2026-10-17 at 17:52 local time after a reboot, at
+`66ce775` plus the harness fixes committed with these numbers, with `cargo evidence test gpu
+--suite cells --adapter vulkan-10de-2c05` (RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux
+7.2.10; release build; timestamps period 1 ns). Case `activity-measurement`: the qualification
+window (radius 6, 169 chunks, 10,816 tiles, 692,224 cells) of generated terrain (seed 69), 40
+measured ticks per scenario after 10 warm-up ticks, one tick in flight, so the round trip is a
+latency, not a throughput. Device times are the three compute passes' timestamps; "encode" is the
+CPU time of the `submit_tick` call.
 
-| Scenario | Tiles visited | Awake cells per tick | Material pass (llvmpipe, median) | Activity pass (llvmpipe, median) |
-| --- | ---: | ---: | ---: | ---: |
-| Sparse, idle (settled, deterministic rules) | 0 | 0 | 0.19 ms | 0.22 ms |
-| Sparse, mixed (8 water strokes a tick) | 1,845 (17%) | 95,878 | 6.8 ms | 0.94 ms |
-| Sparse, growing (every rule, foliage spreading) | 8,619 (80%) | 500,653 | 19.1 ms | 3.2 ms |
-| Sparse, full (a climate change every tick) | 10,816 | 692,224 | 26.0 ms | 3.3 ms |
-| Dense, idle | 10,816 | 0 | 6.6 ms | 4.7 ms |
-| Dense, full | 10,816 | 692,224 | 26.1 ms | 3.3 ms |
+| Scenario | Tiles visited | Awake cells per tick | Activity pass median | Material pass median (p95) | Encode median (p95) | Round trip median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sparse, idle (settled, deterministic rules) | 0 | 0 | 9 µs | 18 µs (18) | 47 µs (54) | 0.26 ms |
+| Sparse, mixed (8 water strokes a tick) | 1,845 (17%) | 95,878 | 14 µs | 92 µs (130) | 61 µs (73) | 0.26 ms |
+| Sparse, growing (every rule, foliage spreading) | 8,619 (80%) | 500,653 | 29 µs | 186 µs (192) | 50 µs (60) | 0.26 ms |
+| Sparse, full (a climate change every tick) | 10,816 | 692,224 | 38 µs | 242 µs (250) | 62 µs (81) | 0.51 ms |
+| Dense, idle | 10,816 | 0 | 34 µs | 52 µs (52) | 48 µs (78) | 0.26 ms |
+| Dense, full | 10,816 | 692,224 | 38 µs | 242 µs (248) | 54 µs (78) | 0.51 ms |
 
-An idle sparse world visits no tile and touches no cell (the scan reads one word per tile); dense
-execution visits every tile every tick; sparse at full activity is no cheaper than dense, as
-expected (26.0 against 26.1 ms here). Every measured tick balanced its accounting, no buffer was
-created and no frame wait occurred; process allocations were 139–178 per tick, inside wgpu and the
-GL driver. The run's identity and every metric are in the case's JSON under the suite's run
-directory (`target/evidence/<run>/gpu-cells/activity-measurement.json` on the measuring machine). The hardware
-measurement of record, and any rework of hot spots it shows, need the nominated adapter: rerun
-`cargo evidence test gpu --suite cells --adapter vulkan-10de-2c05` once the driver loads. The 02
-transfer measurement above was taken before the material phases existed and is not re-measured.
+An idle sparse window visits no tile and touches no cell: its 27 µs are the scan of one word per
+tile and four empty indirect dispatches, against 86 µs for dense execution of the same world. At
+full activity sparse costs what dense costs (242 µs, 0.35 ns per cell), as expected; sparse
+execution is not tuned to win on dense work. The command pass with eight radius-6 strokes takes
+25 µs. Per tick the upload is 148 B without commands and the readback 1,232 B (1,280 B with one
+configuration command); the material passes store 1.9 MB (mixed) to 11.1 MB (full) on the device,
+16.6 MB in dense execution, by the count above. Every measured tick balanced its accounting, no
+buffer was created and no frame wait occurred. Process allocations were 110–142 per tick, all on
+the submit path inside wgpu (command recording for three passes); application pools allocate
+nothing after warm-up. At radius 6 four fully active ticks per frame cost about 1.1 ms of device
+time against the 16.67 ms frame target, so 03 found no hot spot to rework. These are physics-only
+device numbers on the headless owner, not a native-client frame time or a speedup claim against
+the baseline.
+
+The same case ran on Mesa llvmpipe (`gl-10005-0000`) while the NVIDIA driver was mismatched, with
+the same tile and cell counts; llvmpipe executes compute during the submit call, so its times are
+CPU emulation and are not repeated here.
+
+**Transfer path re-measured at 03.** `steady-state-reuse` (the 02 workload above, with every
+material rule off but the material passes running) on the same adapter: command pass median 31 µs
+(24 µs at 02: edits now also mark wake and count tool quantities), whole tick 74 µs, tick latency
+median 0.22 ms and p95 0.39 ms, 163 process allocations per tick (160 on the submit path, 105 at
+02), no buffer created, no frame wait, readback +144 B and upload +4 B per tick for the
+diagnostics and the wake-request word.
+
+**Catch-up under overload.** The clock discards owed ticks beyond the per-frame cap; the dropped
+simulated time is the discarded ticks times the tick duration (`Runtime::discarded_ticks`). In
+`presentation-rates` a 400 ms stall at 60 Hz owes 24 ticks, runs 4 and discards 20 (333 ms); the
+stalled run discarded exactly 20 per stall (320 ticks, 5.3 s over 16 stalls) and reached the same
+world at the same tick as the 30, 60 and 144 Hz runs, which discarded nothing.
 
 ## Structural gates
 
