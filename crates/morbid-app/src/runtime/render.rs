@@ -18,6 +18,7 @@ use rustc_hash::FxHashSet;
 use std::time::Instant;
 use world_model::{
     material::{FluidMat, GranularMat, SurfaceMat, TerrainMat},
+    rules::FOLIAGE_MATURE_STATE,
     spatial::{CHUNK_SIZE, ChunkKey, cell_render_xz},
 };
 

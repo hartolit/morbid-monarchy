@@ -296,25 +296,22 @@ impl WorldCell {
     ///
     /// When the column already holds a different liquid:
     /// - magma meeting a coolant is quenched, turning the magma's share into stone bedrock one
-    ///   unit per unit, so the column keeps its height;
+    ///   unit per unit, so the column keeps its height. Arriving magma is accepted only up to
+    ///   the elevation ceiling; arriving coolant first quenches the resident magma and is
+    ///   accepted only when all of it fitted under the ceiling. What is not accepted stays with
+    ///   the caller;
     /// - otherwise the side bringing more volume keeps the column and absorbs the other. The
     ///   incoming amount is compared, not the donor's whole column: a flow only carries a
     ///   fraction of the head difference, so one liquid cannot sweep across another pool cell
     ///   by cell, and no volume is ever discarded.
     ///
-    /// Frozen columns are solid and accept nothing.
+    /// Frozen columns are solid and accept nothing. [`receivable`](Self::receivable) answers the
+    /// same question without changing the column.
     #[inline(always)]
     pub fn receive_fluid(&mut self, material: FluidMat, amount: u16) -> u16 {
         let resident = self.fluid_mat();
         if amount == 0 || material == FluidMat::EMPTY || resident.is_solid() {
             return 0;
-        }
-
-        if resident == material || resident == FluidMat::EMPTY {
-            let accepted = amount.min(Self::MAX_FLUID_VOL - self.fluid_vol());
-            self.set_fluid_mat(material);
-            self.set_fluid_vol(self.fluid_vol() + accepted);
-            return accepted;
         }
 
         if material == FluidMat::FLUID_MAGMA && resident.is_coolant() {
@@ -323,15 +320,27 @@ impl WorldCell {
 
         if resident == FluidMat::FLUID_MAGMA && material.is_coolant() {
             self.quench();
-            return self.receive_fluid(material, amount);
+            if self.fluid_mat() == FluidMat::FLUID_MAGMA {
+                // The ceiling left magma in the column; the coolant cannot enter it.
+                return 0;
+            }
         }
 
+        let resident = self.fluid_mat();
         let accepted = amount.min(Self::MAX_FLUID_VOL - self.fluid_vol());
-        if accepted > self.fluid_vol() {
+        if resident == material || resident == FluidMat::EMPTY || accepted > self.fluid_vol() {
             self.set_fluid_mat(material);
         }
         self.set_fluid_vol(self.fluid_vol() + accepted);
         accepted
+    }
+
+    /// The volume [`receive_fluid`](Self::receive_fluid) would accept, leaving the column as it
+    /// is.
+    #[inline(always)]
+    pub fn receivable(&self, material: FluidMat, amount: u16) -> u16 {
+        let mut probe = *self;
+        probe.receive_fluid(material, amount)
     }
 
     /// Places liquid deliberately (tools, world edits): `material` takes the column over and
@@ -350,20 +359,20 @@ impl WorldCell {
         added
     }
 
-    /// Turns resident magma into stone bedrock of the same height. Returns whether it did.
+    /// Turns resident magma into stone bedrock, one elevation unit per unit of magma, as far as
+    /// the elevation ceiling allows; magma that does not fit stays liquid. Returns the units
+    /// converted: zero when the column holds no magma or has no room left.
     ///
-    /// Known defect, kept here unchanged so the extraction preserves behavior: the magma is
-    /// drained before a capacity-limited bedrock raise, so magma beyond the elevation ceiling
-    /// disappears. Prompt 03 replaces this with conservative ceiling accounting.
+    /// Until 03 this drained all of the magma before a capacity-limited raise, so magma beyond
+    /// the ceiling disappeared.
     #[inline(always)]
-    pub fn quench(&mut self) -> bool {
+    pub fn quench(&mut self) -> u16 {
         if self.fluid_mat() != FluidMat::FLUID_MAGMA {
-            return false;
+            return 0;
         }
-        let volume = self.fluid_vol();
-        self.drain_fluid(volume);
-        self.raise_bedrock(TerrainMat::TERRAIN_STONE, volume);
-        true
+        let converted = self.raise_bedrock(TerrainMat::TERRAIN_STONE, self.fluid_vol());
+        self.drain_fluid(converted);
+        converted
     }
 
     /// Freezes the resident liquid in place. Returns whether the column changed phase.
@@ -392,13 +401,15 @@ impl WorldCell {
     }
 
     /// Raises bedrock by `units` of `material`, returning the units that fit under the
-    /// elevation ceiling.
+    /// elevation ceiling. A raise of nothing leaves the column unchanged.
     #[inline(always)]
     fn raise_bedrock(&mut self, material: TerrainMat, units: u16) -> u16 {
         let room = (Self::MAX_ELEVATION as u16).saturating_sub(self.elevation());
         let raised = units.min(room);
-        self.set_elevation(self.elevation() + raised);
-        self.set_terrain_mat(material);
+        if raised > 0 {
+            self.set_elevation(self.elevation() + raised);
+            self.set_terrain_mat(material);
+        }
         raised
     }
 }
@@ -455,6 +466,86 @@ mod tests {
         assert_eq!(
             (pond.fluid_mat(), pond.fluid_vol()),
             (FluidMat::FLUID_WATER, 30)
+        );
+    }
+
+    /// A column at `elevation` holding `volume` of `material`, written field by field so the
+    /// fixture does not depend on the rule under test.
+    fn raw(elevation: u16, material: FluidMat, volume: u16) -> WorldCell {
+        let mut cell = WorldCell::default();
+        cell.set_terrain_mat(TerrainMat::TERRAIN_DIRT);
+        cell.set_elevation(elevation);
+        cell.set_fluid_mat(material);
+        cell.set_fluid_vol(volume);
+        cell
+    }
+
+    /// Fluid volume plus solid height: what every quench keeps.
+    fn column_units(cell: &WorldCell) -> u32 {
+        cell.fluid_vol() as u32 + cell.elevation() as u32 + cell.granular_vol() as u32
+    }
+
+    #[test]
+    fn quench_at_the_ceiling_converts_what_fits_and_keeps_the_rest() {
+        let mut near = raw(4090, FluidMat::FLUID_MAGMA, 20);
+        assert_eq!(near.quench(), 5);
+        assert_eq!(near.elevation(), 4095);
+        assert_eq!(
+            (near.fluid_mat(), near.fluid_vol()),
+            (FluidMat::FLUID_MAGMA, 15)
+        );
+        assert_eq!(near.terrain_mat(), TerrainMat::TERRAIN_STONE);
+        assert_eq!(column_units(&near), 4110);
+
+        // Nothing fits any more: nothing converts, nothing changes, and a second call does not
+        // retry anything.
+        let before = near;
+        assert_eq!(near.quench(), 0);
+        assert_eq!(near, before);
+        assert_eq!(raw(4095, FluidMat::FLUID_WATER, 9).quench(), 0);
+    }
+
+    #[test]
+    fn magma_reaching_a_coolant_at_the_ceiling_is_accepted_only_up_to_the_room() {
+        let mut lake = raw(4093, FluidMat::FLUID_WATER, 20);
+        assert_eq!(lake.receivable(FluidMat::FLUID_MAGMA, 8), 2);
+        assert_eq!(lake.receive_fluid(FluidMat::FLUID_MAGMA, 8), 2);
+        assert_eq!((lake.elevation(), lake.fluid_vol()), (4095, 20));
+        assert_eq!(lake.terrain_mat(), TerrainMat::TERRAIN_STONE);
+
+        let mut full = raw(4095, FluidMat::FLUID_WATER, 20);
+        let before = full;
+        assert_eq!(full.receive_fluid(FluidMat::FLUID_MAGMA, 8), 0);
+        assert_eq!(full, before, "a refused raise relabels nothing");
+    }
+
+    #[test]
+    fn coolant_reaching_magma_at_the_ceiling_is_refused_without_recursion() {
+        // Room for 2 of 10 units: the contact quenches what fits, the water stays outside.
+        let mut lava = raw(4093, FluidMat::FLUID_MAGMA, 10);
+        assert_eq!(lava.receivable(FluidMat::FLUID_WATER, 5), 0);
+        assert_eq!(
+            lava,
+            raw(4093, FluidMat::FLUID_MAGMA, 10),
+            "receivable changes nothing"
+        );
+        assert_eq!(lava.receive_fluid(FluidMat::FLUID_WATER, 5), 0);
+        assert_eq!(lava.elevation(), 4095);
+        assert_eq!(
+            (lava.fluid_mat(), lava.fluid_vol()),
+            (FluidMat::FLUID_MAGMA, 8)
+        );
+        // No room at all: the call returns at once with the column unchanged.
+        let before = lava;
+        assert_eq!(lava.receive_fluid(FluidMat::FLUID_WATER, 5), 0);
+        assert_eq!(lava, before);
+
+        // When all the magma fits, the coolant fills the emptied column as before 03.
+        let mut low = raw(4080, FluidMat::FLUID_MAGMA, 15);
+        assert_eq!(low.receive_fluid(FluidMat::FLUID_WATER, 4), 4);
+        assert_eq!(
+            (low.elevation(), low.fluid_mat(), low.fluid_vol()),
+            (4095, FluidMat::FLUID_WATER, 4)
         );
     }
 

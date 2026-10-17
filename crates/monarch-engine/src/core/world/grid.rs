@@ -4,25 +4,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use world_model::{cell::WorldCell, config::DEFAULT_ACTIVE_RADIUS_CHUNKS, spatial::CHUNK_SIZE};
 
+/// Wake byte levels, owned by `world_model::rules`.
+pub use world_model::rules::{
+    WAKE_ACTIVE_FRESH, WAKE_ACTIVE_MIN, WAKE_ASLEEP, WAKE_CHANGE_RADIUS, WAKE_HALO,
+};
+
 pub type CellGridReadView<'a> = GridReadView<'a, WorldCell>;
-
-// Wake byte levels. Mass moves between cells by pull-based exchange, which is only conservative
-// when the donor and the receiver both run in the same tick. Cells are therefore split into
-// donors (active) and receive-only halo cells, and every active cell is guaranteed to have its
-// whole 3x3 neighbourhood scheduled at halo level or higher.
-
-/// Asleep: the cell is skipped entirely.
-pub const WAKE_ASLEEP: u8 = 0;
-/// Halo: the cell may receive mass from an active neighbour but never donates or reacts.
-pub const WAKE_HALO: u8 = 1;
-/// Lowest level at which a cell runs every rule and may donate mass.
-pub const WAKE_ACTIVE_MIN: u8 = 2;
-/// Level granted to a changed cell. It stays active for `WAKE_ACTIVE_FRESH - WAKE_ACTIVE_MIN + 1`
-/// ticks without further change, which survives the interleaved granular cadence.
-pub const WAKE_ACTIVE_FRESH: u8 = 3;
-/// Chebyshev radius around a changed cell that becomes active. Liquid trickles depend on the
-/// receiver's neighbours, so a change can alter decisions two cells away.
-pub const WAKE_CHANGE_RADIUS: i32 = 2;
 
 /// Schedules `center` and its neighbours for the next tick: cells within `active_radius` are
 /// raised to `active_level`, and one further ring is raised to halo so every active cell can

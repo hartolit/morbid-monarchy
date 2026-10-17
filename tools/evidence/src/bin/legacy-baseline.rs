@@ -640,9 +640,19 @@ fn execute(
         Command::SetAmbientTemperature(temperature) => {
             settings.simulation.ambient_temperature_c = temperature.degrees();
         }
-        // The frozen scenarios issue no queries, and the baseline has no query path: its tools
-        // read the CPU grid directly. The GPU runtime answers queries from 02 on.
-        Command::QueryColumn { .. } => {}
+        // The baseline toggles rules from its developer UI without waking the window; the
+        // driver does the same.
+        Command::SetSimulationRules(rules) => {
+            let simulation = &mut settings.simulation;
+            simulation.run_liquid = rules.liquid;
+            simulation.run_granular = rules.granular;
+            simulation.run_thermal = rules.thermal;
+            simulation.run_fire = rules.fire;
+            simulation.run_biology = rules.biology;
+        }
+        // The frozen scenarios issue no queries or measurements, and the baseline has neither
+        // path: its tools read the CPU grid directly. The GPU runtime answers both.
+        Command::QueryColumn { .. } | Command::MeasureTotals => {}
     }
 }
 

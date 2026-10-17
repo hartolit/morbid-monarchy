@@ -23,7 +23,6 @@ pub mod entities;
 pub mod events;
 pub mod physics;
 pub mod simulation;
-pub mod utils;
 pub mod world;
 
 pub struct LandscapePlugin;

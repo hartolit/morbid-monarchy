@@ -1,17 +1,13 @@
-use crate::core::{
-    simulation::DonorMask,
-    utils::{FlowPattern, ShuffledDirs, compass_forward, spatial_hash},
-    world::grid::CellGridReadView,
-};
+use crate::core::{simulation::DonorMask, world::grid::CellGridReadView};
 use bevy::math::IVec2;
 use world_model::{
     cell::WorldCell,
-    material::{CompassFlags, FluidMat, GranularMat, fluid_properties},
+    material::{FluidMat, GranularMat, fluid_properties},
+    rules::{
+        EROSION_MASK, FlowPattern, NEIGHBOR_DIRS, RuleTick, ShuffledDirs, compass_for_flow,
+        compass_forward, keyed_spatial_hash,
+    },
 };
-
-/// Bed erosion triggers when the masked hash falls below the erosive flux, so the odds per
-/// tick are `flux / (EROSION_MASK + 1)`.
-pub const EROSION_MASK: u32 = 511;
 
 /// Height of a column's free surface: bedrock, loose material and liquid. Ice counts towards
 /// it too, so a frozen column is a raised floor to its liquid neighbours.
@@ -19,17 +15,6 @@ pub const EROSION_MASK: u32 = 511;
 fn column_head(cell: &WorldCell) -> u32 {
     cell.liquid_head()
 }
-
-const NEIGHBOR_DIRS: [IVec2; 8] = [
-    IVec2::new(0, 1),
-    IVec2::new(1, 1),
-    IVec2::new(1, 0),
-    IVec2::new(1, -1),
-    IVec2::new(0, -1),
-    IVec2::new(-1, -1),
-    IVec2::new(-1, 0),
-    IVec2::new(-1, 1),
-];
 
 /// Whether a column has a neighbour whose head is strictly below `head`, i.e. a unit dropped
 /// into it can keep descending.
@@ -130,10 +115,10 @@ fn get_preferred_destination(
         FlowPattern::Omni
     };
 
-    let shuffled = ShuffledDirs::new_deterministic_with_momentum(
+    let shuffled = ShuffledDirs::with_momentum(
         pattern,
         world_pos,
-        tick,
+        RuleTick::baseline(tick),
         source_mat.0,
         0,
         source_cell.compass(),
@@ -182,10 +167,10 @@ fn get_preferred_source(
         FlowPattern::Omni
     };
 
-    let shuffled = ShuffledDirs::new_deterministic_with_momentum(
+    let shuffled = ShuffledDirs::with_momentum(
         pattern,
         world_pos,
-        tick,
+        RuleTick::baseline(tick),
         dest_cell.fluid_mat().0,
         0,
         dest_cell.compass(),
@@ -227,7 +212,9 @@ fn erode_bed(
     tick: u32,
 ) {
     let erosive_flux = incoming_amt as u32 * fluid_properties(fluid).erosion_factor;
-    if erosive_flux == 0 || (spatial_hash(world_pos, tick) & EROSION_MASK) >= erosive_flux {
+    if erosive_flux == 0
+        || (keyed_spatial_hash(world_pos, RuleTick::baseline(tick)) & EROSION_MASK) >= erosive_flux
+    {
         return;
     }
 
@@ -297,21 +284,7 @@ pub fn step_liquid(
 
         // Apply momentum based on flow direction
         if let Some(sp) = source_pos_cache {
-            let flow_dir = world_pos - sp;
-            let mut new_flags = 0;
-            if flow_dir.y > 0 {
-                new_flags |= CompassFlags::FACING_N;
-            }
-            if flow_dir.y < 0 {
-                new_flags |= CompassFlags::FACING_S;
-            }
-            if flow_dir.x > 0 {
-                new_flags |= CompassFlags::FACING_E;
-            }
-            if flow_dir.x < 0 {
-                new_flags |= CompassFlags::FACING_W;
-            }
-            cell.set_compass(new_flags);
+            cell.set_compass(compass_for_flow(world_pos - sp));
         }
 
         // Elevation is read from `cell`, not `old_cell`: the granular pass may already have

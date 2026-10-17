@@ -1,22 +1,14 @@
 use bevy::math::IVec2;
 
-use crate::core::{
-    simulation::DonorMask,
-    utils::{FlowPattern, ShuffledDirs, spatial_hash},
-    world::grid::CellGridReadView,
-};
+use crate::core::{simulation::DonorMask, world::grid::CellGridReadView};
 use world_model::{
     cell::WorldCell,
     material::{GranularMat, granular_repose},
+    rules::{
+        FlowPattern, MAX_GRANULAR_TRANSFER, MIN_TRANSFER_HEAD, RuleTick, STICTION_VARIANTS,
+        ShuffledDirs, keyed_spatial_hash,
+    },
 };
-
-/// Upper bound on granular volume moved across one edge per tick; keeps avalanches gradual.
-const MAX_GRANULAR_TRANSFER: u32 = 2;
-/// Smallest head difference that moves a whole unit (`diff / 2 >= 1`). Below it a slope is
-/// left at rest rather than dithered, so piles reach a fixed point.
-const MIN_TRANSFER_HEAD: u32 = 2;
-/// Range of the per-tick stiction added to the angle of repose.
-const STICTION_VARIANTS: u32 = 3;
 
 #[inline(always)]
 fn floor_height(cell: &WorldCell) -> u32 {
@@ -67,14 +59,19 @@ fn get_preferred_destination(
         return None;
     }
 
-    let shuffled =
-        ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, source_mat.0, 0);
+    let shuffled = ShuffledDirs::new(
+        FlowPattern::Omni,
+        world_pos,
+        RuleTick::baseline(tick),
+        source_mat.0,
+        0,
+    );
     let source_total = floor_height(source_cell);
 
     let mut best_dest = None;
     let mut best_diff = 0;
 
-    let stiction = spatial_hash(world_pos, tick) % STICTION_VARIANTS;
+    let stiction = keyed_spatial_hash(world_pos, RuleTick::baseline(tick)) % STICTION_VARIANTS;
     let dynamic_repose = base_repose as u32 + stiction;
 
     for &dir in shuffled.get().iter() {
@@ -112,7 +109,7 @@ fn get_preferred_source(
 ) -> Option<(usize, IVec2)> {
     let (_, dest_cell) = view.get_cell(world_pos)?;
     let dest_total = floor_height(dest_cell);
-    let shuffled = ShuffledDirs::new_deterministic(FlowPattern::Omni, world_pos, tick, 0, 0);
+    let shuffled = ShuffledDirs::new(FlowPattern::Omni, world_pos, RuleTick::baseline(tick), 0, 0);
 
     let mut best_source = None;
     let mut best_diff = 0;

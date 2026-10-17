@@ -524,6 +524,150 @@ expectation = "Water, lava, oil and ice tools paint water, magma, oil and ice; t
 destination = "world-model command (02); the GPU edit kernel reads the same mapping"
 determinism = "exact"
 
+# --- Cell rules and the automaton's rules: world-model (03) ---
+
+[[behavior]]
+id = "model.cell.quench-ceiling"
+package = "world-model"
+target = "lib"
+test = "cell::tests::quench_at_the_ceiling_converts_what_fits_and_keeps_the_rest"
+origin = "transition"
+expectation = "Magma 20 at elevation 4090 quenches 5 units to stone and keeps 15 as magma; at the ceiling a second quench converts nothing and changes nothing."
+destination = "world-model column rules (03, the conservative ceiling); mirrored by the GPU rule kernels"
+determinism = "exact"
+
+[[behavior]]
+id = "model.cell.magma-into-coolant-ceiling"
+package = "world-model"
+target = "lib"
+test = "cell::tests::magma_reaching_a_coolant_at_the_ceiling_is_accepted_only_up_to_the_room"
+origin = "transition"
+expectation = "Magma reaching water at elevation 4093 is accepted 2 of 8 units; at 4095 none is accepted and the column is unchanged."
+destination = "world-model column rules (03); the GPU resolve pass accepts the same amount"
+determinism = "exact"
+
+[[behavior]]
+id = "model.cell.coolant-into-magma-ceiling"
+package = "world-model"
+target = "lib"
+test = "cell::tests::coolant_reaching_magma_at_the_ceiling_is_refused_without_recursion"
+origin = "transition"
+expectation = "Water reaching magma near the ceiling quenches what fits and is refused while magma remains, without recursion; with room for all the magma the water fills the emptied column."
+destination = "world-model column rules (03); the GPU resolve pass refuses the same transfers"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.baseline-hash"
+package = "world-model"
+target = "lib"
+test = "rules::tests::seed_zero_below_tick_two_to_the_32_is_the_baseline_hash"
+origin = "transition"
+expectation = "With seed 0 below tick 2^32 the keyed hash equals the baseline engine's position-and-tick hash written out by hand."
+destination = "world-model rules (03); the GPU hash kernels and the CPU reference"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.keyed-stream"
+package = "world-model"
+target = "lib"
+test = "rules::tests::the_seed_and_the_high_tick_word_change_the_stream"
+origin = "transition"
+expectation = "Another seed or another high tick word gives another hash; the rule tick is a pure function of seed and tick."
+destination = "world-model rules (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.salts-distinct"
+package = "world-model"
+target = "lib"
+test = "rules::tests::draw_salts_never_alias_a_shuffle_or_phase_roll"
+origin = "transition"
+expectation = "No keyed-draw salt adds the same salt term as a shuffle (materials 0-15) or the phase roll."
+destination = "world-model rules (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.shuffles"
+package = "world-model"
+target = "lib"
+test = "rules::tests::shuffles_are_permutations_and_momentum_leads"
+origin = "transition"
+expectation = "Omni and cardinal shuffles are permutations of their steps; momentum moves its step first; compass flags round-trip a flow direction."
+destination = "world-model rules (03); the GPU shuffle kernel"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.phase-thresholds"
+package = "world-model"
+target = "lib"
+test = "rules::tests::phase_thresholds_follow_the_climate"
+origin = "transition"
+expectation = "Melting is possible only above 0 C and freezing only below, with the baseline's thresholds and the 0.5 cap."
+destination = "world-model rules (03); computed once per tick for the GPU"
+determinism = "exact"
+
+[[behavior]]
+id = "model.rules.cadence-bits"
+package = "world-model"
+target = "lib"
+test = "rules::tests::cadence_and_rule_bits"
+origin = "transition"
+expectation = "Granular runs on odd ticks, also across the low word's rollover; rule switches encode as five bits; ratio draws compare the remainder."
+destination = "world-model rules (03)"
+determinism = "exact"
+
+# --- CPU reference of the cell rules: monarchy-evidence (03) ---
+
+[[behavior]]
+id = "reference.cells.legacy-flow"
+package = "monarchy-evidence"
+target = "lib"
+test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_flow_and_granular_fixtures"
+origin = "transition"
+expectation = "The CPU reference equals the baseline engine cell for cell and wake level for wake level for 400 ticks of a dam break and a sand pile at a negative key."
+destination = "monarchy-evidence CPU reference (03), the oracle the cells suite compares the GPU with"
+determinism = "exact"
+
+[[behavior]]
+id = "reference.cells.legacy-chaotic"
+package = "monarchy-evidence"
+target = "lib"
+test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_chaotic_terrain"
+origin = "transition"
+expectation = "The CPU reference equals the baseline engine for 200 ticks of seeded chaotic terrain with sand and water."
+destination = "monarchy-evidence CPU reference (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "reference.cells.legacy-thermal"
+package = "monarchy-evidence"
+target = "lib"
+test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_thermal_fixtures"
+origin = "transition"
+expectation = "The CPU reference equals the baseline engine for 300 ticks at -10 C: a pond freezes, magma quenches and boils water, oil sits beside magma."
+destination = "monarchy-evidence CPU reference (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "reference.cells.ceiling-accounting"
+package = "monarchy-evidence"
+target = "lib"
+test = "suites::cells::reference::tests::every_rule_balances_its_accounting_at_the_ceiling"
+origin = "transition"
+expectation = "With every rule on near the elevation ceiling the reference's per-tick accounting balances and the totals move by exactly the classified sinks for 300 ticks."
+destination = "monarchy-evidence CPU reference (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "reference.cells.keyed-draws"
+package = "monarchy-evidence"
+target = "lib"
+test = "suites::cells::reference::tests::keyed_draws_are_reproducible_and_seeded"
+origin = "transition"
+expectation = "Growth with keyed draws is identical for the same seed, differs for another, and does take root."
+destination = "monarchy-evidence CPU reference (03)"
+determinism = "exact"
+
 # --- Runtime ports and policy: world-runtime (02) ---
 
 [[behavior]]

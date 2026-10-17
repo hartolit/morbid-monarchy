@@ -20,6 +20,10 @@ ignore = [
     # ttf-parser is unmaintained and has no successor release; ab_glyph (Bevy text and egui)
     # uses it for the bundled fonts. 06 chooses the native client's text stack.
     { id = "RUSTSEC-2026-0192", reason = "unmaintained, no fix; 06 chooses the native text stack" },
+    # ruzstd < 0.9.1: a small crafted .zst input can allocate gigabytes. bevy_image 0.19 needs
+    # ruzstd 0.8 to decode zstd-compressed KTX2 textures; the baseline's only assets are WGSL
+    # shaders, so nothing it loads reaches the decoder. Published after 02; Bevy leaves in 06.
+    { id = "RUSTSEC-2026-0344", reason = "no zstd texture is loaded by the baseline; removed with Bevy in 06" },
 ]
 
 [licenses]

@@ -5,6 +5,8 @@
 //! - [`spatial`]: chunk geometry, absolute chunk keys and the cell/render axis convention;
 //! - [`units`]: physical units, gravity and the longest body integration step;
 //! - [`config`]: supported ranges and defaults of user-adjustable settings;
+//! - [`rules`]: the automaton around the column rules: rule switches, cadences, tuning
+//!   constants, activity levels and keyed randomness;
 //! - [`body`]: sphere presets, control strengths and the supported body envelope;
 //! - [`command`] and [`observation`]: validated intent and observed results that cross between
 //!   the CPU and the physical simulation;
@@ -21,6 +23,7 @@ pub mod config;
 pub mod generation;
 pub mod material;
 pub mod observation;
+pub mod rules;
 pub mod spatial;
 pub mod units;
 

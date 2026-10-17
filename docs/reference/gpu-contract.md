@@ -145,21 +145,142 @@ session faulted/that tick unfinished; do not render/save it as a completed physi
 a rollback that did not exist. The recovery policy can restore the last valid checkpoint with an
 explicit loss boundary. Normal supported workloads must not rely on this fault path.
 
-*Implemented order of a tick (02), before any physical phase exists:*
+*Order of a tick (02, material phases since 03):*
 
 ```text
 copies: tick parameters, event header reset, command records, slot-record and window-map patches
-        (retirements first, then activations), staged chunk cells
+        (retirements first, then activations), staged chunk cells; clears of the activity
+        counters, chunk wake requests, the tick's diagnostics and the tile records of activated
+        chunks; the chunk wake requests of this tick's activations and retirements
 compute pass: begin_tick (one invocation per result record) -> one dispatch per command, in order
-copies: results and events (and resolved pass timestamps) -> tick readback;
+              -> scan -> args -> wake -> args -> propose -> resolve -> react -> commit
+copies: results, events, diagnostics and totals (and resolved pass timestamps) -> tick readback;
         requested captures -> capture staging
 ```
 
 wgpu orders dispatches that use the same read-write storage buffer with a barrier (wgpu-hal 29.0.4
 treats no `STORAGE_READ_WRITE` use as ordered), so each command reads the results of the commands
-before it; the copies after the pass read the finished results. Uploads therefore activate before
-the tick's commands and a capture holds the cells after them. 03 inserts the material phases after
-the commands and before the readback; 04 the body substeps.
+before it, and each material pass reads the finished output of the one before; the copies after
+the pass read the finished results. Uploads therefore activate before the tick's commands, and a
+capture holds the cells at the end of the tick, after the material phases. 04 inserts the body
+substeps after `commit`.
+
+### Cell phases (03)
+
+*Specification adopted in 03 checkpoint A, before the kernels: the CPU reference in
+`monarchy-evidence` implements it, and the GPU kernels follow in checkpoints B and C.*
+
+The material phases form one tick of the cellular rules described in
+[world format](world-format.md#existing-packed-cell) and owned by `world_model::{cell, material,
+rules}`. `S0` is the canonical cell array after the tick's commands; every neighbour read of every
+rule reads `S0`, and a cell's own rules apply in the fixed order granular, liquid, thermal,
+biology, fire to its own running value, exactly as the baseline does. A pass that consumes another
+cell's output of an earlier pass is a separate dispatch: no global dependency is carried by a
+workgroup barrier. Workgroup barriers only combine one tile's own results.
+
+Work is scheduled in **tiles** of 8 × 8 cells, 64 per chunk; one workgroup of 64 invocations
+processes one tile. Each cell has a **wake level** for the tick (0 asleep, 1 halo, 2–3 active),
+with the baseline's meaning: an active cell donates material and runs its reactions, a halo cell
+only receives, an asleep cell is not visited. A tile with any awake cell is a **process tile**.
+
+| Pass | Domain | Reads | Writes (one writer per value unless marked atomic) | Consumer |
+| --- | --- | --- | --- | --- |
+| `apply_edit` (command) | Stroke square | Own cell | Own cell; the tile's edited bit and candidate flags (atomic OR); tool source and sink counters (atomic, 64-bit) | Later commands; `scan`, `wake` |
+| `measure_totals` (command) | Every resident cell | Own cell | The command's totals record (atomic, 64-bit) | Tick readback |
+| `scan` | Every window tile | Own candidate flag, then clears it; wake requests of the tile's chunk and adjacent chunks; window map | Own tile state; candidate list (atomic append) | `args`, `wake` |
+| `args` | One invocation | List counts | Indirect dispatch arguments (separate buffer) | `wake`, material passes |
+| `wake` | Candidate tiles | Changed and persist bitmaps of tick n−1 and edited bitmaps of tick n of the 3 × 3 tiles; chunk wake requests | Own wake levels and tile state; process list (atomic append) | Material passes |
+| `propose` | Active cells of process tiles | `S0` within 2 cells; own wake | Own proposal (granular and liquid destination and amount) | `resolve`, `react` |
+| `resolve` | Awake cells of process tiles | `S0`, proposals and wake levels within 1 cell | Own resolution (winning source and accepted amount per family) | `react` |
+| `react` | Awake cells of process tiles | `S0` within 1 cell; own proposal; resolutions within 1 cell; own wake | Own scratch cell; the tile's changed and persist bitmaps for tick n, clearing tick n−1's and the edited bitmap; candidate flags of the 3 × 3 tiles for tick n+1 (atomic OR); diagnostics (atomic, 64-bit) | `commit`; next tick's `scan` and `wake` |
+| `commit` | Awake cells of process tiles | Own scratch and canonical cell | Own canonical cell, when it differs | Next tick, captures, renderer |
+
+A donor's decision reads cells two away from it (a receiver's further neighbours for the liquid
+trickle), its receiver's arbitration reads proposals one cell away, and its commit reads the
+receiver's resolution: the output of a cell depends on `S0` within four cells, as in the
+baseline's gather formulation, but every transfer is evaluated once. A proposal carries the donor's
+amount; the receiver picks the baseline's winner and accepts at most what it can hold
+([accounting](#material-accounting-03)); the donor drains exactly the accepted amount and keeps the
+rest. A stale proposal or resolution cannot be consumed: each word carries the low eight bits of
+the tick, every read also requires the writer to be awake in this tick, and a mismatch is counted
+in the diagnostics (expected zero) and treated as no transfer.
+
+**Activity scheduling.** After `react`, each process tile publishes which cells changed (a value
+change, or an active cell kept awake by immature foliage, fire or a pending phase change) and which
+cells *persist* (unchanged at level 3). The next tick's `wake` gives each cell of a candidate tile
+level 3 when a changed or edited cell lies within 2 cells, level 2 when it persists, and level 1
+when a changed or edited cell lies within 3 cells or a persisting one within 1 — the baseline's
+`schedule_wake` radii, evaluated as a gather. A tile is a candidate when its own or a neighbouring
+tile's changed, persist or edited cells reach it (each writer marks exactly the neighbouring tiles
+its radius reaches), when its chunk or an adjacent one has a wake request, or when the tick wakes
+everything. Edits mark their changed cells in the tick they run, so the stroke is simulated in the
+same tick. An activated chunk counts as edited throughout, which wakes its boundary dependants; a
+retired chunk counts as edited for its neighbours. A change of ambient temperature or simulation
+rules, and a resize, wake every resident cell once.
+
+`scan` touches one word per window tile and `wake` only candidate tiles; neither touches cells. In
+**dense** execution (a maintained test strategy, `GpuWorldConfig::execution`), every resident tile
+is a candidate and a process tile, so every cell is visited and committed every tick; the wake
+levels, and so the result, are identical by construction, which is what the dense/sparse
+comparison checks. Lists and scratch are sized for every tile being active; nothing is appended
+beyond a bound, so no list can overflow or truncate. Indirect dispatches split a count into
+`x ≤ 65,535` and `y = ⌈count / 65,535⌉` workgroups.
+
+**Clock and cadence.** Ticks are 64-bit, carried as two words. Granular movement runs on odd ticks,
+as in the baseline. Biology is sampled once in ten ticks per active cell and fire once in two, by
+keyed draws. Nothing reads wall time.
+
+**Keyed randomness and tie-breaking.** Every rule that needs a pseudo-random choice uses
+`world_model::rules`: the baseline's position-and-tick hash for flow shuffles, granular stiction,
+erosion and phase rolls, keyed by a rule key derived from the world's rule seed and the tick's
+high word, and a keyed draw with a distinct salt per decision for biology and fire. The key of
+seed 0 at ticks below 2³² is 0, which makes the deterministic rules reproduce the baseline cell for
+cell; the CPU reference in `monarchy-evidence` is checked against the baseline engine on that
+basis. The baseline's biology and fire drew from thread-seeded generators; their keyed draws are a
+**semantic change**, not a reproduction: the probabilities per decision are the same, the outcomes
+are not.
+
+#### Material accounting (03)
+
+Column quantities are integer elevation units: the fluid volume `L` (every liquid and ice share it)
+and the solid column `S` (bedrock elevation plus loose granular volume). The one-label column has
+no per-species volume, so a mixing rule may change which label a column carries; only `L` and `S`
+are conserved quantities.
+
+| Operation | Conserved | Sink, source or conversion (classified counter) | Capacity policy |
+| --- | --- | --- | --- |
+| Liquid flow | `L` between donor and receiver | — | The receiver accepts at most its free volume as of `S0`; one source per receiver per tick. |
+| Magma into a coolant column | `L + S` | Magma becomes stone bedrock (`quench`) | Accepted only up to the elevation room left after the receiver's largest possible granular compaction this tick; the donor keeps the rest. |
+| Coolant into a magma column | `L + S` | The resident magma becomes stone (`quench`) | Accepted only when the whole resident magma fits under the ceiling; otherwise refused and left at the donor. |
+| Thermal quench | `L + S` | Magma becomes stone (`quench`) | Converts what fits; the rest stays liquid magma, and the cell does not stay awake retrying. |
+| Freeze, thaw | `L` | — | Label change. |
+| Boiling | — | Coolant beside magma (`boil`, 2 per contact) | Drains at most the resident volume. |
+| Combustion | — | Burning oil (`burn`, 1 per burning tick) | Drains at most the resident volume. |
+| Plant growth | — | Water or blood drawn by growing foliage (`uptake`, 2 per growth step) | Drains at most the resident volume. |
+| Granular flow, erosion, compaction | `S` | — (erosion counted for information) | A receiver accepts at most its structural room; compaction of excess loose material into bedrock stays under the ceiling. |
+| Tools | — | Painted liquid (`tool fluid in`), sand, raise and lower (`tool solid in/out`) | Exactly the change the stroke made; a full or capped column adds less than the strength asks for. |
+
+Per tick, the diagnostics hold the sums of every processed cell's increase and decrease of `L` and
+`S` and the classified counters, all 64-bit with carry. Exact conservation means
+`ΔL + quench + boil + burn + uptake = 0` and `ΔS − quench = 0` for the material phases; tools are
+counted separately in the command phase. The runtime's ledger checks both every tick. Whole-world
+totals come from the `MeasureTotals` command, a labelled diagnostic reduction over every resident
+cell, never from a cell download.
+
+#### Rule changes from the baseline (03)
+
+| Change | Reason and evidence |
+| --- | --- |
+| Biology and fire use keyed draws, not thread-seeded generators. | Reproducibility; same probabilities per decision. |
+| Quench converts only what fits under the elevation ceiling, and coolant reaching a magma column at the ceiling is refused instead of recursing. | The baseline drained magma before a capacity-limited raise and lost the remainder. Fixed at the owner, `WorldCell::quench` and `receive_fluid`, with an independent fixture. |
+| A receiver accepts only what it can hold; the donor drains the accepted amount. | The baseline donor drained the full proposal even when the receiver raised less bedrock than that at the ceiling. |
+| Changing a simulation rule wakes every resident cell. | The baseline woke only on a temperature change, so a re-enabled rule never resumed in a sleeping region. |
+| Activated chunks wake themselves and their boundary dependants; retiring a chunk wakes its border. | The baseline never woke a streamed chunk (source audit, found while measuring). |
+| Captures hold the cells at the end of the tick. | A completed tick, the boundary a checkpoint needs. |
+
+The injected-magma behavior of the mixed scenario is kept: painting lava takes a column over
+(`inject_fluid`), and quenching then turns it into stone, so repeated strokes still raise a
+column towards the ceiling, where the remainder now stays liquid instead of disappearing.
 
 ### Activity
 

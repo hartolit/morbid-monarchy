@@ -14,6 +14,7 @@ use crate::{
     body::{BodyHandle, BodyPreset},
     config,
     material::FluidMat,
+    rules::SimulationRules,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,12 +200,18 @@ pub enum Command {
     LiftBodies {
         target: IVec2,
     },
+    /// Sets the air temperature from this tick on. A change wakes every resident cell once.
     SetAmbientTemperature(AmbientTemperature),
+    /// Sets which rule families run from this tick on. A change wakes every resident cell once.
+    SetSimulationRules(SimulationRules),
     /// Reads one column as it stands after the tick's earlier commands. An observation, not a
     /// change: the answer is a copy at a completed tick, never a writable value.
     QueryColumn {
         cell: IVec2,
     },
+    /// Sums the material of every resident cell as it stands after the tick's earlier commands:
+    /// a diagnostic reduction whose answer is a handful of integers, never the cells.
+    MeasureTotals,
 }
 
 /// The family of a [`Command`], without its payload. The owner of the live world reports which
@@ -218,7 +225,9 @@ pub enum CommandKind {
     AttractBodies,
     LiftBodies,
     SetAmbientTemperature,
+    SetSimulationRules,
     QueryColumn,
+    MeasureTotals,
 }
 
 impl Command {
@@ -231,7 +240,9 @@ impl Command {
             Self::AttractBodies { .. } => CommandKind::AttractBodies,
             Self::LiftBodies { .. } => CommandKind::LiftBodies,
             Self::SetAmbientTemperature(_) => CommandKind::SetAmbientTemperature,
+            Self::SetSimulationRules(_) => CommandKind::SetSimulationRules,
             Self::QueryColumn { .. } => CommandKind::QueryColumn,
+            Self::MeasureTotals => CommandKind::MeasureTotals,
         }
     }
 }

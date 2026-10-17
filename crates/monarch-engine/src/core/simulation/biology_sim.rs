@@ -1,19 +1,16 @@
 use bevy::math::IVec2;
 use rand::{Rng, RngExt};
 
-use crate::core::{
-    simulation::{FOLIAGE_MATURE_STATE, GridEvent},
-    world::grid::CellGridReadView,
-};
+use crate::core::{simulation::GridEvent, world::grid::CellGridReadView};
 use world_model::{
     cell::WorldCell,
     material::{FluidMat, GranularMat, SurfaceMat, TerrainMat},
+    rules::{
+        DROWNING_FLUID_VOLUME, FOLIAGE_GROWTH_ODDS, FOLIAGE_MATURE_STATE, FOLIAGE_WATER_USE,
+        MAX_CAPILLARY_LIFT, MUD_DRYING_ODDS, SEEDING_FOLIAGE_STATE, SEEDING_MAX_STEP, SEEDING_ODDS,
+        SEEDING_ODDS_ON_ASH, SPONTANEOUS_GROWTH_ODDS, SPONTANEOUS_GROWTH_ODDS_ON_ASH,
+    },
 };
-
-// The absolute physical limit that water can be wicked upwards by roots.
-const MAX_CAPILLARY_LIFT: u32 = 2;
-// Water a growing plant draws from its own column per growth step.
-const FOLIAGE_WATER_USE: u16 = 2;
 
 #[inline(always)]
 pub fn step_biology<R: Rng + ?Sized>(
@@ -46,7 +43,7 @@ pub fn step_biology<R: Rng + ?Sized>(
 
     let mut is_hydrated =
         old_cell.granular_mat() == GranularMat::GRANULAR_MUD || fluid == FluidMat::FLUID_WATER;
-    let is_drowning = fluid != FluidMat::EMPTY && old_cell.fluid_vol() > 15;
+    let is_drowning = fluid != FluidMat::EMPTY && old_cell.fluid_vol() > DROWNING_FLUID_VOLUME;
 
     let mut fertile_neighbors = 0;
 
@@ -66,8 +63,8 @@ pub fn step_biology<R: Rng + ?Sized>(
 
             if (surface == SurfaceMat::EMPTY || surface == SurfaceMat::SURFACE_ASH)
                 && n_cell.surface_mat() == SurfaceMat::SURFACE_FOLIAGE
-                && n_cell.surface_state() >= 2
-                && vertical_delta <= 1
+                && n_cell.surface_state() >= SEEDING_FOLIAGE_STATE
+                && vertical_delta <= SEEDING_MAX_STEP
             {
                 fertile_neighbors += 1;
             }
@@ -87,8 +84,16 @@ pub fn step_biology<R: Rng + ?Sized>(
             let has_ash = surface == SurfaceMat::SURFACE_ASH;
 
             // Ash acts as fertilizer, significantly boosting the probability of grass taking root
-            let neighbor_chance = if has_ash { 1 } else { 3 };
-            let spont_chance = if has_ash { 150 } else { 800 };
+            let neighbor_chance = if has_ash {
+                SEEDING_ODDS_ON_ASH
+            } else {
+                SEEDING_ODDS
+            };
+            let spont_chance = if has_ash {
+                SPONTANEOUS_GROWTH_ODDS_ON_ASH
+            } else {
+                SPONTANEOUS_GROWTH_ODDS
+            };
 
             if (fertile_neighbors > 0 && rng.random_ratio(1, neighbor_chance))
                 || rng.random_ratio(1, spont_chance)
@@ -102,7 +107,7 @@ pub fn step_biology<R: Rng + ?Sized>(
 
         if is_hydrated && !is_drowning && state < FOLIAGE_MATURE_STATE {
             // Grow aggressively if requirements are met
-            if rng.random_ratio(1, 3) {
+            if rng.random_ratio(1, FOLIAGE_GROWTH_ODDS) {
                 cell.set_surface_state(state + 1);
             }
 
@@ -112,7 +117,7 @@ pub fn step_biology<R: Rng + ?Sized>(
                 cell.drain_fluid(FOLIAGE_WATER_USE);
             } else if cell.granular_mat() == GranularMat::GRANULAR_MUD {
                 // Alternatively, dry out local mud
-                if rng.random_ratio(1, 10) {
+                if rng.random_ratio(1, MUD_DRYING_ODDS) {
                     cell.set_granular_mat(GranularMat::GRANULAR_DIRT);
                 }
             }

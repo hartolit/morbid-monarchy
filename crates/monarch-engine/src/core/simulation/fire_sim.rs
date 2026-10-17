@@ -5,16 +5,8 @@ use crate::core::{simulation::GridEvent, world::grid::CellGridReadView};
 use world_model::{
     cell::WorldCell,
     material::{FluidMat, SurfaceMat, is_combustible},
+    rules::{ASH_RESIDUE_ODDS, FLAME_LIFETIME_TICKS, IGNITION_ODDS_DENOMINATOR, OIL_BURN_RATE},
 };
-
-/// Burn ticks a flame survives once it has no liquid fuel left.
-const FLAME_LIFETIME_TICKS: u16 = 20;
-/// Oil volume consumed per burning tick. The flame is held alive until the pool is gone.
-const OIL_BURN_RATE: u16 = 1;
-/// Each adjacent heat source adds one chance in this many to ignite per evaluated tick.
-const IGNITION_ODDS_DENOMINATOR: u32 = 15;
-/// A burnt-out flame leaves ash with odds of one in this many.
-const ASH_RESIDUE_ODDS: u32 = 2;
 
 #[inline(always)]
 fn is_heat_source(cell: &WorldCell) -> bool {

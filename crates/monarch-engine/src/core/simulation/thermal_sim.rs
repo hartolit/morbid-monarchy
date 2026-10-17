@@ -1,44 +1,15 @@
 use bevy::math::IVec2;
 
-use crate::core::{utils::spatial_hash_extended, world::grid::CellGridReadView};
+use crate::core::world::grid::CellGridReadView;
 use world_model::{
     cell::WorldCell,
     material::{FluidMat, SurfaceMat},
+    rules::{
+        CARDINAL_DIRS as CONTACT_DIRS, CHANCE_RESOLUTION, FREEZE_CHANCE_PER_DEGREE,
+        FREEZING_POINT_C, MELT_CHANCE_PER_DEGREE, NEIGHBOR_DIRS, PHASE_HASH_CADENCE, RuleTick,
+        STEAM_LOSS_PER_CONTACT, keyed_spatial_hash_extended, phase_threshold,
+    },
 };
-
-/// Temperature at which water and ice trade places.
-pub const FREEZING_POINT_C: f32 = 0.0;
-
-/// Coolant volume boiled off per tick for every magma column sharing an edge.
-const STEAM_LOSS_PER_CONTACT: u16 = 2;
-/// Odds per tick, per degree below freezing, that a nucleated water column freezes.
-const FREEZE_CHANCE_PER_DEGREE: f32 = 0.02;
-/// Odds per tick, per degree above freezing, that an exposed ice column melts.
-const MELT_CHANCE_PER_DEGREE: f32 = 0.002;
-/// Upper bound on either phase-change chance, so even extreme temperatures advance a front
-/// over several ticks instead of flashing a whole pool at once.
-const MAX_PHASE_CHANCE: f32 = 0.5;
-const CHANCE_RESOLUTION: u32 = 1 << 16;
-/// Salts the per-cell hash so phase rolls are uncorrelated with the other passes' hashes.
-const PHASE_HASH_CADENCE: u32 = 7;
-
-const CONTACT_DIRS: [IVec2; 4] = [
-    IVec2::new(0, 1),
-    IVec2::new(1, 0),
-    IVec2::new(0, -1),
-    IVec2::new(-1, 0),
-];
-
-const NEIGHBOR_DIRS: [IVec2; 8] = [
-    IVec2::new(0, 1),
-    IVec2::new(1, 1),
-    IVec2::new(1, 0),
-    IVec2::new(1, -1),
-    IVec2::new(0, -1),
-    IVec2::new(-1, -1),
-    IVec2::new(-1, 0),
-    IVec2::new(-1, 1),
-];
 
 /// What a column's neighbours look like from the back buffer.
 #[derive(Default)]
@@ -85,8 +56,9 @@ impl Surroundings {
 /// Deterministic per-cell, per-tick roll; identical inputs always give the same outcome.
 #[inline(always)]
 fn rolls(chance: f32, world_pos: IVec2, tick: u32) -> bool {
-    let threshold = (chance.clamp(0.0, MAX_PHASE_CHANCE) * CHANCE_RESOLUTION as f32) as u32;
-    spatial_hash_extended(world_pos, tick, 0, PHASE_HASH_CADENCE) % CHANCE_RESOLUTION < threshold
+    keyed_spatial_hash_extended(world_pos, RuleTick::baseline(tick), 0, PHASE_HASH_CADENCE)
+        % CHANCE_RESOLUTION
+        < phase_threshold(chance)
 }
 
 /// Resolves heat exchange and phase changes for one column, returning `true` while a phase

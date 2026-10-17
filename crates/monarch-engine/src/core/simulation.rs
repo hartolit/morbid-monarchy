@@ -32,19 +32,11 @@ use crate::prelude::CellGridReadView;
 use world_model::{
     config::{DEFAULT_AMBIENT_TEMPERATURE_C, DEFAULT_MAX_TICKS_PER_FRAME, DEFAULT_TICK_RATE_HZ},
     material::{FluidMat, SurfaceMat, TerrainMat},
+    rules::{BIOLOGY_ODDS_DENOMINATOR, FIRE_ODDS_DENOMINATOR, FOLIAGE_MATURE_STATE, granular_runs},
 };
 
 /// Lower bound on the tick rate so a zeroed configuration cannot produce an infinite step.
 pub const MIN_TICK_RATE_HZ: f64 = 1.0;
-
-/// Biology is sampled stochastically: one cell update in this many runs the growth rules.
-const BIOLOGY_ODDS_DENOMINATOR: u32 = 10;
-/// Fire is sampled stochastically: one cell update in this many runs the combustion rules.
-const FIRE_ODDS_DENOMINATOR: u32 = 2;
-/// Granular avalanches run on every n-th tick to keep slopes from sliding faster than liquids.
-const GRANULAR_TICK_INTERVAL: u32 = 2;
-/// Growth state at which foliage is fully grown; the cell stays awake until it is reached.
-pub const FOLIAGE_MATURE_STATE: u16 = 10;
 
 /// Read-only view of which cells may donate mass during the current tick.
 ///
@@ -180,7 +172,7 @@ pub fn run_simulation_tick(
 
     let run_liquid = config.run_liquid;
     let run_biology = config.run_biology;
-    let run_granular = config.run_granular && !tick.is_multiple_of(GRANULAR_TICK_INTERVAL);
+    let run_granular = config.run_granular && granular_runs(u64::from(tick));
     let run_fire = config.run_fire;
     let run_thermal = config.run_thermal;
     let ambient_temperature_c = config.ambient_temperature_c;

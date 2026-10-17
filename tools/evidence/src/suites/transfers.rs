@@ -213,43 +213,9 @@ fn local_index(x: i32, y: i32) -> usize {
     (y.rem_euclid(size) * size + x.rem_euclid(size)) as usize
 }
 
-/// The baseline brush (`morbid-app` `apply_brush`) expressed with world-model's column rules:
-/// an independent CPU reference for the edit kernel.
-fn reference_edit(mut cell: WorldCell, tool: EditTool, strength: u8) -> WorldCell {
-    if let Some(fluid) = tool.fluid() {
-        cell.inject_fluid(fluid, u16::from(strength));
-        return cell;
-    }
-    match tool {
-        EditTool::Fire => {
-            let fluid = cell.fluid_mat();
-            if cell.surface_mat() != SurfaceMat::SURFACE_FIRE
-                && (fluid == FluidMat::EMPTY || fluid == FluidMat::FLUID_OIL)
-            {
-                cell.set_surface_mat(SurfaceMat::SURFACE_FIRE);
-                cell.set_surface_state(0);
-            }
-        }
-        EditTool::Sand => {
-            let is_sand = cell.granular_mat() == GranularMat::GRANULAR_SAND;
-            let old = if is_sand { cell.granular_vol() } else { 0 };
-            let new = (old + u16::from(strength))
-                .min(WorldCell::MAX_ELEVATION as u16 + WorldCell::MAX_GRANULAR_VOL);
-            if !is_sand || old != new {
-                cell.set_granular_mat(GranularMat::GRANULAR_SAND);
-                cell.set_granular_vol(new);
-            }
-        }
-        EditTool::Raise => {
-            let raised =
-                (u32::from(cell.elevation()) + u32::from(strength)).min(WorldCell::MAX_ELEVATION);
-            cell.set_elevation(raised as u16);
-        }
-        EditTool::Lower => cell.set_elevation(cell.elevation().saturating_sub(u16::from(strength))),
-        EditTool::Water | EditTool::Lava | EditTool::Oil | EditTool::Ice => {}
-    }
-    cell
-}
+/// The baseline brush as world-model's column rules express it: an independent CPU reference for
+/// the edit kernel, shared with the `cells` suite.
+use super::cells::reference::edit_cell as reference_edit;
 
 fn opened(result: Result<GpuWorld, OpenError>) -> Result<GpuWorld, String> {
     result.map_err(|error| format!("open: {error:?}"))

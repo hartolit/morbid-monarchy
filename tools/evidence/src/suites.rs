@@ -7,6 +7,7 @@
 //! notes and metrics; it passes only when it recorded no failure.
 
 pub mod alloc;
+pub mod cells;
 pub mod driver;
 pub mod probe;
 pub mod transfers;
