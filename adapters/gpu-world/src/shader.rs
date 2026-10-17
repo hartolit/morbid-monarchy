@@ -49,6 +49,28 @@ pub fn shared_modules() -> Vec<SourceModule> {
     vec![generated_declarations(), cell_accessors()]
 }
 
+/// The rules as pure functions of cells and positions, without bindings: keyed hashes, draws and
+/// shuffles, and the column rules. Rule probes assemble them after [`shared_modules`].
+pub fn rule_modules() -> Vec<SourceModule> {
+    vec![
+        SourceModule::file(
+            "shared/rules.wgsl",
+            include_str!("../shaders/shared/rules.wgsl"),
+        ),
+        SourceModule::file(
+            "shared/column.wgsl",
+            include_str!("../shaders/shared/column.wgsl"),
+        ),
+    ]
+}
+
+fn window_helpers() -> SourceModule {
+    SourceModule::file(
+        "shared/window.wgsl",
+        include_str!("../shaders/shared/window.wgsl"),
+    )
+}
+
 fn world_bindings() -> SourceModule {
     SourceModule::file(
         "world/bindings.wgsl",
@@ -56,11 +78,18 @@ fn world_bindings() -> SourceModule {
     )
 }
 
-/// The command kernels: `begin_tick`, `apply_edit` and `query_column`.
-pub fn world_assembly() -> Assembly {
+fn base_modules(bindings: SourceModule) -> Vec<SourceModule> {
     let mut modules = shared_modules();
+    modules.extend(rule_modules());
+    modules.push(bindings);
+    modules.push(window_helpers());
+    modules
+}
+
+/// The command kernels: `begin_tick`, `apply_edit`, `query_column` and `measure_totals`.
+pub fn world_assembly() -> Assembly {
+    let mut modules = base_modules(world_bindings());
     modules.extend([
-        world_bindings(),
         SourceModule::file(
             "world/tick.wgsl",
             include_str!("../shaders/world/tick.wgsl"),
@@ -73,26 +102,45 @@ pub fn world_assembly() -> Assembly {
             "world/query.wgsl",
             include_str!("../shaders/world/query.wgsl"),
         ),
+        SourceModule::file(
+            "world/totals.wgsl",
+            include_str!("../shaders/world/totals.wgsl"),
+        ),
     ]);
     Assembly::new("world", &modules)
 }
 
+/// The material phases: activity scheduling (`scan_tiles`, `candidate_args`, `wake_tiles`,
+/// `process_args`) and the passes `propose`, `resolve`, `react` and `commit`.
+pub fn sim_assembly() -> Assembly {
+    let mut modules = base_modules(SourceModule::file(
+        "sim/bindings.wgsl",
+        include_str!("../shaders/sim/bindings.wgsl"),
+    ));
+    modules.extend([
+        SourceModule::file(
+            "sim/schedule.wgsl",
+            include_str!("../shaders/sim/schedule.wgsl"),
+        ),
+        SourceModule::file("sim/flow.wgsl", include_str!("../shaders/sim/flow.wgsl")),
+        SourceModule::file("sim/react.wgsl", include_str!("../shaders/sim/react.wgsl")),
+    ]);
+    Assembly::new("sim", &modules)
+}
+
 /// The pressure-injection kernel `flood_events`, compiled only with fault injection.
 pub fn fault_assembly() -> Assembly {
-    let mut modules = shared_modules();
-    modules.extend([
-        world_bindings(),
-        SourceModule::file(
-            "faults/flood.wgsl",
-            include_str!("../shaders/faults/flood.wgsl"),
-        ),
-    ]);
+    let mut modules = base_modules(world_bindings());
+    modules.push(SourceModule::file(
+        "faults/flood.wgsl",
+        include_str!("../shaders/faults/flood.wgsl"),
+    ));
     Assembly::new("faults", &modules)
 }
 
 /// Every assembly this crate compiles.
 pub fn production_assemblies() -> Vec<Assembly> {
-    vec![world_assembly(), fault_assembly()]
+    vec![world_assembly(), sim_assembly(), fault_assembly()]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

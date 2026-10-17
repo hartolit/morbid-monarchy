@@ -42,6 +42,19 @@ impl FixedClock {
         })
     }
 
+    /// Changes the rate and the cap, keeping the accumulated time and the discarded count.
+    /// Refused, with nothing changed, outside the supported ranges.
+    pub fn reconfigure(
+        &mut self,
+        tick_rate_hz: f64,
+        max_ticks_per_frame: u32,
+    ) -> Result<(), ClockError> {
+        let checked = Self::new(tick_rate_hz, max_ticks_per_frame)?;
+        self.tick_seconds = checked.tick_seconds;
+        self.max_ticks_per_frame = checked.max_ticks_per_frame;
+        Ok(())
+    }
+
     pub fn max_ticks_per_frame(&self) -> u32 {
         self.max_ticks_per_frame
     }

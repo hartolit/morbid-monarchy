@@ -24,12 +24,15 @@ use world_runtime::{
 /// How long a case waits for the device before it fails.
 pub const DEVICE_PATIENCE: Duration = Duration::from_secs(10);
 
-/// A world of `radius` chunks around the origin chunk.
+/// A world of `radius` chunks around the origin chunk with every material rule off, so the
+/// transfer cases see exactly the cells they wrote (the material phases still run and wake, but
+/// change nothing).
 pub fn config(adapter: &str, radius: u32) -> GpuWorldConfig {
     let window = ResidentWindow::new(ChunkKey::new(0, 0, 0), radius, radius)
         .expect("radius inside the supported window range");
     let mut config = GpuWorldConfig::new(WorldId::new(0x5EED), adapter, window);
     config.allow_software = super::allow_software();
+    config.rules = world_model::rules::SimulationRules::NONE;
     config
 }
 
@@ -156,6 +159,27 @@ impl Driver {
 
     pub fn query(&mut self, cell: IVec2) -> Result<CommandResult, String> {
         Ok(self.run(&[Command::QueryColumn { cell }])?[0])
+    }
+
+    /// Reserves a slot for `key` and stages `cells`, polling while the upload pool is under
+    /// pressure (its buffers return after their tick completes and they are remapped).
+    pub fn stage_upload(&mut self, key: ChunkKey, cells: &[WorldCell]) -> Result<SlotRef, String> {
+        let session = self.session();
+        let slot = self
+            .world
+            .reserve_slot(session, key)
+            .map_err(|refusal| format!("reserve {key:?}: {refusal:?}"))?;
+        let started = Instant::now();
+        loop {
+            match self.world.upload_chunk(slot, ChunkRevision::new(1), cells) {
+                Ok(_) => return Ok(slot),
+                Err(Refusal::Pressure(_)) if started.elapsed() < DEVICE_PATIENCE => {
+                    self.poll();
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                Err(refusal) => return Err(format!("upload {key:?}: {refusal:?}")),
+            }
+        }
     }
 
     /// Reserves a slot for `key`, uploads `cells` and waits until they are resident.

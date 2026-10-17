@@ -9,13 +9,19 @@
 //!
 //! The plan is a pure function of its configuration and the limits, so a refused resize leaves
 //! the current world untouched: nothing is allocated until the whole plan passes.
+//!
+//! Terrain-related state per window of `N` cells, `C` chunks and `T = 64 C` tiles, in bytes:
+//! cells `8N`, flow words `8N`, scratch cells `8N`, the activity buffer
+//! `4·(16 + C + 2T + 16T)`, the window map `4C` and slot records `32C`: `25.125 N + 40 C + 64`,
+//! inside the `48 N + 64 C` envelope. Every list and scratch region is sized for every tile being
+//! active, so none can overflow.
 
 use world_model::spatial::CHUNK_CELL_COUNT;
 use world_runtime::port::{CapacityLimit, LimitedResource, ResidentWindow};
 
 use crate::layout::{
-    ChunkSlotRecord, CommandRecord, DispatchParams, EventHeader, EventRecord, GpuRecord,
-    ResultRecord, TickParams,
+    ChunkSlotRecord, CommandRecord, DiagnosticsRecord, DispatchParams, EventHeader, EventRecord,
+    GpuRecord, ResultRecord, TickParams, TotalsRecord, activity,
 };
 
 /// Bytes of one packed cell: two `u32` words.
@@ -28,12 +34,18 @@ pub const WINDOW_ENTRY_BYTES: u64 = 4;
 pub const EDIT_WORKGROUP_EDGE: u32 = 8;
 pub const LINEAR_WORKGROUP_SIZE: u32 = 64;
 /// Storage buffers the command kernels bind: commands, cells, window map, slot records,
-/// results and events.
-pub const STORAGE_BUFFERS_PER_STAGE: u32 = 6;
+/// results, events, activity and diagnostics; WebGPU's default limit. The material kernels bind
+/// six: cells, window map, flow, scratch, activity and diagnostics.
+pub const STORAGE_BUFFERS_PER_STAGE: u32 = 8;
+/// Bytes of one flow entry: a proposal and a resolution word per cell.
+pub const FLOW_BYTES_PER_CELL: u64 = 8;
 /// The largest brush radius in cells (`world_model::config::BRUSH_RADIUS_CELLS`).
 const MAX_BRUSH_RADIUS: u32 = 64;
-/// Bytes a timestamp pair occupies in the resolve buffer, which must start at a 256-byte offset.
-pub const TIMESTAMP_PAIR_BYTES: u64 = 2 * wgpu::QUERY_SIZE as u64;
+/// The tick's three compute passes (commands, activity, material) each record a begin and an
+/// end timestamp.
+pub const TIMESTAMP_QUERIES: u32 = 6;
+/// Bytes the resolved timestamps occupy; the resolve buffer must start at a 256-byte offset.
+pub const TIMESTAMP_BYTES: u64 = TIMESTAMP_QUERIES as u64 * wgpu::QUERY_SIZE as u64;
 pub const TIMESTAMP_RESOLVE_BYTES: u64 = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
 
 /// The budgets a plan is held to, separate from device limits.
@@ -215,12 +227,23 @@ pub enum BufferRole {
     WindowMap,
     /// One [`ChunkSlotRecord`] per slot.
     SlotRecords,
+    /// A proposal and a resolution word per cell, indexed like the cells.
+    Flow,
+    /// The new value of every processed cell between `react` and `commit`.
+    Scratch,
+    /// Tile records, the candidate and process lists, chunk wake requests and list counts
+    /// ([`ActivityLayout`]).
+    Activity,
     TickParams,
     /// One [`DispatchParams`] per command position, written once at creation.
     DispatchParams,
     Commands,
     Results,
     Events,
+    /// The tick's [`DiagnosticsRecord`], then one [`TotalsRecord`] per command position.
+    Diagnostics,
+    /// Indirect dispatch arguments of the candidate and process lists.
+    DispatchArgs,
     TimestampResolve,
     TickUploadStaging,
     TickReadbackStaging,
@@ -229,15 +252,20 @@ pub enum BufferRole {
 }
 
 impl BufferRole {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::Cells,
         Self::WindowMap,
         Self::SlotRecords,
+        Self::Flow,
+        Self::Scratch,
+        Self::Activity,
         Self::TickParams,
         Self::DispatchParams,
         Self::Commands,
         Self::Results,
         Self::Events,
+        Self::Diagnostics,
+        Self::DispatchArgs,
         Self::TimestampResolve,
         Self::TickUploadStaging,
         Self::TickReadbackStaging,
@@ -247,7 +275,15 @@ impl BufferRole {
 
     /// Buffers whose size depends on the resident window; a resize replaces them.
     pub fn follows_window(self) -> bool {
-        matches!(self, Self::Cells | Self::WindowMap | Self::SlotRecords)
+        matches!(
+            self,
+            Self::Cells
+                | Self::WindowMap
+                | Self::SlotRecords
+                | Self::Flow
+                | Self::Scratch
+                | Self::Activity
+        )
     }
 
     /// Buffers the CPU maps.
@@ -302,6 +338,9 @@ pub struct TickUploadLayout {
     pub commands: u64,
     pub slot_records: u64,
     pub window_entries: u64,
+    /// One word holding 1, copied into the chunk wake request of each activated or retired
+    /// chunk.
+    pub one: u64,
     pub size: u64,
 }
 
@@ -310,8 +349,51 @@ pub struct TickUploadLayout {
 pub struct TickReadbackLayout {
     pub results: u64,
     pub events: u64,
+    pub diagnostics: u64,
+    /// One [`TotalsRecord`] per command position; only totals commands' records are copied.
+    pub totals: u64,
     pub timestamps: u64,
     pub size: u64,
+}
+
+/// Word offsets of the activity buffer's regions. The header holds the list counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActivityLayout {
+    /// One wake request word per window chunk.
+    pub requests: u32,
+    /// Candidate tiles of the tick, then process tiles: room for every tile in each.
+    pub candidates: u32,
+    pub process: u32,
+    /// One record of `TILE_RECORD_WORDS` per window tile.
+    pub records: u32,
+    pub words: u32,
+}
+
+impl ActivityLayout {
+    fn for_window(chunks: u32) -> Option<Self> {
+        let tiles = chunks.checked_mul(activity::TILES_PER_CHUNK)?;
+        let requests = activity::HEADER_WORDS;
+        let candidates = requests.checked_add(chunks)?;
+        let process = candidates.checked_add(tiles)?;
+        let records = process.checked_add(tiles)?;
+        let words = records.checked_add(tiles.checked_mul(activity::TILE_RECORD_WORDS)?)?;
+        Some(Self {
+            requests,
+            candidates,
+            process,
+            records,
+            words,
+        })
+    }
+
+    /// Byte offset and size of a window chunk's tile records.
+    pub fn chunk_records(&self, window_index: u32) -> (u64, u64) {
+        let words = u64::from(activity::TILES_PER_CHUNK * activity::TILE_RECORD_WORDS);
+        (
+            (u64::from(self.records) + u64::from(window_index) * words) * 4,
+            words * 4,
+        )
+    }
 }
 
 /// A checked plan for one resident window and transfer configuration.
@@ -321,6 +403,8 @@ pub struct ResourcePlan {
     pub transfer: TransferConfig,
     pub slots: u32,
     pub cells: u64,
+    pub tiles: u32,
+    pub activity: ActivityLayout,
     pub dispatch_param_stride: u64,
     pub tick_upload: TickUploadLayout,
     pub tick_readback: TickReadbackLayout,
@@ -437,6 +521,11 @@ pub fn plan(
         ),
     )?;
 
+    let tiles = slots
+        .checked_mul(activity::TILES_PER_CHUNK)
+        .ok_or(PlanError::Overflow(BufferRole::Activity))?;
+    let activity_layout =
+        ActivityLayout::for_window(slots).ok_or(PlanError::Overflow(BufferRole::Activity))?;
     let tick_upload = {
         let params = 0;
         let event_header = TickParams::BYTES;
@@ -453,12 +542,15 @@ pub fn plan(
                 .checked_mul(ChunkSlotRecord::BYTES)
                 .and_then(|bytes| bytes.checked_add(records_at)),
         )?;
-        let size = checked(
+        let one = checked(
             BufferRole::TickUploadStaging,
             patches
                 .checked_mul(WINDOW_ENTRY_BYTES)
-                .and_then(|bytes| bytes.checked_add(entries_at))
-                .and_then(|bytes| align_up(bytes, wgpu::COPY_BUFFER_ALIGNMENT)),
+                .and_then(|bytes| bytes.checked_add(entries_at)),
+        )?;
+        let size = checked(
+            BufferRole::TickUploadStaging,
+            align_up(one + 4, wgpu::COPY_BUFFER_ALIGNMENT),
         )?;
         TickUploadLayout {
             params,
@@ -466,6 +558,7 @@ pub fn plan(
             commands: commands_at,
             slot_records: records_at,
             window_entries: entries_at,
+            one,
             size,
         }
     };
@@ -475,16 +568,25 @@ pub fn plan(
             BufferRole::TickReadbackStaging,
             commands.checked_mul(ResultRecord::BYTES),
         )?;
-        let timestamps_at = checked(
+        let diagnostics_at = checked(
             BufferRole::TickReadbackStaging,
             events
                 .checked_mul(EventRecord::BYTES)
                 .and_then(|bytes| bytes.checked_add(EventHeader::BYTES + events_at)),
         )?;
-        let size = timestamps_at + TIMESTAMP_PAIR_BYTES;
+        let totals_at = diagnostics_at + DiagnosticsRecord::BYTES;
+        let timestamps_at = checked(
+            BufferRole::TickReadbackStaging,
+            commands
+                .checked_mul(TotalsRecord::BYTES)
+                .and_then(|bytes| bytes.checked_add(totals_at)),
+        )?;
+        let size = timestamps_at + TIMESTAMP_BYTES;
         TickReadbackLayout {
             results,
             events: events_at,
+            diagnostics: diagnostics_at,
+            totals: totals_at,
             timestamps: timestamps_at,
             size,
         }
@@ -498,6 +600,9 @@ pub fn plan(
         commands.checked_mul(dispatch_param_stride),
     )?;
     let event_bytes = EventHeader::BYTES + events * EventRecord::BYTES;
+    let flow_bytes = checked(BufferRole::Flow, cells.checked_mul(FLOW_BYTES_PER_CELL))?;
+    let activity_bytes = u64::from(activity_layout.words) * 4;
+    let diagnostics_bytes = DiagnosticsRecord::BYTES + commands * TotalsRecord::BYTES;
     // One more tick staging buffer than submissions in flight: a buffer is still being
     // remapped (upload) or decoded (readback) while the next tick encodes.
     let in_flight_pool = transfer.max_in_flight + 1;
@@ -519,6 +624,14 @@ pub fn plan(
             BufferRole::SlotRecords,
             slot_records,
             storage | Usage::COPY_DST,
+            Binding::Storage,
+        ),
+        bound(BufferRole::Flow, flow_bytes, storage, Binding::Storage),
+        bound(BufferRole::Scratch, cell_bytes, storage, Binding::Storage),
+        bound(
+            BufferRole::Activity,
+            activity_bytes,
+            storage | Usage::COPY_DST | Usage::COPY_SRC,
             Binding::Storage,
         ),
         bound(
@@ -553,6 +666,18 @@ pub fn plan(
             BufferRole::Events,
             event_bytes,
             storage | Usage::COPY_SRC | Usage::COPY_DST,
+            Binding::Storage,
+        ),
+        bound(
+            BufferRole::Diagnostics,
+            diagnostics_bytes,
+            storage | Usage::COPY_SRC | Usage::COPY_DST,
+            Binding::Storage,
+        ),
+        bound(
+            BufferRole::DispatchArgs,
+            u64::from(activity::ARGS_WORDS) * 4,
+            storage | Usage::INDIRECT,
             Binding::Storage,
         ),
         unbound(
@@ -648,7 +773,17 @@ pub fn plan(
         .events_per_tick
         .saturating_mul(4)
         .div_ceil(LINEAR_WORKGROUP_SIZE);
-    for groups in [edit_groups, begin_groups, flood_groups] {
+    // `scan_tiles` and `measure_totals` dispatch one workgroup (row) per window chunk; list
+    // dispatches split at DISPATCH_SPLIT along x and continue along y.
+    let list_rows = tiles.div_ceil(activity::DISPATCH_SPLIT);
+    for groups in [
+        edit_groups,
+        begin_groups,
+        flood_groups,
+        slots,
+        activity::DISPATCH_SPLIT,
+        list_rows,
+    ] {
         if groups > limits.max_workgroups_per_dimension {
             return Err(limit(
                 None,
@@ -708,6 +843,8 @@ pub fn plan(
         transfer,
         slots,
         cells,
+        tiles,
+        activity: activity_layout,
         dispatch_param_stride,
         tick_upload,
         tick_readback,
@@ -934,8 +1071,11 @@ mod tests {
             plan.tick_upload.window_entries,
             plan.tick_upload.size,
             plan.tick_readback.events,
+            plan.tick_readback.diagnostics,
+            plan.tick_readback.totals,
             plan.tick_readback.timestamps,
             plan.tick_readback.size,
+            plan.tick_upload.one,
         ] {
             assert_eq!(offset % wgpu::COPY_BUFFER_ALIGNMENT, 0, "{offset}");
         }
@@ -947,6 +1087,16 @@ mod tests {
             .sum();
         assert_eq!(plan.staging_bytes, staging);
         assert!(plan.terrain_bytes <= plan.cells * 48 + u64::from(plan.slots) * 64);
+        // The documented formula: 25.125 bytes per cell, 40 per chunk and the 64-byte header.
+        assert_eq!(
+            plan.terrain_bytes,
+            plan.cells * 25 + plan.cells / 8 + u64::from(plan.slots) * 40 + 64
+        );
+        assert_eq!(plan.tiles, plan.slots * 64);
+        assert_eq!(
+            plan.activity.words,
+            16 + plan.slots + 2 * plan.tiles + 16 * plan.tiles
+        );
         assert_eq!(plan.buffer(BufferRole::TimestampResolve).count, 1);
         let bigger = super::plan(
             window(7),

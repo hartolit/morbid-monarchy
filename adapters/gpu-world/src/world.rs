@@ -11,6 +11,11 @@
 //! with the wrong identity), ends the session: every outstanding obligation is reported
 //! abandoned and nothing further is admitted. A new session (a new epoch) starts from the last
 //! durable state; it does not inherit anything from this one.
+//!
+//! Each tick runs the material phases after its commands (`docs/reference/gpu-contract.md`,
+//! "Cell phases"). The session holds the simulation configuration (rules, ambient temperature,
+//! rule seed) on the CPU and applies configuration commands to the tick they arrive in; a change
+//! wakes every resident cell for that tick, as a resize does for the first tick after it.
 
 use std::{
     sync::Arc,
@@ -19,7 +24,9 @@ use std::{
 
 use world_model::{
     cell::WorldCell,
-    command::CommandKind,
+    command::{AmbientTemperature, CommandKind},
+    config::DEFAULT_AMBIENT_TEMPERATURE_C,
+    rules::SimulationRules,
     spatial::{CHUNK_CELL_COUNT, ChunkKey},
 };
 use world_runtime::{
@@ -43,7 +50,7 @@ use crate::{
     plan::{
         self, Budgets, BufferRole, CHUNK_BYTES, PlanError, PlanLimits, ResourcePlan, TransferConfig,
     },
-    resources::{FixedBuffers, PipelineError, Pipelines, Retired, WindowBuffers},
+    resources::{BindGroups, FixedBuffers, PipelineError, Pipelines, Retired, WindowBuffers},
     slots::{Activated, Patch, SlotTable, StagedUpload},
     staging::{Completion, Direction, StagingPool, StagingRef},
 };
@@ -65,6 +72,28 @@ pub struct GpuWorldConfig {
     pub timestamps: bool,
     /// Hand out a [`FaultController`]; only for conformance runs.
     pub fault_injection: bool,
+    /// The simulation configuration the session starts with; commands change it.
+    pub rules: SimulationRules,
+    pub ambient_temperature: AmbientTemperature,
+    /// Keys every pseudo-random choice of the rules (`world_model::rules::RuleTick`); the
+    /// composition root derives it from the world's identity.
+    pub rule_seed: u64,
+    pub execution: Execution,
+    /// The first tick the session runs: 0 for a new world, the next tick after a checkpoint
+    /// for a resumed one.
+    pub first_tick: Tick,
+}
+
+/// How the material phases traverse the window. Both give the same result by construction; the
+/// `cells` suite compares them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Execution {
+    /// Only tiles with an awake cell are visited, and only awake cells are committed.
+    #[default]
+    Sparse,
+    /// Every resident tile is visited and every cell committed every tick: the maintained
+    /// reference for the sparse scheduling, and the dense-work comparison case.
+    Dense,
 }
 
 impl GpuWorldConfig {
@@ -80,6 +109,12 @@ impl GpuWorldConfig {
             budgets: Budgets::default(),
             timestamps: false,
             fault_injection: false,
+            rules: SimulationRules::ALL,
+            ambient_temperature: AmbientTemperature::celsius(DEFAULT_AMBIENT_TEMPERATURE_C)
+                .expect("the default temperature is supported"),
+            rule_seed: 0,
+            execution: Execution::Sparse,
+            first_tick: Tick::ZERO,
         }
     }
 }
@@ -126,6 +161,9 @@ pub struct WorldView<'a> {
     pub cells: &'a wgpu::Buffer,
     pub window_map: &'a wgpu::Buffer,
     pub slot_records: &'a wgpu::Buffer,
+    /// Tile records and lists of the material phases, for diagnostic inspection.
+    pub activity: &'a wgpu::Buffer,
+    pub plan: &'a ResourcePlan,
     pub window: ResidentWindow,
     pub last_submitted_tick: Option<Tick>,
 }
@@ -189,7 +227,7 @@ pub struct GpuWorld {
     fixed: FixedBuffers,
     window: WindowBuffers,
     pipelines: Pipelines,
-    bind_group: wgpu::BindGroup,
+    bind_groups: BindGroups,
     tick_uploads: StagingPool,
     tick_readbacks: StagingPool,
     chunk_uploads: StagingPool,
@@ -206,6 +244,12 @@ pub struct GpuWorld {
     counters: TransferCounters,
     faults: Option<Arc<FaultSwitches>>,
     scratch: Scratch,
+    rules: SimulationRules,
+    ambient_temperature: AmbientTemperature,
+    rule_seed: u64,
+    execution: Execution,
+    /// The next tick wakes every resident cell (after a resize).
+    wake_all_pending: bool,
 }
 
 fn pressure(kind: Pressure) -> Refusal {
@@ -295,7 +339,7 @@ impl GpuWorld {
             "capture",
             Direction::Readback,
         )?;
-        let bind_group = pipelines.bind_group(&context, &fixed, &window);
+        let bind_groups = pipelines.bind_groups(&context, &fixed, &window);
 
         let commands = config.transfer.commands_per_tick as usize;
         let ticks = (0..tick_readbacks.capacity())
@@ -345,7 +389,7 @@ impl GpuWorld {
             fixed,
             window,
             pipelines,
-            bind_group,
+            bind_groups,
             tick_uploads,
             tick_readbacks,
             chunk_uploads,
@@ -354,7 +398,7 @@ impl GpuWorld {
             ticks,
             captures: Vec::with_capacity(config.transfer.capture_slots as usize),
             retired: Vec::with_capacity(config.transfer.max_in_flight as usize + 1),
-            next_tick: Tick::ZERO,
+            next_tick: config.first_tick,
             tick_exhausted: false,
             last_submitted: None,
             lifecycle: Lifecycle::Running,
@@ -362,6 +406,11 @@ impl GpuWorld {
             counters,
             faults,
             scratch,
+            rules: config.rules,
+            ambient_temperature: config.ambient_temperature,
+            rule_seed: config.rule_seed,
+            execution: config.execution,
+            wake_all_pending: false,
         };
         world.refresh_counters();
         Ok(world)
@@ -396,6 +445,19 @@ impl GpuWorld {
         &self.plan
     }
 
+    /// The simulation configuration of the next tick (before its commands).
+    pub fn rules(&self) -> SimulationRules {
+        self.rules
+    }
+
+    pub fn ambient_temperature(&self) -> AmbientTemperature {
+        self.ambient_temperature
+    }
+
+    pub fn execution(&self) -> Execution {
+        self.execution
+    }
+
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
             session: self.session,
@@ -403,6 +465,8 @@ impl GpuWorld {
             cells: &self.window.cells,
             window_map: &self.window.window_map,
             slot_records: &self.window.slot_records,
+            activity: &self.window.activity,
+            plan: &self.plan,
             window: self.slots.window(),
             last_submitted_tick: self.last_submitted,
         }
@@ -546,7 +610,10 @@ impl PhysicalWorld for GpuWorld {
             window: self.slots.window(),
             supported: SupportedCommands::default()
                 .with(CommandKind::EditMaterial)
-                .with(CommandKind::QueryColumn),
+                .with(CommandKind::QueryColumn)
+                .with(CommandKind::SetAmbientTemperature)
+                .with(CommandKind::SetSimulationRules)
+                .with(CommandKind::MeasureTotals),
         }
     }
 
@@ -731,9 +798,12 @@ impl PhysicalWorld for GpuWorld {
             buffers: old,
             serial,
         });
-        self.bind_group = self
+        self.bind_groups = self
             .pipelines
-            .bind_group(&self.context, &self.fixed, &self.window);
+            .bind_groups(&self.context, &self.fixed, &self.window);
+        // The new window's activity starts empty: wake everything once, as the baseline's
+        // resize did.
+        self.wake_all_pending = true;
         self.plan = next;
         self.slots = slots;
         let migrated_bytes = moves.len() as u64 * CHUNK_BYTES;

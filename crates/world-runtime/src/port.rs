@@ -18,6 +18,7 @@ use world_model::{
     command::{Command, CommandKind},
     config,
     glam::IVec2,
+    observation::WorldTotals,
     spatial::{CHUNK_CELL_COUNT, ChunkKey, ChunkView},
 };
 
@@ -417,6 +418,10 @@ pub enum CommandResult {
     Column { cell: IVec2, column: WorldCell },
     /// `cell` is outside the resident window or in a chunk that is not resident.
     ColumnNotResident { cell: IVec2 },
+    /// A configuration change took effect from this tick on.
+    Configured,
+    /// The resident world's totals after the tick's earlier commands.
+    Totals(WorldTotals),
 }
 
 /// One completed tick, as observed by the CPU.
@@ -424,12 +429,84 @@ pub enum CommandResult {
 pub struct TickReport {
     pub tick: Tick,
     pub commands: u32,
-    /// Device time of the tick's command pass, when timestamps are available.
+    /// Device time of the whole tick, when timestamps are available.
     pub gpu_time: Option<Duration>,
+    /// Device time of each of the tick's phases, when timestamps are available.
+    pub phases: Option<PhaseTimes>,
     /// From submission to the CPU decoding the tick's results.
     pub latency: Duration,
     pub upload_bytes: u32,
     pub readback_bytes: u32,
+    /// What the material phases did.
+    pub cells: CellReport,
+}
+
+/// Device time of a tick's phases: the ordered commands, the activity scheduling and the
+/// material passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PhaseTimes {
+    pub commands: Duration,
+    pub activity: Duration,
+    pub material: Duration,
+}
+
+/// A tick's accounting of the material phases and the tools, and the work its scheduling did.
+///
+/// `*_in`/`*_out` sum every processed cell's increase and decrease of the fluid volume (every
+/// liquid and ice) or the solid column (bedrock plus loose material). The classified quantities
+/// say where the rest went: magma turned into stone (`quench`), coolant boiled beside magma
+/// (`boil`), oil burned (`burn`) and water drawn by foliage (`uptake`). Tool quantities are what
+/// the tick's brush strokes added or removed before the material phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CellReport {
+    pub fluid_in: u64,
+    pub fluid_out: u64,
+    pub solid_in: u64,
+    pub solid_out: u64,
+    pub quench: u64,
+    pub boil: u64,
+    pub burn: u64,
+    pub uptake: u64,
+    /// Bedrock eroded into loose material: moved within the solid column.
+    pub erosion: u64,
+    pub tool_fluid_in: u64,
+    pub tool_solid_in: u64,
+    pub tool_solid_out: u64,
+    /// Tiles the scheduling considered, tiles the material passes visited and tiles with an
+    /// active cell.
+    pub candidate_tiles: u32,
+    pub process_tiles: u32,
+    pub active_tiles: u32,
+    pub awake_cells: u32,
+    pub active_cells: u32,
+    /// Cells whose value changed.
+    pub changed_cells: u32,
+    /// Liquid transfers a receiver accepted less of than the donor proposed.
+    pub rejected_transfers: u32,
+    /// Transfer words read with another tick's stamp. Zero unless scheduling is wrong.
+    pub stale_flow: u32,
+    /// Receivers that took another amount than they accepted. Zero unless the rules disagree.
+    pub receive_mismatches: u32,
+}
+
+impl CellReport {
+    /// `(ΔL + quench + boil + burn + uptake, ΔS − quench)` of the material phases: both zero
+    /// when every unit is accounted for.
+    pub fn imbalance(&self) -> (i128, i128) {
+        let fluid = i128::from(self.fluid_in) - i128::from(self.fluid_out)
+            + i128::from(self.quench)
+            + i128::from(self.boil)
+            + i128::from(self.burn)
+            + i128::from(self.uptake);
+        let solid =
+            i128::from(self.solid_in) - i128::from(self.solid_out) - i128::from(self.quench);
+        (fluid, solid)
+    }
+
+    /// Whether the tick balanced its accounting and saw no inconsistent transfer.
+    pub fn consistent(&self) -> bool {
+        self.imbalance() == (0, 0) && self.stale_flow == 0 && self.receive_mismatches == 0
+    }
 }
 
 /// A transient notification that may be coalesced or dropped under pressure, with the drop
@@ -539,13 +616,15 @@ impl UploadBytes {
 pub struct ReadbackBytes {
     pub results: u64,
     pub events: u64,
+    /// The per-tick accounting record and the totals of totals commands.
+    pub diagnostics: u64,
     pub timestamps: u64,
     pub captures: u64,
 }
 
 impl ReadbackBytes {
     pub fn total(&self) -> u64 {
-        self.results + self.events + self.timestamps + self.captures
+        self.results + self.events + self.diagnostics + self.timestamps + self.captures
     }
 }
 
@@ -557,6 +636,8 @@ pub struct TransferCounters {
     pub readback: ReadbackBytes,
     /// Device-to-device copies (resize migration).
     pub device_copy_bytes: u64,
+    /// Device-side clears of per-tick counters and of activated chunks' activity records.
+    pub device_clear_bytes: u64,
     pub ticks_submitted: u64,
     pub ticks_observed: u64,
     pub in_flight_high_water: u32,
@@ -690,6 +771,7 @@ mod tests {
             .with(CommandKind::EditMaterial)
             .with(CommandKind::QueryColumn);
         assert!(supported.supports(CommandKind::EditMaterial));
+        assert!(!supported.supports(CommandKind::MeasureTotals));
         assert!(supported.supports(CommandKind::QueryColumn));
         assert!(!supported.supports(CommandKind::SpawnBody));
         assert!(!SupportedCommands::default().supports(CommandKind::EditMaterial));

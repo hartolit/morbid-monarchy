@@ -7,7 +7,8 @@
 // has one writer per cell. Strokes of a tick run as separate dispatches in command order;
 // wgpu places a barrier between dispatches that use the same read-write storage buffer, so a
 // later stroke reads the earlier one's result. Counts go to the command's own result record
-// and are read only after the pass ends.
+// and are read only after the pass ends. A changed cell is marked edited, so this tick's
+// material phases see the stroke, and its tool quantities are added to the diagnostics.
 
 @compute @workgroup_size(8, 8, 1)
 fn apply_edit(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -36,7 +37,30 @@ fn apply_edit(@builtin(global_invocation_id) id: vec3<u32>) {
     if (any(after != before)) {
         cells[at] = after;
         atomicAdd(&results[index].changed, 1u);
+        mark_edited(local);
+        account_tool(before, after);
     }
+}
+
+// An edited cell wakes for this tick's material phases like a changed one: its tile records the
+// edit, and the tiles within the wake reach of the cell become candidates.
+fn mark_edited(local: vec2<i32>) {
+    let tile = tile_id(tile_of_cell(local));
+    let within = vec2<u32>(local) % TILE_EDGE;
+    atomicOr(&activity[tile_word(tile, TILE_EDITED + bitmap_word(within))], bitmap_bit(within));
+    mark_candidates(tile, reach_mask(within, u32(WAKE_CHANGE_RADIUS) + 1u));
+}
+
+// Tools are the only external sources and sinks: painted liquid only ever adds volume; sand,
+// raise and lower change the solid column either way.
+fn account_tool(before: vec2<u32>, after: vec2<u32>) {
+    let fluid_before = cell_fluid_volume(before);
+    let fluid_after = cell_fluid_volume(after);
+    add64(DIAG_TOOL_FLUID_IN_LO, max(fluid_after, fluid_before) - fluid_before);
+    let solid_before = cell_elevation(before) + cell_granular_volume(before);
+    let solid_after = cell_elevation(after) + cell_granular_volume(after);
+    add64(DIAG_TOOL_SOLID_IN_LO, max(solid_after, solid_before) - solid_before);
+    add64(DIAG_TOOL_SOLID_OUT_LO, max(solid_after, solid_before) - solid_after);
 }
 
 fn apply_tool(cell: vec2<u32>, tool: u32, strength: u32) -> vec2<u32> {

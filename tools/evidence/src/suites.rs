@@ -95,6 +95,7 @@ pub fn allow_software() -> bool {
 pub fn cases(suite: GpuSuite) -> Option<&'static [Case]> {
     match suite {
         GpuSuite::Transfers => Some(transfers::CASES),
+        GpuSuite::Cells => Some(cells::CASES),
         _ => None,
     }
 }

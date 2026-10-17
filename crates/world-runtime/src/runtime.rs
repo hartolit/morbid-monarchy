@@ -6,8 +6,9 @@
 //! advance_clock -> submit_due_ticks -> poll_world -> consume_outcomes
 //! ```
 //!
-//! Commands enter through [`Runtime::submit`], which reserves a receipt and queues them; due
-//! ticks take queued commands in admission order. The live world sits behind the
+//! Commands enter through [`Runtime::submit`] (or [`Runtime::submit_at`], which names the
+//! earliest tick a command may apply in), which reserves a receipt and queues them; due ticks
+//! take queued commands in admission order. The live world sits behind the
 //! [`PhysicalWorld`] port as a resource, so later stages add their systems (input, possession,
 //! displays) to the same schedule, and the application composes the same runtime with a window.
 //! The schedule runs single-threaded: its systems form one chain over the port, and nothing in
@@ -90,10 +91,17 @@ pub enum ResidencyError {
 #[derive(Resource)]
 struct Port(Box<dyn PhysicalWorld>);
 
+/// A queued command and the earliest tick it may apply in.
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    command: AdmittedCommand,
+    not_before: Tick,
+}
+
 #[derive(Resource)]
 struct CommandQueue {
     receipts: Receipts,
-    pending: VecDeque<AdmittedCommand>,
+    pending: VecDeque<Pending>,
     pending_capacity: usize,
     capabilities: PortCapabilities,
     closed: bool,
@@ -196,6 +204,18 @@ impl Runtime {
 
     /// Admits a command under `id`, reserving its receipt, or refuses it without effect.
     pub fn submit(&mut self, id: CommandId, command: Command) -> Result<Admission, AdmissionError> {
+        self.submit_at(id, command, Tick::ZERO)
+    }
+
+    /// Admits a command that applies in tick `not_before` at the earliest, so a scripted input
+    /// lands in the same logical tick however frames pace the clock. Commands still apply in
+    /// admission order: one that is not yet due holds back those admitted after it.
+    pub fn submit_at(
+        &mut self,
+        id: CommandId,
+        command: Command,
+        not_before: Tick,
+    ) -> Result<Admission, AdmissionError> {
         let last_submitted = self.world.resource::<Clock>().last_submitted;
         let mut admission = self.world.resource_mut::<CommandQueue>();
         if admission.closed {
@@ -209,7 +229,10 @@ impl Runtime {
             return Err(AdmissionError::Pressure(Pressure::PendingCommands));
         }
         admission.receipts.insert(id, command, last_submitted)?;
-        admission.pending.push_back(AdmittedCommand { id, command });
+        admission.pending.push_back(Pending {
+            command: AdmittedCommand { id, command },
+            not_before,
+        });
         Ok(Admission::Admitted)
     }
 
@@ -267,6 +290,24 @@ impl Runtime {
 
     pub fn discarded_ticks(&self) -> u64 {
         self.world.resource::<Clock>().clock.discarded_ticks()
+    }
+
+    /// Changes the tick rate and the catch-up cap from the next frame on, keeping the time
+    /// already accumulated; refused, with the clock unchanged, outside the supported ranges.
+    pub fn set_clock(
+        &mut self,
+        tick_rate_hz: f64,
+        max_ticks_per_frame: u32,
+    ) -> Result<(), ClockError> {
+        self.world
+            .resource_mut::<Clock>()
+            .clock
+            .reconfigure(tick_rate_hz, max_ticks_per_frame)
+    }
+
+    /// The fixed tick's duration.
+    pub fn tick_duration(&self) -> Duration {
+        self.world.resource::<Clock>().clock.tick_duration()
     }
 
     pub fn counters(&self) -> TransferCounters {
@@ -406,10 +447,19 @@ fn submit_due_ticks(
         }
         let tick = clock.next_tick;
         buffers.batch.clear();
-        let take = admission.pending.len().min(per_tick);
-        buffers
-            .batch
-            .extend(admission.pending.iter().take(take).copied());
+        let take = admission
+            .pending
+            .iter()
+            .take(per_tick)
+            .take_while(|pending| pending.not_before <= tick)
+            .count();
+        buffers.batch.extend(
+            admission
+                .pending
+                .iter()
+                .take(take)
+                .map(|pending| pending.command),
+        );
         let batch = TickBatch {
             session,
             tick,
@@ -490,7 +540,7 @@ fn abandon_pending(
     ledger: &mut OutcomeLedger,
     reason: AbandonReason,
 ) {
-    while let Some(command) = admission.pending.pop_front() {
+    while let Some(Pending { command, .. }) = admission.pending.pop_front() {
         ledger.consume(
             Outcome::Abandoned {
                 obligation: Obligation::Command(command.id),
@@ -648,9 +698,11 @@ mod tests {
                     tick: *tick,
                     commands: ids.len() as u32,
                     gpu_time: None,
+                    phases: None,
                     latency: Duration::from_millis(1),
                     upload_bytes: 0,
                     readback_bytes: 0,
+                    cells: crate::port::CellReport::default(),
                 }));
             }
             crate::port::PollReport {
@@ -787,6 +839,49 @@ mod tests {
         assert_eq!(runtime.frame(Duration::from_secs(2)).ticks_submitted, 4);
         assert_eq!(runtime.discarded_ticks(), 116);
         assert_eq!(script.lock().expect("script").batches.len(), 7);
+    }
+
+    #[test]
+    fn scheduled_commands_wait_for_their_tick_in_admission_order() {
+        let (mut runtime, script) = runtime(8);
+        runtime
+            .submit_at(CommandId::new(1), raise(1), Tick::new(2))
+            .expect("admitted");
+        runtime
+            .submit(CommandId::new(2), raise(2))
+            .expect("admitted");
+        runtime
+            .submit_at(CommandId::new(3), raise(3), Tick::new(2))
+            .expect("admitted");
+        assert_eq!(runtime.frame_ticks(4).ticks_submitted, 4);
+        let batches = script.lock().expect("script").batches.clone();
+        let ids = |values: &[u64]| {
+            values
+                .iter()
+                .map(|value| CommandId::new(*value))
+                .collect::<Vec<_>>()
+        };
+        // Command 2 waits behind command 1, which is due in tick 2.
+        assert_eq!(
+            batches,
+            vec![
+                (Tick::new(0), ids(&[])),
+                (Tick::new(1), ids(&[])),
+                (Tick::new(2), ids(&[1, 2, 3])),
+                (Tick::new(3), ids(&[])),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_clock_can_be_reconfigured_within_its_ranges() {
+        let (mut runtime, _) = runtime(8);
+        assert!(runtime.set_clock(5.0, 4).is_err());
+        assert!(runtime.set_clock(30.0, 17).is_err());
+        runtime.set_clock(30.0, 2).expect("supported");
+        assert_eq!(runtime.tick_duration(), Duration::from_secs_f64(1.0 / 30.0));
+        assert_eq!(runtime.frame(Duration::from_millis(110)).ticks_submitted, 2);
+        assert_eq!(runtime.discarded_ticks(), 1);
     }
 
     #[test]

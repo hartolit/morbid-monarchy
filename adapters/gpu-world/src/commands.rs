@@ -6,6 +6,10 @@
 //! not resident here; a query outside the window is given a local position the kernel reports
 //! as not resident. Strokes that do touch the window have local centres within a few thousand
 //! cells of the origin, which fit an `i32`.
+//!
+//! Configuration commands (ambient temperature, simulation rules) change the tick's parameters on
+//! the CPU and dispatch nothing; their record only carries the identity their result echoes.
+//! A totals command dispatches the reduction over every window chunk.
 
 use world_model::{
     command::{Command, CommandKind},
@@ -18,7 +22,7 @@ use world_runtime::{
 };
 
 use crate::{
-    layout::{CommandRecord, codes, tool_code},
+    layout::{CommandRecord, activity::TILES_PER_CHUNK, codes, tool_code},
     plan::EDIT_WORKGROUP_EDGE,
 };
 
@@ -43,6 +47,17 @@ pub enum Dispatch {
         groups: u32,
     },
     QueryColumn,
+    /// `measure_totals` over `(TILES_PER_CHUNK, chunks)` workgroups.
+    Totals {
+        chunks: u32,
+    },
+}
+
+impl Dispatch {
+    /// Workgroups of a totals reduction over a window of `chunks` chunks.
+    pub fn totals_groups(chunks: u32) -> [u32; 3] {
+        [TILES_PER_CHUNK, chunks, 1]
+    }
 }
 
 /// Cells within `radius` of a centre (inclusive), as a brush stroke touches them.
@@ -135,6 +150,16 @@ pub fn encode(
                 (-1, -1)
             };
             Dispatch::QueryColumn
+        }
+        Command::SetAmbientTemperature(_) | Command::SetSimulationRules(_) => {
+            record.kind = codes::COMMAND_CONFIGURE;
+            Dispatch::None
+        }
+        Command::MeasureTotals => {
+            record.kind = codes::COMMAND_TOTALS;
+            Dispatch::Totals {
+                chunks: window.chunk_count(),
+            }
         }
         other => return Err(Refusal::NotSupported(other.kind())),
     };

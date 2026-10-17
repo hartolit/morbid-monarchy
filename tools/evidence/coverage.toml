@@ -1132,6 +1132,58 @@ expectation = "A retired slot is reused only after its clearing tick completes; 
 destination = "gpu-world (02)"
 determinism = "exact"
 
+# --- GPU owner and runtime additions (03) ---
+
+[[behavior]]
+id = "runtime.ledger.inconsistent-ticks"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::an_unbalanced_tick_is_counted_as_inconsistent"
+origin = "transition"
+expectation = "A tick whose material accounting does not balance, or that read a stale transfer word, is counted as inconsistent with its tick; balanced ticks are not."
+destination = "world-runtime ledger (03), the consumer of the material diagnostics"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.schedule.not-before"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::scheduled_commands_wait_for_their_tick_in_admission_order"
+origin = "transition"
+expectation = "A command scheduled for tick 2 applies in tick 2, and a later-admitted command waits behind it."
+destination = "world-runtime admission (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.clock.reconfigure"
+package = "world-runtime"
+target = "lib"
+test = "runtime::tests::the_clock_can_be_reconfigured_within_its_ranges"
+origin = "transition"
+expectation = "The tick rate and catch-up cap change within their ranges and are refused outside them; the new cap applies to the next frame."
+destination = "world-runtime clock (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.diagnostics-carry"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::diagnostics_carry_every_wrap_into_their_high_words"
+origin = "transition"
+expectation = "Diagnostics decode 64-bit counters from their low and high words and a stale transfer marks the report inconsistent."
+destination = "gpu-world readback (03)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.layout.combustibility-split"
+package = "gpu-world"
+target = "lib"
+test = "layout::tests::combustibility_splits_into_surface_and_fuel"
+origin = "transition"
+expectation = "is_combustible(surface, fluid) equals combustible surface or fuel liquid for every pair, which the generated tables rely on."
+destination = "gpu-world layout (03)"
+determinism = "exact"
+
 # --- GPU suite `transfers`: cases run by `cargo evidence test gpu` on an adapter (02). The CPU lane
 # skips `gpu:` targets; the GPU lane requires every case to be defined, registered and passed. ---
 
@@ -1413,4 +1465,306 @@ test = "steady-state-reuse"
 origin = "transition"
 expectation = "1,200 ticks of edits, queries, captures and residency churn create no buffers or pipelines, keep requested bytes constant, never wait on the frame path, and report bytes by purpose, allocations and pass times."
 destination = "gpu-world on the selected adapter (02); rerun with each later GPU stage"
+determinism = "exact"
+
+# --- GPU suite `cells`: the material phases on an adapter (03). ---
+
+[[behavior]]
+id = "gpu.cells.column-rules-match"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "column-rules-match"
+origin = "transition"
+expectation = "WGSL receive, quench, drain, freeze, thaw and compaction equal world-model on 15,488 columns: every material pair at the floor, below and at the ceiling, empty to full, and arbitrary words; the five cell-test intentions are among them."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.rule-hashes-match"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "rule-hashes-match"
+origin = "transition"
+expectation = "Keyed hashes, draws, Fisher-Yates shuffles and momentum ordering equal world-model for extreme and negative positions, ticks across 2^32 and several seeds."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.material-tables-match"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "material-tables-match"
+origin = "transition"
+expectation = "Every generated material table (flow divisor, levelling, erosion, solid, coolant, freeze, melt, fuel, combustibility, repose, compaction, weathering) equals world-model for every code."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.dam-break"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "dam-break"
+origin = "transition"
+expectation = "A 400-unit water column spreads, conserves fluid and solid exactly, falls asleep within 6,000 ticks and rests level within one unit, sparse and dense, equal to the CPU reference every tick."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.walled-basin"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "walled-basin"
+origin = "transition"
+expectation = "A full column fills a walled basin level within one unit and rests, equal to the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.granular-pile"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "granular-pile"
+origin = "transition"
+expectation = "A 3 x 3 sand pile slides, conserves its solid volume and rests, equal to the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.chaotic-terrain"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "chaotic-terrain"
+origin = "transition"
+expectation = "Seeded chaotic terrain balances its accounting every tick and keeps exact totals for 600 ticks, sparse and dense, equal to the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.oil-patch"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "oil-patch"
+origin = "transition"
+expectation = "Oil poured into a lake stays a patch of 1-9 cells and mixing deletes no volume."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.freeze-and-thaw"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "freeze-and-thaw"
+origin = "transition"
+expectation = "A walled pond freezes completely at -10 C and thaws completely at 20 C with the same volume; the climate command alone wakes it."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.ice-floor"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "ice-floor"
+origin = "transition"
+expectation = "Ice keeps its 10 units beside 200 units of water for 200 ticks at -5 C."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.magma-quench-and-boil"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "magma-quench-and-boil"
+origin = "transition"
+expectation = "Magma beside water becomes 20 units of stone and boils 2 units of water in one tick."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.oil-burns-out"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "oil-burns-out"
+origin = "transition"
+expectation = "Burning oil consumes exactly its 12 units and the fire goes out."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.fixed-clock"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "fixed-clock"
+origin = "transition"
+expectation = "Through the runtime and the GPU world, 3.5 tick intervals make 3 ticks due, a one-second frame 4 with 56 discarded, and owed ticks survive device backpressure."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.presentation-rates"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "presentation-rates"
+origin = "transition"
+expectation = "Tick-scheduled inputs at 30, 60 and 144 Hz and with 400 ms stalls give identical cells at one tick; only the stalled run discards ticks, reported in ticks and milliseconds."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.unmatched-transfer-detected"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "unmatched-transfer-detected"
+origin = "transition"
+expectation = "A react kernel built to drop accepted liquid makes ticks unbalanced, differs from the reference and loses volume, and the same session balances again once the fault is off."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.donor-conflicts"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "donor-conflicts"
+origin = "transition"
+expectation = "Four donors around one pit: the 50-unit donor wins and moves exactly 30 units, the others keep theirs; the steepest sand donor moves 2 units; then 300 ticks equal the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.full-and-frozen-receivers"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "full-and-frozen-receivers"
+origin = "transition"
+expectation = "A full column and ice take nothing from higher neighbours; strokes into full, frozen and capped columns add exactly what fits and the accounting equals the totals change."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.ceiling-quench"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "ceiling-quench"
+origin = "transition"
+expectation = "Magma and water on a checkerboard at 4093-4095 lose no unit (fluid lost only to quench and boiling), transfers meet the ceiling, magma stays liquid at 4095 and the region falls asleep."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.seam-flow"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "seam-flow"
+origin = "transition"
+expectation = "Water crosses a four-chunk junction at negative keys into both sourceless chunks and sand and water cross tile seams, sparse and dense, equal to the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.sleeping-receivers"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "sleeping-receivers"
+origin = "transition"
+expectation = "Lowering a cell two away from a sleeping one-unit donor in the neighbouring tile wakes it and it trickles; a stroke beside sleeping tiles flows into them; sparse and dense equal the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.zero-active-tiles"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "zero-active-tiles"
+origin = "transition"
+expectation = "An asleep 3 x 3 world reports no candidate, process or awake work for 30 ticks; a mid-tile edit wakes 1 tile and a corner edit 4."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.climate-and-rule-reactivation"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "climate-and-rule-reactivation"
+origin = "transition"
+expectation = "A temperature change wakes all 4,096 cells and 64 tiles of a sleeping pond, which freezes; switching liquid back on wakes everything and a still column flows."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.chunk-activation-and-retirement"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "chunk-activation-and-retirement"
+origin = "transition"
+expectation = "A streamed chunk is woken with its neighbour's border and its water crosses the seam; retiring it wakes the border tiles it leaves; both equal the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.rebased-window"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "rebased-window"
+origin = "transition"
+expectation = "The same nine absolute chunks at negative keys in a radius-1 and a radius-2 window, with every rule on, give identical cells after 150 ticks."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.tick-rollover"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "tick-rollover"
+origin = "transition"
+expectation = "Starting at 2^32 - 6 with every rule on, the GPU follows the reference across the low tick word's rollover."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.keyed-growth-and-fire"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "keyed-growth-and-fire"
+origin = "transition"
+expectation = "Growth, seeding, mud drying, ignition, burning and ash with keyed draws equal the reference for 400 ticks, two sessions with one seed are identical and another seed differs."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.dense-sparse-agreement"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "dense-sparse-agreement"
+origin = "transition"
+expectation = "Nine mixed chunks with every rule on and lava strokes: dense and sparse ticks agree in accounting and activity for 300 ticks, their cells agree, sparse visits fewer tiles, and both equal the reference."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.long-settlement"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "long-settlement"
+origin = "transition"
+expectation = "Nine chunks of chaotic terrain run until the whole window sleeps against the reference every tick, with exact final totals."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.extreme-capacity"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "extreme-capacity"
+origin = "transition"
+expectation = "A radius-8 window of full columns totals 4,847,431,680 elevation units exactly; strokes at maximum add nothing and lowering removes exactly 12,853 x 255 units."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.full-activity-dispatch-split"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "full-activity-dispatch-split"
+origin = "transition"
+expectation = "A radius-16 window woken by a climate change processes all 69,696 tiles and 4,460,544 cells, split across dispatch rows, and sparse and dense agree for three ticks."
+destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
 determinism = "exact"

@@ -1,7 +1,8 @@
 //! Decoding a tick's readback into outcomes, with identity and consistency checks.
 //!
-//! A tick readback holds the tick's result records, the cosmetic event buffer and, when
-//! enabled, a timestamp pair. Decoding checks every record against what the CPU encoded: the
+//! A tick readback holds the tick's result records, the cosmetic event buffer, the tick's
+//! diagnostics record, the totals records of its totals commands and, when enabled, a begin and
+//! an end timestamp per compute pass. Decoding checks every record against what the CPU encoded: the
 //! command identity, its position and the tick. A mismatch means a layout error or a result
 //! that is not this tick's, and faults the session instead of reporting a wrong outcome. The
 //! event header must account for every dropped append; a header whose drops do not match its
@@ -9,15 +10,18 @@
 
 use std::time::Duration;
 
-use world_model::{cell::WorldCell, command::CommandKind};
+use world_model::{cell::WorldCell, command::CommandKind, observation::WorldTotals};
 use world_runtime::{
     ids::{CommandId, Tick},
-    port::{CommandOutcome, CommandResult, CosmeticEvent, Outcome},
+    port::{CellReport, CommandOutcome, CommandResult, CosmeticEvent, Outcome, PhaseTimes},
 };
 
 use crate::{
     commands::Expected,
-    layout::{EventHeader, EventRecord, GpuRecord, ResultRecord, codes},
+    layout::{
+        DiagnosticsRecord, EventHeader, EventRecord, GpuRecord, ResultRecord, TotalsRecord, codes,
+        wide,
+    },
 };
 
 /// Why a readback cannot be trusted.
@@ -46,9 +50,11 @@ pub enum DecodeError {
     },
 }
 
-/// Decodes `results` (one record per expected command) into command outcomes.
+/// Decodes `results` (one record per expected command) into command outcomes. `totals` holds
+/// one totals record per command position; only totals commands' records are read.
 pub fn decode_results(
     results: &[u8],
+    totals: &[u8],
     expected: &[Expected],
     tick: Tick,
     out: &mut Vec<Outcome>,
@@ -63,13 +69,20 @@ pub fn decode_results(
             tick,
         )?;
     }
-    for (bytes, expected) in results.chunks_exact(stride).zip(expected) {
+    for (position, (bytes, expected)) in results.chunks_exact(stride).zip(expected).enumerate() {
         let record = ResultRecord::read_bytes(bytes);
         let result = match (expected.kind, record.status) {
             (CommandKind::EditMaterial, _) => CommandResult::Edited {
                 changed: record.changed,
                 not_resident: record.not_resident + expected.outside_window,
             },
+            (_, codes::RESULT_CONFIGURED) => CommandResult::Configured,
+            (_, codes::RESULT_TOTALS) => {
+                let at = position * TotalsRecord::BYTES as usize;
+                CommandResult::Totals(decode_totals(
+                    &totals[at..at + TotalsRecord::BYTES as usize],
+                ))
+            }
             (_, codes::RESULT_COLUMN) => CommandResult::Column {
                 cell: expected.cell,
                 column: WorldCell::from_words([record.word0, record.word1]),
@@ -114,6 +127,10 @@ fn check(
             record.status,
             codes::RESULT_COLUMN | codes::RESULT_COLUMN_NOT_RESIDENT
         ),
+        CommandKind::SetAmbientTemperature | CommandKind::SetSimulationRules => {
+            record.status == codes::RESULT_CONFIGURED
+        }
+        CommandKind::MeasureTotals => record.status == codes::RESULT_TOTALS,
         _ => false,
     };
     if valid {
@@ -171,16 +188,81 @@ pub fn decode_events(
     Ok(header.dropped)
 }
 
-/// The duration between a resolved timestamp pair, or `None` when the pair is not ordered (a
-/// device may report unusable values; they are not turned into a measurement).
-pub fn decode_timestamps(bytes: &[u8], period_ns: f32) -> Option<Duration> {
-    let begin = u64::from_le_bytes(bytes.get(0..8)?.try_into().ok()?);
-    let end = u64::from_le_bytes(bytes.get(8..16)?.try_into().ok()?);
+/// A totals record as [`WorldTotals`].
+pub fn decode_totals(bytes: &[u8]) -> WorldTotals {
+    let record = TotalsRecord::read_bytes(bytes);
+    let mut words = [0u32; TotalsRecord::WORDS];
+    record.write_words(&mut words);
+    let pair = |index: usize| wide(words[2 * index], words[2 * index + 1]);
+    WorldTotals {
+        fluid: std::array::from_fn(pair),
+        elevation: pair(8),
+        granular: pair(9),
+        cells: pair(10),
+    }
+}
+
+/// The tick's diagnostics record as a [`CellReport`].
+pub fn decode_diagnostics(bytes: &[u8]) -> CellReport {
+    let r = DiagnosticsRecord::read_bytes(bytes);
+    CellReport {
+        fluid_in: wide(r.fluid_in_lo, r.fluid_in_hi),
+        fluid_out: wide(r.fluid_out_lo, r.fluid_out_hi),
+        solid_in: wide(r.solid_in_lo, r.solid_in_hi),
+        solid_out: wide(r.solid_out_lo, r.solid_out_hi),
+        quench: wide(r.quench_lo, r.quench_hi),
+        boil: wide(r.boil_lo, r.boil_hi),
+        burn: wide(r.burn_lo, r.burn_hi),
+        uptake: wide(r.uptake_lo, r.uptake_hi),
+        erosion: wide(r.erosion_lo, r.erosion_hi),
+        tool_fluid_in: wide(r.tool_fluid_in_lo, r.tool_fluid_in_hi),
+        tool_solid_in: wide(r.tool_solid_in_lo, r.tool_solid_in_hi),
+        tool_solid_out: wide(r.tool_solid_out_lo, r.tool_solid_out_hi),
+        candidate_tiles: r.candidate_tiles,
+        process_tiles: r.process_tiles,
+        active_tiles: r.active_tiles,
+        awake_cells: r.awake_cells,
+        active_cells: r.active_cells,
+        changed_cells: r.changed_cells,
+        rejected_transfers: r.rejected_transfers,
+        stale_flow: r.stale_flow,
+        receive_mismatches: r.receive_mismatches,
+    }
+}
+
+fn timestamp(bytes: &[u8], index: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        bytes.get(index * 8..index * 8 + 8)?.try_into().ok()?,
+    ))
+}
+
+fn span(begin: u64, end: u64, period_ns: f32) -> Option<Duration> {
     if end < begin {
         return None;
     }
     let nanoseconds = (end - begin) as f64 * f64::from(period_ns);
     Some(Duration::from_nanos(nanoseconds.round() as u64))
+}
+
+/// The tick's device time and its three passes' times from the resolved timestamps (begin and
+/// end of each pass), or `None` when they are not ordered (a device may report unusable values;
+/// they are not turned into a measurement).
+pub fn decode_timestamps(bytes: &[u8], period_ns: f32) -> Option<(Duration, PhaseTimes)> {
+    let mut stamps = [0u64; 6];
+    for (index, stamp) in stamps.iter_mut().enumerate() {
+        *stamp = timestamp(bytes, index)?;
+    }
+    if stamps.windows(2).any(|pair| pair[1] < pair[0]) {
+        return None;
+    }
+    Some((
+        span(stamps[0], stamps[5], period_ns)?,
+        PhaseTimes {
+            commands: span(stamps[0], stamps[1], period_ns)?,
+            activity: span(stamps[2], stamps[3], period_ns)?,
+            material: span(stamps[4], stamps[5], period_ns)?,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -224,17 +306,47 @@ mod tests {
     fn results_decode_to_outcomes_with_cpu_side_counts() {
         let mut bytes = record(10, 0, 4, codes::RESULT_EDITED);
         bytes.extend(record(11, 1, 4, codes::RESULT_COLUMN));
+        bytes.extend(record(12, 2, 4, codes::RESULT_CONFIGURED));
+        bytes.extend(record(13, 3, 4, codes::RESULT_TOTALS));
+        // Totals of position 3: water 5 + 2^32 * 3, elevation 2^40, granular 9, cells 7.
+        let mut totals = vec![0u8; 4 * TotalsRecord::BYTES as usize];
+        let record3 = TotalsRecord {
+            fluid1_lo: 5,
+            fluid1_hi: 3,
+            elevation_hi: 1 << 8,
+            granular_lo: 9,
+            cells_lo: 7,
+            ..TotalsRecord::default()
+        };
+        record3.write_bytes(&mut totals[3 * TotalsRecord::BYTES as usize..]);
         let mut out = Vec::new();
         decode_results(
             &bytes,
+            &totals,
             &[
                 expected(10, CommandKind::EditMaterial),
                 expected(11, CommandKind::QueryColumn),
+                expected(12, CommandKind::SetSimulationRules),
+                expected(13, CommandKind::MeasureTotals),
             ],
             Tick::new(4),
             &mut out,
         )
         .expect("consistent");
+        let result = |index: usize| match out[index] {
+            Outcome::Command(outcome) => outcome.result,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(result(2), CommandResult::Configured);
+        let CommandResult::Totals(world) = result(3) else {
+            panic!("totals: {:?}", result(3));
+        };
+        assert_eq!(world.fluid[1], 5 + (3 << 32));
+        assert_eq!(world.fluid_volume(), 5 + (3 << 32));
+        assert_eq!(
+            (world.elevation, world.granular, world.cells),
+            (1 << 40, 9, 7)
+        );
         assert_eq!(
             out[0],
             Outcome::Command(CommandOutcome {
@@ -267,19 +379,20 @@ mod tests {
         ];
         let mut out = Vec::new();
         assert!(matches!(
-            decode_results(&bytes, &both, Tick::new(4), &mut out),
+            decode_results(&bytes, &[], &both, Tick::new(4), &mut out),
             Err(DecodeError::Identity { position: 1, .. })
         ));
         assert!(out.is_empty());
         let stale = record(10, 0, 3, codes::RESULT_EDITED);
         assert!(matches!(
-            decode_results(&stale, &both[..1], Tick::new(4), &mut out),
+            decode_results(&stale, &[], &both[..1], Tick::new(4), &mut out),
             Err(DecodeError::WrongTick { .. })
         ));
         let unanswered = record(11, 0, 4, codes::RESULT_PENDING);
         assert!(matches!(
             decode_results(
                 &unanswered,
+                &[],
                 &[expected(11, CommandKind::QueryColumn)],
                 Tick::new(4),
                 &mut out
@@ -350,14 +463,44 @@ mod tests {
 
     #[test]
     fn timestamps_convert_with_the_period_and_refuse_unordered_pairs() {
-        let mut bytes = [0u8; 16];
-        bytes[..8].copy_from_slice(&1_000u64.to_le_bytes());
-        bytes[8..].copy_from_slice(&3_000u64.to_le_bytes());
+        let mut bytes = [0u8; 48];
+        for (index, stamp) in [1_000u64, 1_400, 1_500, 1_600, 2_000, 3_000]
+            .iter()
+            .enumerate()
+        {
+            bytes[index * 8..index * 8 + 8].copy_from_slice(&stamp.to_le_bytes());
+        }
         assert_eq!(
             decode_timestamps(&bytes, 1.5),
-            Some(Duration::from_nanos(3_000))
+            Some((
+                Duration::from_nanos(3_000),
+                PhaseTimes {
+                    commands: Duration::from_nanos(600),
+                    activity: Duration::from_nanos(150),
+                    material: Duration::from_nanos(1_500),
+                }
+            ))
         );
-        bytes[8..].copy_from_slice(&500u64.to_le_bytes());
+        bytes[40..].copy_from_slice(&500u64.to_le_bytes());
         assert_eq!(decode_timestamps(&bytes, 1.0), None);
+    }
+
+    #[test]
+    fn diagnostics_carry_every_wrap_into_their_high_words() {
+        let record = DiagnosticsRecord {
+            fluid_out_lo: 0xFFFF_FFFF,
+            fluid_out_hi: 2,
+            quench_lo: 7,
+            stale_flow: 1,
+            process_tiles: 12,
+            ..DiagnosticsRecord::default()
+        };
+        let mut bytes = vec![0u8; DiagnosticsRecord::BYTES as usize];
+        record.write_bytes(&mut bytes);
+        let report = decode_diagnostics(&bytes);
+        assert_eq!(report.fluid_out, 0x2_FFFF_FFFF);
+        assert_eq!(report.quench, 7);
+        assert_eq!(report.process_tiles, 12);
+        assert!(!report.consistent());
     }
 }

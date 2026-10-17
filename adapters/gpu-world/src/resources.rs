@@ -1,11 +1,15 @@
-//! The session's device buffers, pipelines and bind group.
+//! The session's device buffers, pipelines and bind groups.
 //!
 //! Buffers are created from a checked [`ResourcePlan`] through the context, so their bytes are
-//! counted. The window buffers (cells, window map, slot records) are replaced by a resize; the
-//! old ones stay alive and counted until the last submission that used them completes, which
-//! is what the reported old/new overlap measures. Pipelines are created once per session from
-//! the assembled source and reused for every tick; nothing compiles on the frame path, and a
-//! new device (a new session) compiles them again.
+//! counted. The window buffers (cells, window map, slot records, flow, scratch and activity) are
+//! replaced by a resize; the old ones stay alive and counted until the last submission that used
+//! them completes, which is what the reported old/new overlap measures. Pipelines are created
+//! once per session from the assembled source and reused for every tick; nothing compiles on the
+//! frame path, and a new device (a new session) compiles them again.
+//!
+//! Three pipeline layouts: the command kernels' (eight storage buffers, WebGPU's default limit),
+//! the material phases' (six), and the argument kernels', which add the indirect-argument buffer
+//! as group 1 so no dispatch binds the buffer it is dispatched from as writable storage.
 
 use std::num::NonZeroU64;
 
@@ -33,12 +37,15 @@ pub struct WindowBuffers {
     pub cells: wgpu::Buffer,
     pub window_map: wgpu::Buffer,
     pub slot_records: wgpu::Buffer,
+    pub flow: wgpu::Buffer,
+    pub scratch: wgpu::Buffer,
+    pub activity: wgpu::Buffer,
 }
 
 impl WindowBuffers {
     /// Creates the window buffers. The window map and slot records are written while mapped
     /// at creation from `slots`; the cells start zeroed and are filled by uploads or a
-    /// migration copy.
+    /// migration copy; flow, scratch and activity start zeroed (no tile awake, no flag set).
     pub fn create(
         context: &mut GpuContext,
         plan: &ResourcePlan,
@@ -91,20 +98,49 @@ impl WindowBuffers {
         }
         window_map.unmap();
         slot_records.unmap();
+        let mut zeroed = Vec::with_capacity(3);
+        for (role, label) in [
+            (BufferRole::Flow, "flow"),
+            (BufferRole::Scratch, "scratch"),
+            (BufferRole::Activity, "activity"),
+        ] {
+            let buffer_plan = plan.buffer(role);
+            match context.create_buffer(label, buffer_plan.size, buffer_plan.usage, false) {
+                Ok(buffer) => zeroed.push(buffer),
+                Err(error) => {
+                    for buffer in [cells, window_map, slot_records].into_iter().chain(zeroed) {
+                        context.release_buffer(buffer);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let [flow, scratch, activity] = <[wgpu::Buffer; 3]>::try_from(zeroed)
+            .unwrap_or_else(|_| unreachable!("three buffers were created"));
         Ok((
             Self {
                 cells,
                 window_map,
                 slot_records,
+                flow,
+                scratch,
+                activity,
             },
             map_plan.size + records_plan.size,
         ))
     }
 
     pub fn release(self, context: &mut GpuContext) {
-        context.release_buffer(self.cells);
-        context.release_buffer(self.window_map);
-        context.release_buffer(self.slot_records);
+        for buffer in [
+            self.cells,
+            self.window_map,
+            self.slot_records,
+            self.flow,
+            self.scratch,
+            self.activity,
+        ] {
+            context.release_buffer(buffer);
+        }
     }
 }
 
@@ -115,6 +151,8 @@ pub struct FixedBuffers {
     pub commands: wgpu::Buffer,
     pub results: wgpu::Buffer,
     pub events: wgpu::Buffer,
+    pub diagnostics: wgpu::Buffer,
+    pub dispatch_args: wgpu::Buffer,
     pub timestamps: Option<(wgpu::QuerySet, wgpu::Buffer)>,
 }
 
@@ -147,6 +185,15 @@ impl FixedBuffers {
             created.push(results.clone());
             let events = make(context, BufferRole::Events, "events", false)?;
             created.push(events.clone());
+            let diagnostics = make(context, BufferRole::Diagnostics, "diagnostics", false)?;
+            created.push(diagnostics.clone());
+            let dispatch_args = make(
+                context,
+                BufferRole::DispatchArgs,
+                "dispatch arguments",
+                false,
+            )?;
+            created.push(dispatch_args.clone());
             let timestamps = if plan.timestamps {
                 let resolve = make(
                     context,
@@ -160,7 +207,7 @@ impl FixedBuffers {
                     .create_query_set(&wgpu::QuerySetDescriptor {
                         label: Some("tick pass timestamps"),
                         ty: wgpu::QueryType::Timestamp,
-                        count: 2,
+                        count: crate::plan::TIMESTAMP_QUERIES,
                     });
                 Some((query_set, resolve))
             } else {
@@ -172,10 +219,21 @@ impl FixedBuffers {
                 commands,
                 results,
                 events,
+                diagnostics,
+                dispatch_args,
                 timestamps,
             ))
         })();
-        let (tick_params, dispatch_params, commands, results, events, timestamps) = match result {
+        let (
+            tick_params,
+            dispatch_params,
+            commands,
+            results,
+            events,
+            diagnostics,
+            dispatch_args,
+            timestamps,
+        ) = match result {
             Ok(buffers) => buffers,
             Err(error) => {
                 for buffer in created {
@@ -204,6 +262,8 @@ impl FixedBuffers {
                 commands,
                 results,
                 events,
+                diagnostics,
+                dispatch_args,
                 timestamps,
             },
             bytes.len() as u64,
@@ -216,21 +276,43 @@ impl FixedBuffers {
         context.release_buffer(self.commands);
         context.release_buffer(self.results);
         context.release_buffer(self.events);
+        context.release_buffer(self.diagnostics);
+        context.release_buffer(self.dispatch_args);
         if let Some((_, resolve)) = self.timestamps {
             context.release_buffer(resolve);
         }
     }
 }
 
-/// The compiled kernels and their shared layout.
+/// The compiled kernels and their layouts.
 pub struct Pipelines {
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub world_layout: wgpu::BindGroupLayout,
+    pub sim_layout: wgpu::BindGroupLayout,
+    pub args_layout: wgpu::BindGroupLayout,
     pub begin_tick: wgpu::ComputePipeline,
     pub apply_edit: wgpu::ComputePipeline,
     pub query_column: wgpu::ComputePipeline,
+    pub measure_totals: wgpu::ComputePipeline,
+    pub scan_tiles: wgpu::ComputePipeline,
+    pub candidate_args: wgpu::ComputePipeline,
+    pub wake_tiles: wgpu::ComputePipeline,
+    pub process_args: wgpu::ComputePipeline,
+    pub propose: wgpu::ComputePipeline,
+    pub resolve: wgpu::ComputePipeline,
+    pub react: wgpu::ComputePipeline,
+    pub commit: wgpu::ComputePipeline,
     /// The pressure-injection kernel, only in sessions with fault injection.
     pub flood_events: Option<wgpu::ComputePipeline>,
+    /// `react` built with `fault_unmatched_transfer`, only in sessions with fault injection.
+    pub react_unmatched: Option<wgpu::ComputePipeline>,
     pub created: u64,
+}
+
+/// The bind groups of one set of window buffers.
+pub struct BindGroups {
+    pub world: wgpu::BindGroup,
+    pub sim: wgpu::BindGroup,
+    pub args: wgpu::BindGroup,
 }
 
 fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -282,6 +364,16 @@ fn pipeline(
     module: &wgpu::ShaderModule,
     entry_point: &'static str,
 ) -> Result<wgpu::ComputePipeline, PipelineError> {
+    pipeline_with(context, layout, module, entry_point, &[])
+}
+
+fn pipeline_with(
+    context: &GpuContext,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entry_point: &'static str,
+    constants: &[(&str, f64)],
+) -> Result<wgpu::ComputePipeline, PipelineError> {
     let device = context.device();
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -289,7 +381,10 @@ fn pipeline(
         layout: Some(layout),
         module,
         entry_point: Some(entry_point),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants,
+            ..wgpu::PipelineCompilationOptions::default()
+        },
         cache: None,
     });
     match futures_lite::future::block_on(scope.pop()) {
@@ -304,7 +399,7 @@ fn pipeline(
 impl Pipelines {
     pub fn create(context: &GpuContext, fault_injection: bool) -> Result<Self, PipelineError> {
         let device = context.device();
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let world_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("world"),
             entries: &[
                 uniform(0, false, crate::layout::TickParams::BYTES),
@@ -315,70 +410,156 @@ impl Pipelines {
                 storage(5, true),
                 storage(6, false),
                 storage(7, false),
+                storage(8, false),
+                storage(9, false),
             ],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("world"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
+        let sim_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material phases"),
+            entries: &[
+                uniform(0, false, crate::layout::TickParams::BYTES),
+                storage(1, false),
+                storage(2, true),
+                storage(3, false),
+                storage(4, false),
+                storage(5, false),
+                storage(6, false),
+            ],
         });
+        let args_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("dispatch arguments"),
+            entries: &[storage(0, false)],
+        });
+        let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: groups,
+                immediate_size: 0,
+            })
+        };
+        let world_pipeline_layout = layout("world", &[Some(&world_layout)]);
+        let sim_pipeline_layout = layout("material phases", &[Some(&sim_layout)]);
+        let args_pipeline_layout = layout(
+            "dispatch arguments",
+            &[Some(&sim_layout), Some(&args_layout)],
+        );
+
         let world = compile(context, &shader::world_assembly())?;
-        let begin_tick = pipeline(context, &layout, &world, "begin_tick")?;
-        let apply_edit = pipeline(context, &layout, &world, "apply_edit")?;
-        let query_column = pipeline(context, &layout, &world, "query_column")?;
-        let mut created = 3;
-        let flood_events = if fault_injection {
+        let sim = compile(context, &shader::sim_assembly())?;
+        let w = |entry| pipeline(context, &world_pipeline_layout, &world, entry);
+        let m = |entry| pipeline(context, &sim_pipeline_layout, &sim, entry);
+        let a = |entry| pipeline(context, &args_pipeline_layout, &sim, entry);
+        let begin_tick = w("begin_tick")?;
+        let apply_edit = w("apply_edit")?;
+        let query_column = w("query_column")?;
+        let measure_totals = w("measure_totals")?;
+        let scan_tiles = m("scan_tiles")?;
+        let wake_tiles = m("wake_tiles")?;
+        let propose = m("propose")?;
+        let resolve = m("resolve")?;
+        let react = m("react")?;
+        let commit = m("commit")?;
+        let candidate_args = a("candidate_args")?;
+        let process_args = a("process_args")?;
+        let mut created = 12;
+        let (flood_events, react_unmatched) = if fault_injection {
             let faults = compile(context, &shader::fault_assembly())?;
-            created += 1;
-            Some(pipeline(context, &layout, &faults, "flood_events")?)
+            created += 2;
+            (
+                Some(pipeline(
+                    context,
+                    &world_pipeline_layout,
+                    &faults,
+                    "flood_events",
+                )?),
+                Some(pipeline_with(
+                    context,
+                    &sim_pipeline_layout,
+                    &sim,
+                    "react",
+                    &[("fault_unmatched_transfer", 1.0)],
+                )?),
+            )
         } else {
-            None
+            (None, None)
         };
         Ok(Self {
-            bind_group_layout,
+            world_layout,
+            sim_layout,
+            args_layout,
             begin_tick,
             apply_edit,
             query_column,
+            measure_totals,
+            scan_tiles,
+            candidate_args,
+            wake_tiles,
+            process_args,
+            propose,
+            resolve,
+            react,
+            commit,
             flood_events,
+            react_unmatched,
             created,
         })
     }
 
-    pub fn bind_group(
+    pub fn bind_groups(
         &self,
         context: &GpuContext,
         fixed: &FixedBuffers,
         window: &WindowBuffers,
-    ) -> wgpu::BindGroup {
+    ) -> BindGroups {
         fn whole(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
                 binding,
                 resource: buffer.as_entire_binding(),
             }
         }
-        context
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("world"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    whole(0, &fixed.tick_params),
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &fixed.dispatch_params,
-                            offset: 0,
-                            size: NonZeroU64::new(DispatchParams::BYTES),
-                        }),
-                    },
-                    whole(2, &fixed.commands),
-                    whole(3, &window.cells),
-                    whole(4, &window.window_map),
-                    whole(5, &window.slot_records),
-                    whole(6, &fixed.results),
-                    whole(7, &fixed.events),
-                ],
-            })
+        let device = context.device();
+        let world = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("world"),
+            layout: &self.world_layout,
+            entries: &[
+                whole(0, &fixed.tick_params),
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &fixed.dispatch_params,
+                        offset: 0,
+                        size: NonZeroU64::new(DispatchParams::BYTES),
+                    }),
+                },
+                whole(2, &fixed.commands),
+                whole(3, &window.cells),
+                whole(4, &window.window_map),
+                whole(5, &window.slot_records),
+                whole(6, &fixed.results),
+                whole(7, &fixed.events),
+                whole(8, &window.activity),
+                whole(9, &fixed.diagnostics),
+            ],
+        });
+        let sim = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material phases"),
+            layout: &self.sim_layout,
+            entries: &[
+                whole(0, &fixed.tick_params),
+                whole(1, &window.cells),
+                whole(2, &window.window_map),
+                whole(3, &window.flow),
+                whole(4, &window.scratch),
+                whole(5, &window.activity),
+                whole(6, &fixed.diagnostics),
+            ],
+        });
+        let args = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dispatch arguments"),
+            layout: &self.args_layout,
+            entries: &[whole(0, &fixed.dispatch_args)],
+        });
+        BindGroups { world, sim, args }
     }
 }
 

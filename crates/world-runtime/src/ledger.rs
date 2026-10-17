@@ -79,8 +79,12 @@ pub struct LedgerSummary {
     pub observation_age_ticks: Series,
     /// Wall time from a tick's submission to its results being decoded, in milliseconds.
     pub tick_latency_ms: Series,
-    /// Device time of the command pass, in milliseconds, when timestamps are available.
+    /// Device time of the whole tick, in milliseconds, when timestamps are available.
     pub gpu_time_ms: Series,
+    /// Ticks whose material phases did not balance their accounting or saw an inconsistent
+    /// transfer, and the latest such tick: an important error, never a cosmetic one.
+    pub inconsistent_ticks: u64,
+    pub last_inconsistent_tick: Option<Tick>,
     pub cosmetic_received: u64,
     /// Cosmetic events the device could not record.
     pub cosmetic_dropped_on_device: u64,
@@ -181,6 +185,14 @@ impl OutcomeLedger {
                 if let Some(gpu_time) = report.gpu_time {
                     self.summary.gpu_time_ms.add(millis(gpu_time));
                 }
+                if !report.cells.consistent() {
+                    self.summary.inconsistent_ticks += 1;
+                    self.summary.last_inconsistent_tick = Some(
+                        self.summary
+                            .last_inconsistent_tick
+                            .map_or(report.tick, |seen| seen.max(report.tick)),
+                    );
+                }
                 if self.last_tick.is_none_or(|last| report.tick >= last.tick) {
                     self.last_tick = Some(report);
                 }
@@ -243,7 +255,7 @@ mod tests {
     use super::*;
     use crate::{
         ids::CommandId,
-        port::{CommandResult, SupportedCommands},
+        port::{CellReport, CommandResult, SupportedCommands},
     };
 
     fn report(tick: u64) -> Outcome {
@@ -251,10 +263,49 @@ mod tests {
             tick: Tick::new(tick),
             commands: 0,
             gpu_time: None,
+            phases: None,
             latency: Duration::from_millis(3),
             upload_bytes: 0,
             readback_bytes: 0,
+            cells: CellReport::default(),
         })
+    }
+
+    #[test]
+    fn an_unbalanced_tick_is_counted_as_inconsistent() {
+        let mut ledger = OutcomeLedger::new(0, 0);
+        let mut receipts = Receipts::new(1);
+        let balanced = CellReport {
+            fluid_in: 10,
+            fluid_out: 14,
+            boil: 4,
+            solid_in: 3,
+            quench: 0,
+            solid_out: 3,
+            ..CellReport::default()
+        };
+        assert!(balanced.consistent());
+        let lost = CellReport {
+            fluid_out: 1,
+            ..CellReport::default()
+        };
+        assert_eq!(lost.imbalance(), (-1, 0));
+        let stale = CellReport {
+            stale_flow: 1,
+            ..CellReport::default()
+        };
+        for (tick, cells) in [(1, balanced), (2, lost), (3, stale), (4, balanced)] {
+            let Outcome::TickCompleted(report) = report(tick) else {
+                unreachable!()
+            };
+            ledger.consume(
+                Outcome::TickCompleted(TickReport { cells, ..report }),
+                &mut receipts,
+                None,
+            );
+        }
+        assert_eq!(ledger.summary().inconsistent_ticks, 2);
+        assert_eq!(ledger.summary().last_inconsistent_tick, Some(Tick::new(3)));
     }
 
     #[test]

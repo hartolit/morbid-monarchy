@@ -1,9 +1,5 @@
-// The bindings every world kernel shares (one bind group, one pipeline layout), and the
-// helpers that address resident cells.
-//
-// Coordinates are window-local cells. The window map holds one slot index per window chunk,
-// row-major, or SLOT_NONE for a chunk that is not resident; such a chunk is a closed boundary,
-// never the contents of a recycled slot.
+// The bindings every command kernel shares (one bind group, one pipeline layout). Cell and tile
+// addressing is in shared/window.wgsl.
 
 struct EventRing {
     header: EventHeader,
@@ -18,22 +14,8 @@ struct EventRing {
 @group(0) @binding(5) var<storage, read> slot_records: array<ChunkSlotRecord>;
 @group(0) @binding(6) var<storage, read_write> results: array<ResultRecord>;
 @group(0) @binding(7) var<storage, read_write> events: EventRing;
-
-// The slot holding window-local cell `local`, or SLOT_NONE.
-fn resident_slot(local: vec2<i32>) -> u32 {
-    let extent = vec2<i32>(vec2<u32>(tick.window_width, tick.window_height) * CHUNK_SIZE);
-    if (any(local < vec2<i32>(0)) || any(local >= extent)) {
-        return SLOT_NONE;
-    }
-    let chunk = vec2<u32>(local) / CHUNK_SIZE;
-    return window_slots[chunk.y * tick.window_width + chunk.x];
-}
-
-// Index of window-local cell `local` inside `slot`.
-fn cell_index(slot: u32, local: vec2<i32>) -> u32 {
-    let within = vec2<u32>(local) % CHUNK_SIZE;
-    return slot * CHUNK_CELLS + within.y * CHUNK_SIZE + within.x;
-}
+@group(0) @binding(8) var<storage, read_write> activity: array<atomic<u32>>;
+@group(0) @binding(9) var<storage, read_write> diagnostics: array<atomic<u32>>;
 
 // Appends a cosmetic event, or counts it as dropped when the tick's buffer is full. `count`
 // grows with every attempt, so the consumer can check that `dropped` accounts for the excess.

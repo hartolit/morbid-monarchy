@@ -271,12 +271,18 @@ pub(super) fn empty_batches(adapter: &str, check: &mut Check) -> Result<(), Stri
         .windows(2)
         .all(|pair| pair[1].tick.value() == pair[0].tick.value() + 1);
     check.that(ordered, || "ticks were not completed in order".to_owned());
+    // Tick parameters (128), the event header reset (16) and the wake-request word (4) up; the
+    // event buffer (16 + 64 x 16) and the diagnostics record (144) back.
     let events = 16 + 64 * 16;
-    check.equal("upload bytes per empty tick", ticks[0].upload_bytes, 80);
+    check.equal(
+        "upload bytes per empty tick",
+        ticks[0].upload_bytes,
+        128 + 16 + 4,
+    );
     check.equal(
         "readback bytes per empty tick",
         ticks[0].readback_bytes,
-        events,
+        events + 144,
     );
     Ok(())
 }

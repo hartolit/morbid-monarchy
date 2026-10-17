@@ -1,8 +1,9 @@
 //! Controlled fault injection for conformance runs.
 //!
 //! A session opened with fault injection enabled hands out a [`FaultController`]. Through it a
-//! test can lose the device, hold or reorder map deliveries, hold submission completions, and
-//! flood the cosmetic event buffer. Each fault exercises the production path that handles the
+//! test can lose the device, hold or reorder map deliveries, hold submission completions, flood
+//! the cosmetic event buffer, and run `react` built to drop what liquid receivers accept (an
+//! unmatched transfer, which the accounting must detect). Each fault exercises the production path that handles the
 //! real event: the device really is destroyed, deliveries really wait in the mailbox, and the
 //! flood appends through the same `push_event` the physical kernels use. No production check is
 //! relaxed to make a fault possible, and a session opened without fault injection has no
@@ -22,6 +23,7 @@ pub(crate) struct FaultSwitches {
     reverse_deliveries: AtomicBool,
     hold_completions: AtomicBool,
     flood_events: AtomicU32,
+    unmatched_transfers: AtomicBool,
 }
 
 impl FaultSwitches {
@@ -44,6 +46,10 @@ impl FaultSwitches {
     /// Events the next tick appends; consumed by that tick.
     pub(crate) fn take_flood(&self) -> u32 {
         self.flood_events.swap(0, Ordering::Relaxed)
+    }
+
+    pub(crate) fn unmatched_transfers(&self) -> bool {
+        self.unmatched_transfers.load(Ordering::Relaxed)
     }
 }
 
@@ -76,5 +82,11 @@ impl FaultController {
     /// Makes the next tick append `events` cosmetic events.
     pub fn flood_events(&self, events: u32) {
         self.0.flood_events.store(events, Ordering::Relaxed);
+    }
+
+    /// Runs the material phases with receivers dropping the liquid they accept while donors
+    /// still drain it, until switched off: a deliberately unmatched transfer.
+    pub fn unmatched_transfers(&self, on: bool) {
+        self.0.unmatched_transfers.store(on, Ordering::Relaxed);
     }
 }
