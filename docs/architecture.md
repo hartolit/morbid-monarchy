@@ -36,13 +36,13 @@ This is the source at `a9c1539` with the changes of 01 and 02; the sprint
 [source audit](development/virtual-office/gpu-transition/source-audit.md) lists the symbols. Each
 row describes current behavior that the target replaces, except the rows naming `world-model`,
 `world-runtime` and `gpu-world`, which are already the target owners. None of it is a second
-supported path: the GPU owner of 02 executes commands and transfers headlessly and does not
-simulate yet, and the baseline application does not use it.
+supported path: the GPU owner executes commands, transfers (02) and the material phases (03)
+headlessly, and the baseline application does not use it.
 
 | Responsibility | Current owner and behavior | Target owner |
 | --- | --- | --- |
-| Cell meaning, materials, coordinates, units, supported settings, generation | `world-model` since 01 (`cell`, `material`, `spatial`, `units`, `config`, `body`, `generation`). The engine, application and evidence runner import it; none keeps its own copy. Commands and observations exist with the evidence driver as their first consumer | `world-model` |
-| Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update` | `gpu-world` |
+| Cell meaning, materials, coordinates, units, supported settings, generation | `world-model` since 01 (`cell`, `material`, `spatial`, `units`, `config`, `body`, `generation`; `rules` since 03: the automaton's switches, cadences, constants, wake levels and keyed hashes). The engine, application, GPU owner (through generated declarations) and evidence runner import it; none keeps its own copy. Commands and observations exist with the evidence driver as their first consumer | `world-model` |
+| Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update`, reading its constants and hashes from `world_model::rules` since 03. The GPU owner runs the same rules since 03, unused by the application | `gpu-world` |
 | Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid | `gpu-world`; ECS keeps identity and a `BodyHandle` |
 | Observer, brushes, picking, statistics | `core/entities/observer.rs` and `morbid-app` `runtime/{input,dev_tools}` read and write the CPU grid directly | Intent in `world-runtime`; queries, edits and reductions in `gpu-world`; UI in `morbid-app` |
 | Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs` over `world_model::spatial` keys; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
@@ -50,8 +50,8 @@ simulate yet, and the baseline application does not use it.
 | Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
 | Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
 | Runtime orchestration | `world-runtime` since 02: identities, the `PhysicalWorld` port, bounded receipts, the outcome ledger, the fixed clock and a standalone `bevy_ecs` runtime. Its consumers are the `transfers` suite now and the native client from 06; the baseline keeps its own Bevy schedule | `world-runtime` |
-| GPU execution | `gpu-world` since 02: one device context and submission timeline, checked resource plans, generated layouts, assembled WGSL, chunk slots, ordered brush edits and column queries, bounded staging, loss and stop handling. No physical rule runs on it before 03 | `gpu-world` |
-| Evidence | `monarchy-evidence` (01, 02): docs/static/CPU lanes, shader validation, adapter inspection, the `transfers` GPU suite, the frozen scenarios and the baseline driver; tests and suite cases registered in `coverage.toml` | `monarchy-evidence` |
+| GPU execution | `gpu-world` since 02: one device context and submission timeline, checked resource plans, generated layouts, assembled WGSL, chunk slots, ordered brush edits and column queries, bounded staging, loss and stop handling. Since 03 the material phases with sparse tile scheduling, configuration and totals commands, and per-tick accounting; bodies follow in 04 | `gpu-world` |
+| Evidence | `monarchy-evidence` (01–03): docs/static/CPU lanes, shader validation, adapter inspection, the `transfers` and `cells` GPU suites, the CPU reference of the cell rules, the frozen scenarios and the baseline driver; tests and suite cases registered in `coverage.toml` | `monarchy-evidence` |
 
 Cells, bodies and the observer are unordered `Update` systems. The only thing that serializes them
 is that each takes `ResMut<ActiveWorldGrid>`. The [one physical tick](#one-physical-tick) below
@@ -64,12 +64,12 @@ apps/morbid/                     package morbid-app; native composition
   src/{main,application,input,ui,assets}.rs
   assets/                       runtime art, fonts, UI and imported assets
 crates/world-model/             framework-free semantic values and generation (exists since 01)
-  src/{cell,material,spatial,units,config,body,command,observation,generation}.rs
+  src/{cell,material,rules,spatial,units,config,body,command,observation,generation}.rs
 crates/world-runtime/           CPU orchestration and consumer-owned ports (exists since 02)
   src/{ids,port,receipts,ledger,clock,runtime}.rs; residency, checkpoint and workers from 05
 adapters/gpu-world/             GPU execution of the physical world (exists since 02)
   src/{context,plan,layout,shader,resources,staging,slots,commands,readback,world,faults}.rs
-  shaders/{shared,world,faults}/; cell and body kernels from 03 and 04
+  shaders/{shared,world,sim,faults}/; the material kernels (sim/) since 03, body kernels from 04
   (contracts run on a device as `cargo evidence test gpu`, not as cargo tests: CI has no GPU)
 adapters/world-store/           saved-world format and redb mechanism
   src/{format,store,legacy}.rs

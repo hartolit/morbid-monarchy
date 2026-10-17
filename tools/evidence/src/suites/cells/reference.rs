@@ -1009,10 +1009,12 @@ impl ReferenceWorld {
                 let mut changed = cell != old;
                 diagnostics.changed_cells += u64::from(changed);
                 if active && !changed {
+                    // The baseline's keep-alive, each only while its rule runs (03).
                     let surface = cell.surface_mat();
-                    changed = (surface == SurfaceMat::SURFACE_FOLIAGE
+                    changed = (self.rules.biology
+                        && surface == SurfaceMat::SURFACE_FOLIAGE
                         && cell.surface_state() < FOLIAGE_MATURE_STATE)
-                        || surface == SurfaceMat::SURFACE_FIRE
+                        || (self.rules.fire && surface == SurfaceMat::SURFACE_FIRE)
                         || step.phase_pending;
                 }
                 if changed {

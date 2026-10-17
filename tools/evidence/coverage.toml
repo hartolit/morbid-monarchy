@@ -1768,3 +1768,13 @@ origin = "transition"
 expectation = "A radius-16 window woken by a climate change processes all 69,696 tiles and 4,460,544 cells, split across dispatch rows, and sparse and dense agree for three ticks."
 destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
 determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.activity-measurement"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "activity-measurement"
+origin = "transition"
+expectation = "At radius 6 on generated terrain, an idle sparse window visits no tile, dense visits all 10,816 every tick, mixed and growing activity visit a fraction, a woken tick visits all; every tick balances, no buffer is created and no frame wait occurs; pass times, encode time, bytes by purpose and allocations are reported."
+destination = "gpu-world material phases on the selected adapter (03); the hardware measurement of record"
+determinism = "exact"

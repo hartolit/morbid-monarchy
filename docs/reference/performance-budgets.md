@@ -1,7 +1,7 @@
 # Performance budgets
 
-**Frozen qualification contract, the measured baseline (01) and the measured transfer lifecycle
-(02).** 00 adopted the evidence policy in
+**Frozen qualification contract, the measured baseline (01), the measured transfer lifecycle
+(02) and the material phases' resources and software-adapter measurement (03).** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -170,8 +170,66 @@ staging is 2,213,824 B (2.1 MiB) at every radius; fixed device buffers are 91,21
 A resize keeps the old window buffers until the migrating submission completes: measured radius 1
 to radius 2, 2,600,276 B before, 3,125,140 B after, 3,420,376 B at the peak, which is the old total
 plus the new window's buffers, released afterwards. The CPU staging working set (2.1 MiB) is
-within the 64 MiB budget; 03 adds activity and scratch to the terrain account and 05 the snapshot
-image, against the same envelope.
+within the 64 MiB budget; 03 added flow, scratch and activity to the terrain account
+([below](#material-phases-03)) and 05 adds the snapshot image, against the same envelope.
+
+## Material phases (03)
+
+**Resources.** The material phases add three window buffers and two fixed ones to the plan
+(`gpu_world::plan`): flow words (a proposal and a resolution, 8 B per cell), scratch cells (8 B per
+cell), the activity buffer (a 16-word header, one wake-request word per chunk, candidate and
+process lists with room for every tile, and a 64-byte record per 8 × 8 tile: 1.125 B per cell),
+the dispatch-argument buffer (24 B) and the diagnostics buffer (144 B plus 96 B per command
+position, 24,720 B). Terrain-related state is `25.125 N + 40 C + 64` bytes for `N` cells and `C`
+chunks, against the `48 N + 64 C` envelope; nothing in it is appended, so it cannot overflow at
+full activity. Calculated from the plan (the radius-6 values are also the measured plan of the
+run below):
+
+| Equal radius | Terrain-related bytes | Envelope | Device bytes requested (timestamps off) |
+| --- | ---: | ---: | ---: |
+| 6 | 17,398,952 | 33,237,568 | 19,828,080 |
+| 16 | 112,114,792 | 214,175,808 | 114,543,920 |
+| 32 | 434,972,264 | 830,939,200 | 437,401,392 |
+
+The largest single buffer and binding are unchanged: flow and scratch are the size of the cell
+array, 138,444,800 B at radius 32, the binding the device is already asked for. A resize keeps
+the old flow, scratch and activity buffers with the old cells until the migration completes.
+
+**Per-tick traffic.** Each tick uploads 148 B without commands (tick parameters 128, event header
+16, one wake-request word 4) plus 48 B per command and 36 + 4 B per slot change, and reads back
+1,232 B without commands (events 1,040, diagnostics 144, timestamps 48 when enabled) plus 48 B per
+command and 96 B per totals command; device-side clears of the list counts, the chunk wake
+requests and the diagnostics are `64 + 4 C + 144` B, plus 4,096 B per activated chunk. The
+material passes write 16 B per awake cell (flow words and scratch) and 8 B per changed cell
+(commit) in sparse execution, and 24 B per resident cell in dense execution.
+
+**Measured on a software adapter, not hardware.** The RTX 5070 Ti was unavailable for all of 03:
+its kernel module (615.71.09) and userspace driver (615.78.08) mismatched after a package update
+without a reboot, so Vulkan enumerated no NVIDIA adapter. The `activity-measurement` case of the
+`cells` suite ran on Mesa llvmpipe (`gl-10005-0000`, LLVM 23.1.1, 256-bit; wgpu GL backend) at the
+qualification window (radius 6, 10,816 tiles, generated terrain, seed 69), 40 ticks per scenario
+after 10 warm-up ticks, one tick in flight. llvmpipe executes compute on CPU threads during the
+submit call, so its "encode" time includes the work and its pass timestamps are CPU-emulation
+times; neither is evidence about the GPU target. What the run does establish is structural:
+
+| Scenario | Tiles visited | Awake cells per tick | Material pass (llvmpipe, median) | Activity pass (llvmpipe, median) |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse, idle (settled, deterministic rules) | 0 | 0 | 0.19 ms | 0.22 ms |
+| Sparse, mixed (8 water strokes a tick) | 1,845 (17%) | 95,878 | 6.8 ms | 0.94 ms |
+| Sparse, growing (every rule, foliage spreading) | 8,619 (80%) | 500,653 | 19.1 ms | 3.2 ms |
+| Sparse, full (a climate change every tick) | 10,816 | 692,224 | 26.0 ms | 3.3 ms |
+| Dense, idle | 10,816 | 0 | 6.6 ms | 4.7 ms |
+| Dense, full | 10,816 | 692,224 | 26.1 ms | 3.3 ms |
+
+An idle sparse world visits no tile and touches no cell (the scan reads one word per tile); dense
+execution visits every tile every tick; sparse at full activity is no cheaper than dense, as
+expected (26.0 against 26.1 ms here). Every measured tick balanced its accounting, no buffer was
+created and no frame wait occurred; process allocations were 139–178 per tick, inside wgpu and the
+GL driver. The run's identity and every metric are in the case's JSON under the suite's run
+directory (`target/evidence/<run>/gpu-cells/activity-measurement.json` on the measuring machine). The hardware
+measurement of record, and any rework of hot spots it shows, need the nominated adapter: rerun
+`cargo evidence test gpu --suite cells --adapter vulkan-10de-2c05` once the driver loads. The 02
+transfer measurement above was taken before the material phases existed and is not re-measured.
 
 ## Structural gates
 

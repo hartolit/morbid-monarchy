@@ -78,6 +78,19 @@ stable throughout extraction.
 | The mixed scenario's lava brush (radius 3, strength 6, every 2 ticks) pours into the lake that the climate swing freezes; by tick 1300 a column stands far above the surrounding ice ([visual reference](../../../../tools/evidence/baselines/legacy-visual/README.md)). Inference from the rules, not a cell readout: `inject_fluid` lets injected magma take a column over, and the quench rule turns resident magma into stone bedrock of the same height, so each stroke raises the bedrock instead of spreading. The column climbs towards the 4,095 elevation ceiling, where the documented quench defect deletes magma. The frozen mixed case therefore exercises the ceiling during measurement. | 03 decides how injected magma spreads and quenches, and corrects the ceiling accounting; it records the change of behavior and keeps this case. |
 | Bevy's default `WinitSettings::game()` updates an unfocused window at 60 Hz. Measurement windows override it to update continuously; the interactive application keeps the default. | 06 chooses the native client's unfocused policy explicitly. |
 
+### Resolved in 03
+
+| Row above | Outcome |
+| --- | --- |
+| `grid.rs` `swap_buffers` full copy; `run_simulation_tick` full traversal | The GPU material phases visit only tiles with an awake cell and commit only awake cells; an idle window visits none. The baseline engine is unchanged. |
+| `liquid_sim`/`granular_sim` reconstructing neighbours' preferences | Each transfer is proposed once, resolved by its receiver against its capacity and committed with the accepted amount at both ends. The CPU reference keeps the gather form, as an independent formulation. |
+| `quench` ceiling loss | Fixed at the owner, `WorldCell::quench` and `receive_fluid`, with independent fixtures; the GPU rules mirror them. |
+| Thread-seeded `SmallRng` | Keyed draws from the rule seed, position, tick and salt, recorded as a semantic change. |
+| Streamed chunks never woken | Activation wakes the chunk and its boundary dependants; retirement wakes its border. |
+| Mixed scenario's injected magma at the ceiling | The tool rule is kept; quench now leaves the remainder liquid at the ceiling instead of deleting it. |
+
+The rule changes are listed in the [GPU contract](../../../reference/gpu-contract.md#rule-changes-from-the-baseline-03).
+
 ### Calculated scale, not measured traffic
 
 For radius r on both axes, cell count is `N = (2*r + 1)^2 * 64^2`, and one packed payload is `8*N`

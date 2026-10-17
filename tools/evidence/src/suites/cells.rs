@@ -8,6 +8,7 @@
 pub mod adversarial;
 pub mod clock;
 pub mod intentions;
+pub mod measure;
 pub mod probes;
 pub mod reference;
 pub mod scale;
@@ -165,5 +166,10 @@ pub const CASES: &[Case] = &[
         name: "full-activity-dispatch-split",
         summary: "69,696 woken tiles split across dispatch dimensions, sparse and dense agree",
         run: scale::full_activity_dispatch_split,
+    },
+    Case {
+        name: "activity-measurement",
+        summary: "idle, mixed and full activity at radius 6, sparse and dense: passes, bytes, encode time",
+        run: measure::activity_measurement,
     },
 ];

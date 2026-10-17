@@ -4,8 +4,8 @@ This document owns how evidence is collected and what it establishes. Commands a
 [workflow](workflow.md); timing/resource values are owned by
 [performance budgets](../reference/performance-budgets.md). 01 delivered the documentation,
 static and CPU lanes, adapter inspection and the baseline benchmark; 02 the shader validation
-item and the `transfers` GPU suite. The other GPU suites and the connected scenario are pending,
-and workflow lists each command's state. An unimplemented or unavailable suite cannot return
+item and the `transfers` GPU suite; 03 the `cells` GPU suite. The other GPU suites and the
+connected scenario are pending, and workflow lists each command's state. An unimplemented or unavailable suite cannot return
 success.
 
 ## Evidence lanes
@@ -77,7 +77,8 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 | A shader error reported at the wrong file or line | 02 | `gpu-world` `shader::tests::errors_point_at_the_module_file_and_line` |
 | A GPU result naming another command or tick | 02 | `gpu-world` `readback::tests::a_result_from_another_command_or_tick_is_rejected_without_partial_outcomes` |
 | A dependency another workspace member's features add | 02 | `monarchy-evidence` `checks::contracts::tests` |
-| Unmatched donor/receiver transfer | 03 | pending |
+| Unmatched donor/receiver transfer | 03 | `cells` GPU suite, `unmatched-transfer-detected` (a `react` built to drop accepted liquid: unbalanced ticks, reference mismatch, lost volume) |
+| A sparse schedule missing a dependency | 03 | `cells` `dense-sparse-agreement`, `sleeping-receivers`, `seam-flow` (dense execution and the CPU reference disagree with a wrong wake reach) |
 | Stale slot generation | 02 | `gpu-world` `slots::tests`; `transfers` `stale-session-and-slot`, `resize-success-and-refusal`, `device-loss-and-recreation` |
 | Stale body generation | 04 | pending |
 | Missing event overflow signal | 02 | `gpu-world` `readback::tests::a_missing_overflow_signal_is_rejected`; `transfers` `event-overflow-and-reset` (04 adds its producers) |

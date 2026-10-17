@@ -437,16 +437,20 @@ mod tests {
     }
 
     #[test]
-    fn every_transfers_case_is_registered() {
+    fn every_transfers_and_cells_case_is_registered() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = Registry::load(&root.join("coverage.toml")).expect("registry");
-        let defined: BTreeSet<String> = suites::transfers::CASES
-            .iter()
-            .map(|case| case.name.to_owned())
-            .collect();
-        assert_eq!(
-            registry_problems(&defined, &registered_cases(&registry, GpuSuite::Transfers)),
-            Vec::<String>::new()
-        );
+        for (suite, cases) in [
+            (GpuSuite::Transfers, suites::transfers::CASES),
+            (GpuSuite::Cells, suites::cells::CASES),
+        ] {
+            let defined: BTreeSet<String> = cases.iter().map(|case| case.name.to_owned()).collect();
+            assert_eq!(
+                registry_problems(&defined, &registered_cases(&registry, suite)),
+                Vec::<String>::new(),
+                "{}",
+                suite.name()
+            );
+        }
     }
 }

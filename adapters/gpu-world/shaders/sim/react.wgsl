@@ -399,12 +399,13 @@ fn react(
         if (value_changed) {
             atomicAdd(&sums[SUM_CHANGED], 1u);
         }
-        // An active cell stays awake while foliage grows, fire burns or a phase change waits.
+        // An active cell stays awake while foliage grows, fire burns or a phase change waits,
+        // each only while its rule runs: a rule that is off cannot advance what the cell waits
+        // for, and switching it back on wakes every cell.
         let surface = cell_surface_material(updated);
-        let kept = is_active
-            && ((surface == SURFACE_FOLIAGE && cell_surface_state(updated) < FOLIAGE_MATURE_STATE)
-                || surface == SURFACE_FIRE
-                || reacted.phase_pending);
+        let growing = runs(RULE_BIOLOGY) && surface == SURFACE_FOLIAGE && cell_surface_state(updated) < FOLIAGE_MATURE_STATE;
+        let burning = runs(RULE_FIRE) && surface == SURFACE_FIRE;
+        let kept = is_active && (growing || burning || reacted.phase_pending);
         let word = bitmap_word(within);
         let bit = bitmap_bit(within);
         if (value_changed || kept) {

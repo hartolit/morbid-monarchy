@@ -1,9 +1,10 @@
 # CPU–GPU execution contract
 
-**Implemented in 02 for the command, query and transfer path; physics follows in 03–04.** This
-document owns the semantic obligations. Since 02 the interfaces exist: the port is
-`world_runtime::port`, its GPU implementation `gpu_world::world::GpuWorld`, and the `transfers` GPU
-suite executes this contract on a device. Change this account with the implementation; do not
+**Implemented in 02 for the command, query and transfer path and in 03 for the material
+phases; bodies follow in 04.** This document owns the semantic obligations. Since 02 the
+interfaces exist: the port is `world_runtime::port`, its GPU implementation
+`gpu_world::world::GpuWorld`, and the `transfers` (02) and `cells` (03) GPU suites execute this
+contract on a device. Change this account with the implementation; do not
 maintain a parallel prose-only protocol.
 
 ## Identity and time
@@ -62,16 +63,25 @@ outcome obligations. Coalescing continuous input is allowed before admission; co
 silently delete an already accepted discrete edit.
 
 *Implemented (02).* The live world executes `EditMaterial` (the brush tools, against a centre cell)
-and `QueryColumn`; body, attract/lift and ambient-temperature commands are refused at admission as
-`NotSupported` until 03–04 implement them. Edits have no ray yet: the GPU-resolved hit is 04's.
+and `QueryColumn`; body, attract/lift and ambient-temperature commands were refused at admission
+as `NotSupported` (03 implements the climate command, 04 the rest). Edits have no ray yet: the GPU-resolved hit is 04's.
 Per tick the runtime takes at most `commands_per_tick` (256) queued commands in admission order;
 each has a reserved result record on the device. A stroke runs as one dispatch over its bounding
 square, one invocation per cell, so each cell has one writer; strokes of a tick run as separate
 dispatches in command order. A stroke that misses the window is not dispatched and its cells are
 counted as not resident on the CPU. The edit kernel applies the baseline brush rules
 (`world_model` `inject_fluid` for the liquid tools, fire on dry or oiled columns, sand with
-compaction into sandstone, raise and lower within the elevation range) and marks no activity: 03
-adds wake-up to the same path.
+compaction into sandstone, raise and lower within the elevation range).
+
+*Implemented (03).* The same path executes `SetAmbientTemperature` and `SetSimulationRules`
+(applied by the CPU to the parameters of the tick they arrive in, the last of a kind winning, and
+answered `Configured`) and `MeasureTotals` (a reduction over every resident cell in command
+order, answered with `WorldTotals`). The edit kernel marks every cell it changes as edited, so
+the stroke wakes its reach for the same tick's material phases, and adds what it painted, raised
+or removed to the tick's tool counters. Body, drive, jump, attract and lift commands are still
+refused as `NotSupported` until 04. The runtime can hold a command until a named tick
+(`Runtime::submit_at`), which keeps scripted inputs on their logical tick whatever the frame
+pacing.
 
 ## Cell layout and authority
 
@@ -89,12 +99,14 @@ little-endian 32-bit word, so field `n` is at byte `4n` in both languages:
 
 | Record | Bytes | Use |
 | --- | ---: | --- |
-| `TickParams` | 64 | Uniform: tick, epoch, command count, window size in chunks, capacities, injected events. |
+| `TickParams` | 128 | Uniform: tick, epoch, command count, window size in chunks, capacities, injected events; since 03 the window's lowest key, the rules running this tick, activity and phase flags, phase thresholds, rule tick and key, parity, tile count and the activity buffer's region offsets. |
 | `DispatchParams` | 16 | Uniform, one entry per command position at the uniform offset alignment; entry `i` names command `i`. |
 | `CommandRecord` | 48 | Kind, identity, sequence; edit tool, window-local centre, radius, strength; query cell. |
 | `ResultRecord` | 48 | Identity echo, status, tick, atomic changed / not-resident counts, column words, slot. |
 | `EventHeader`, `EventRecord` | 16, 16 | Cosmetic event buffer: atomic attempt and drop counts, capacity; kind and three words. |
 | `ChunkSlotRecord` | 32 | Absolute key, generation, revision, state of each slot. |
+| `DiagnosticsRecord` | 144 | Per tick (03): the material phases' 64-bit accounting, tool counters, tiles and cells visited, rejected transfers, stale transfer reads and receive mismatches. |
+| `TotalsRecord` | 96 | Per totals command (03): 64-bit fluid volume per fluid material, elevation, loose volume and cells. |
 | `BodyRecord` | 64 | Handle, flags, position, radius, velocity, mass, relative density, submerged fraction; executed by the layout probe, used from 04. |
 
 Kernels see window-local coordinates only: cell `(0, 0)` is the first cell of the window's lowest
@@ -110,7 +122,8 @@ cell words behind this owner after authority transfer.
 
 ## Ordered physical work
 
-This is the initial pass model, to be made concrete and tested in 03–04. Arrows mean producer output
+This is the initial pass model, made concrete for cells in 03 ([cell phases](#cell-phases-03)) and
+to be made concrete for bodies in 04. Arrows mean producer output
 is available to the next consumer, not a CPU wait between phases.
 
 ```text
@@ -167,8 +180,10 @@ substeps after `commit`.
 
 ### Cell phases (03)
 
-*Specification adopted in 03 checkpoint A, before the kernels: the CPU reference in
-`monarchy-evidence` implements it, and the GPU kernels follow in checkpoints B and C.*
+*Implemented (03).* Specified in checkpoint A before any kernel and implemented as specified by
+`gpu_world` (`shaders/sim/`, `shaders/shared/`, `world/tick.rs`); the CPU reference in
+`monarchy-evidence` implements the same rules in the baseline's gather form, and the `cells`
+suite compares the two tick by tick.
 
 The material phases form one tick of the cellular rules described in
 [world format](world-format.md#existing-packed-cell) and owned by `world_model::{cell, material,
@@ -275,6 +290,7 @@ cell, never from a cell download.
 | Quench converts only what fits under the elevation ceiling, and coolant reaching a magma column at the ceiling is refused instead of recursing. | The baseline drained magma before a capacity-limited raise and lost the remainder. Fixed at the owner, `WorldCell::quench` and `receive_fluid`, with an independent fixture. |
 | A receiver accepts only what it can hold; the donor drains the accepted amount. | The baseline donor drained the full proposal even when the receiver raised less bedrock than that at the ceiling. |
 | Changing a simulation rule wakes every resident cell. | The baseline woke only on a temperature change, so a re-enabled rule never resumed in a sleeping region. |
+| Immature foliage and fire keep their cell awake only while biology or fire runs. | With the rule off nothing can advance them, yet the baseline kept them awake for ever: generated terrain (immature foliage) never slept under the deterministic rules, a constant 64% of its tiles at radius 6 (found by the `activity-measurement` case). Switching the rule back on wakes every cell. |
 | Activated chunks wake themselves and their boundary dependants; retiring a chunk wakes its border. | The baseline never woke a streamed chunk (source audit, found while measuring). |
 | Captures hold the cells at the end of the tick. | A completed tick, the boundary a checkpoint needs. |
 
@@ -294,6 +310,14 @@ Logical topology is checked before toroidal addressing. A missing/loading neighb
 simulation boundary for this transition: no flow or body contact may sample the recycled contents
 of its slot. Reactivation wakes boundary dependants. A future open/outflow boundary requires its
 own accounting, not accidental modulo wrapping.
+
+*Implemented (03).* There is no toroidal addressing on the device: kernels address window-local
+cells through the window map, a cell outside the window or in a chunk without a slot is absent to
+every rule, and absolute positions (for the hashes only) are the window's lowest key times 64
+plus the local position, with wrapping arithmetic. Activation and retirement wake the reach of
+the chunk's cells (see [cell phases](#cell-phases-03)); a resize wakes everything once. The
+counts and dispatch arguments never leave the device to schedule work: the per-tick diagnostics
+that report them arrive in the ordinary asynchronous readback.
 
 ### Bodies
 
@@ -371,12 +395,18 @@ changes, the runtime's queue and receipts), stale session or slot, out-of-order 
 invalid payloads, unsupported command kinds, capacity limits (`CapacityLimit` names the resource,
 the request and what is available), stop, loss and fault. A refused request changed nothing.
 `Outcome` carries command outcomes, completed-tick reports, upload activations, ready captures,
-cosmetic events and their overflow, and abandoned obligations with their reason.
+cosmetic events and their overflow, and abandoned obligations with their reason. Since 03 a
+completed-tick report carries the tick's material accounting (`CellReport`: the 64-bit sums, the
+classified sinks, the tool counters, the tiles and cells visited, and the stale-read and mismatch
+counts that must be zero) and, with timestamps, the device time of each of its three passes.
 
 `world_runtime::runtime::Runtime` composes the runtime as a standalone `bevy_ecs` world whose
 schedule runs once per frame: `advance_clock -> submit_due_ticks -> poll_world -> consume_outcomes`.
-Issuers call `Runtime::submit(CommandId, Command)`; residency requests go through the runtime too,
-which reserves room for their outcomes first. The storage port (`ChunkStore`) is created by 05 with
+Issuers call `Runtime::submit(CommandId, Command)`, or `submit_at` with the earliest tick a
+command may apply in; residency requests go through the runtime too, which reserves room for their
+outcomes first. `Runtime::set_clock` changes the tick rate and catch-up cap within their ranges.
+The ledger counts every tick whose material accounting does not balance
+(`LedgerSummary::inconsistent_ticks`), so the error is visible in ordinary operation. The storage port (`ChunkStore`) is created by 05 with
 its first consumer.
 
 ## GPU resource lifecycle
@@ -470,6 +500,8 @@ pressure-injection kernel; contacts and immersion (04) are the first real ones.
 The rings are sized from the budgets: 256 commands and their results are 24 KiB per tick, at most
 96 KiB per presented frame at the default catch-up of four ticks, inside the 256 KiB budget; the
 measured steady payload is in the [performance budgets](performance-budgets.md#measured-transfer-lifecycle-02).
+Since 03 every tick also reads back its 144-byte diagnostics record (and 96 bytes per totals
+command) and uploads one 4-byte word for chunk wake requests: about 0.6 KiB per frame more.
 
 ## Snapshots and completed ticks
 
@@ -489,3 +521,7 @@ CPU emulation alone cannot satisfy this boundary.
 `cargo evidence test gpu --suite transfers --adapter ID` executes these on the named adapter, one
 process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 28 cases
 (`target = "gpu:transfers"`) and what each establishes. Stale body handles wait for bodies (04).
+`--suite cells` (03) executes the material phases: rule probes against world-model, the ten
+baseline simulation intentions, adversarial capacity, ceiling, seam, sleeping-receiver,
+reactivation, rebasing and rollover cases, dense/sparse agreement, the unmatched-transfer
+specimen and the activity measurement, 31 cases (`target = "gpu:cells"`).

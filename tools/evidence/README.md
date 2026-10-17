@@ -12,7 +12,7 @@ test selection is never reported as success.
 | `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; naga validation of every assembled `gpu-world` shader; `cargo deny` with [`deny.toml`](../../deny.toml) and `cargo machete` at their required versions; dependency direction (each package's own resolved closure); toolchain/lock/alias pins; the CI workflow's lanes and checker versions. |
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with the stable `--adapter` identifier `gpu-world` assigns, limits and features. |
-| `test gpu --suite NAME --adapter ID` | `transfers` runs every case of the suite in its own `gpu-suite` process on the named adapter and checks the cases against the registry. Other suites fail explicitly until their stage registers them. |
+| `test gpu --suite NAME --adapter ID` | `transfers` (02) and `cells` (03) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. Other suites fail explicitly until their stage registers them. |
 | `run --scenario NAME --adapter ID` | Fails explicitly until `resident-world` exists. |
 | `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/). |
 | `check all --adapter ID` | Every lane above, without skipping. |

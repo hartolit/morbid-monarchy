@@ -8,11 +8,11 @@ and the consumer of what the live world reports.
 | Module | Owns |
 | --- | --- |
 | `ids` | `WorldId`, `SessionEpoch`, `CommandId`, `Tick`, `ChunkRevision`, and their two-word form. |
-| `port` | `PhysicalWorld` and its batches, tickets, typed refusals, outcomes and counters. |
+| `port` | `PhysicalWorld` and its batches, tickets, typed refusals, outcomes and counters, including each tick's material accounting (`CellReport`). |
 | `receipts` | Bounded receipts: a retry with the same identity applies once, reuse with another command conflicts, acknowledged identities expire. |
-| `ledger` | The outcome consumer: important results (receipts, residency) are reserved and kept; cosmetic events pass a bounded ring with every drop counted. |
-| `clock` | The fixed tick clock and its catch-up cap. |
-| `runtime` | A standalone `bevy_ecs` world and schedule (`advance_clock → submit_due_ticks → poll_world → consume_outcomes`) over a boxed port. |
+| `ledger` | The outcome consumer: important results (receipts, residency) are reserved and kept; cosmetic events pass a bounded ring with every drop counted; ticks whose material accounting does not balance are counted. |
+| `clock` | The fixed tick clock, its catch-up cap and the discarded backlog; reconfigurable within the supported ranges. |
+| `runtime` | A standalone `bevy_ecs` world and schedule (`advance_clock → submit_due_ticks → poll_world → consume_outcomes`) over a boxed port; commands may name the earliest tick they apply in. |
 
 The composition root chooses the port: `cargo evidence test gpu` composes it with
 `gpu_world::world::GpuWorld` headlessly today, and the native application does the same with a

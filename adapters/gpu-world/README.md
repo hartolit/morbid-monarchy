@@ -19,12 +19,21 @@ runtime decides what to ask and when, and this crate decides how the device does
 | `world` | `GpuWorld`: tick encoding (`world/tick.rs`), nonblocking polling, loss and the orderly stop (`world/poll.rs`), residency operations and resize. |
 | `faults` | Fault injection for conformance runs only: device loss, held or reordered deliveries, held completions, event floods. |
 
-Shaders live in `shaders/` (`shared/` cell accessors, `world/` the command kernels, `faults/`
-the pressure-injection kernel). Each assembly starts with the generated declarations, so a
-layout has one owner. `cargo evidence check static` validates every assembly and writes the
-assembled sources to its run directory; `cargo evidence test gpu --suite transfers` executes
-them on an explicit adapter.
+Shaders live in `shaders/`: `shared/` the cell accessors, the rules' hashes and shuffles
+(`rules.wgsl`), the column rules (`column.wgsl`) and window and tile addressing (`window.wgsl`);
+`world/` the command kernels; `sim/` the material phases; `faults/` the pressure-injection
+kernel. Each assembly starts with the generated declarations, which also carry the material
+tables and rule constants generated from `world-model`, so neither a layout nor a rule constant
+has a second copy. `cargo evidence check static` validates every assembly and writes the
+assembled sources to its run directory; `cargo evidence test gpu --suite transfers` and
+`--suite cells` execute them on an explicit adapter.
 
-The command kernels in this stage are the material brush (`apply_edit`, the baseline tools'
-column rules) and the column query. Material simulation (prompt 03) and bodies (04) add kernels
-here and reuse the same tick, command and observation path.
+A tick is three compute passes: the ordered commands (brush edits, column queries, totals
+measurements; configuration commands change the tick's parameters), activity scheduling (which
+8 × 8 tiles to visit and each cell's wake level, with the counts and indirect dispatch arguments
+on the device), and the material phases `propose`, `resolve`, `react`, `commit` (granular flow,
+liquids, erosion, thermal phase changes, quenching, boiling, combustion and growth). The pass and
+resource table is in `docs/reference/gpu-contract.md` ("Cell phases"). `GpuWorldConfig` chooses
+the starting rules and climate, the rule seed, the first tick and sparse or dense execution;
+dense is the maintained reference for the sparse scheduling. Bodies (prompt 04) add their
+substeps after `commit`.
