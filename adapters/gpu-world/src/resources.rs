@@ -7,16 +7,17 @@
 //! once per session from the assembled source and reused for every tick; nothing compiles on the
 //! frame path, and a new device (a new session) compiles them again.
 //!
-//! Three pipeline layouts: the command kernels' (eight storage buffers, WebGPU's default limit),
-//! the material phases' (six), and the argument kernels', which add the indirect-argument buffer
-//! as group 1 so no dispatch binds the buffer it is dispatched from as writable storage.
+//! Five pipeline layouts: the command kernels' (eight storage buffers, WebGPU's default limit),
+//! the material phases' (six), the argument kernels', which add the indirect-argument buffer
+//! as group 1 so no dispatch binds the buffer it is dispatched from as writable storage, the
+//! body commands' (seven) and the body substeps' (eight).
 
 use std::num::NonZeroU64;
 
 use crate::{
     context::{AllocationError, GpuContext},
-    layout::{DispatchParams, GpuRecord},
-    plan::{BufferRole, ResourcePlan},
+    layout::{BodyDispatch, BodyParams, DispatchParams, GpuRecord},
+    plan::{BODY_DISPATCH_ITERATIONS, BufferRole, ResourcePlan},
     shader::{self, Assembly, ShaderDiagnostic},
     slots::SlotTable,
 };
@@ -40,6 +41,7 @@ pub struct WindowBuffers {
     pub flow: wgpu::Buffer,
     pub scratch: wgpu::Buffer,
     pub activity: wgpu::Buffer,
+    pub claims: wgpu::Buffer,
 }
 
 impl WindowBuffers {
@@ -98,11 +100,12 @@ impl WindowBuffers {
         }
         window_map.unmap();
         slot_records.unmap();
-        let mut zeroed = Vec::with_capacity(3);
+        let mut zeroed = Vec::with_capacity(4);
         for (role, label) in [
             (BufferRole::Flow, "flow"),
             (BufferRole::Scratch, "scratch"),
             (BufferRole::Activity, "activity"),
+            (BufferRole::Claims, "body claims"),
         ] {
             let buffer_plan = plan.buffer(role);
             match context.create_buffer(label, buffer_plan.size, buffer_plan.usage, false) {
@@ -115,8 +118,8 @@ impl WindowBuffers {
                 }
             }
         }
-        let [flow, scratch, activity] = <[wgpu::Buffer; 3]>::try_from(zeroed)
-            .unwrap_or_else(|_| unreachable!("three buffers were created"));
+        let [flow, scratch, activity, claims] = <[wgpu::Buffer; 4]>::try_from(zeroed)
+            .unwrap_or_else(|_| unreachable!("four buffers were created"));
         Ok((
             Self {
                 cells,
@@ -125,6 +128,7 @@ impl WindowBuffers {
                 flow,
                 scratch,
                 activity,
+                claims,
             },
             map_plan.size + records_plan.size,
         ))
@@ -138,6 +142,7 @@ impl WindowBuffers {
             self.flow,
             self.scratch,
             self.activity,
+            self.claims,
         ] {
             context.release_buffer(buffer);
         }
@@ -153,12 +158,17 @@ pub struct FixedBuffers {
     pub events: wgpu::Buffer,
     pub diagnostics: wgpu::Buffer,
     pub dispatch_args: wgpu::Buffer,
+    pub bodies: wgpu::Buffer,
+    pub bins: wgpu::Buffer,
+    pub body_params: wgpu::Buffer,
+    pub body_dispatch: wgpu::Buffer,
     pub timestamps: Option<(wgpu::QuerySet, wgpu::Buffer)>,
 }
 
 impl FixedBuffers {
     /// Creates the fixed buffers. The dispatch parameters never change: entry `i` names
-    /// command `i`, written once while mapped at creation.
+    /// command `i`, and body dispatch entry `substep * 16 + iteration` names that pair, both
+    /// written once while mapped at creation. Body slots start zeroed: dead.
     pub fn create(
         context: &mut GpuContext,
         plan: &ResourcePlan,
@@ -194,6 +204,19 @@ impl FixedBuffers {
                 false,
             )?;
             created.push(dispatch_args.clone());
+            let bodies = make(context, BufferRole::Bodies, "bodies", false)?;
+            created.push(bodies.clone());
+            let bins = make(context, BufferRole::Bins, "body bins", false)?;
+            created.push(bins.clone());
+            let body_params = make(context, BufferRole::BodyParams, "body parameters", false)?;
+            created.push(body_params.clone());
+            let body_dispatch = make(
+                context,
+                BufferRole::BodyDispatch,
+                "body dispatch parameters",
+                true,
+            )?;
+            created.push(body_dispatch.clone());
             let timestamps = if plan.timestamps {
                 let resolve = make(
                     context,
@@ -214,6 +237,24 @@ impl FixedBuffers {
                 None
             };
             Ok((
+                [
+                    tick_params,
+                    dispatch_params,
+                    commands,
+                    results,
+                    events,
+                    diagnostics,
+                    dispatch_args,
+                    bodies,
+                    bins,
+                    body_params,
+                    body_dispatch,
+                ],
+                timestamps,
+            ))
+        })();
+        let (
+            [
                 tick_params,
                 dispatch_params,
                 commands,
@@ -221,17 +262,11 @@ impl FixedBuffers {
                 events,
                 diagnostics,
                 dispatch_args,
-                timestamps,
-            ))
-        })();
-        let (
-            tick_params,
-            dispatch_params,
-            commands,
-            results,
-            events,
-            diagnostics,
-            dispatch_args,
+                bodies,
+                bins,
+                body_params,
+                body_dispatch,
+            ],
             timestamps,
         ) = match result {
             Ok(buffers) => buffers,
@@ -255,6 +290,22 @@ impl FixedBuffers {
             .get_mapped_range_mut(..)
             .copy_from_slice(&bytes);
         dispatch_params.unmap();
+        let stride = plan.body_dispatch_stride as usize;
+        let mut body_bytes = vec![0u8; body_dispatch.size() as usize];
+        for (index, entry) in body_bytes.chunks_exact_mut(stride).enumerate() {
+            let index = index as u32;
+            let params = BodyDispatch {
+                substep: index / BODY_DISPATCH_ITERATIONS,
+                iteration: index % BODY_DISPATCH_ITERATIONS,
+                parity: index % 2,
+                reserved0: 0,
+            };
+            params.write_bytes(&mut entry[..BodyDispatch::BYTES as usize]);
+        }
+        body_dispatch
+            .get_mapped_range_mut(..)
+            .copy_from_slice(&body_bytes);
+        body_dispatch.unmap();
         Ok((
             Self {
                 tick_params,
@@ -264,9 +315,13 @@ impl FixedBuffers {
                 events,
                 diagnostics,
                 dispatch_args,
+                bodies,
+                bins,
+                body_params,
+                body_dispatch,
                 timestamps,
             },
-            bytes.len() as u64,
+            (bytes.len() + body_bytes.len()) as u64,
         ))
     }
 
@@ -278,6 +333,10 @@ impl FixedBuffers {
         context.release_buffer(self.events);
         context.release_buffer(self.diagnostics);
         context.release_buffer(self.dispatch_args);
+        context.release_buffer(self.bodies);
+        context.release_buffer(self.bins);
+        context.release_buffer(self.body_params);
+        context.release_buffer(self.body_dispatch);
         if let Some((_, resolve)) = self.timestamps {
             context.release_buffer(resolve);
         }
@@ -305,7 +364,42 @@ pub struct Pipelines {
     pub flood_events: Option<wgpu::ComputePipeline>,
     /// `react` built with `fault_unmatched_transfer`, only in sessions with fault injection.
     pub react_unmatched: Option<wgpu::ComputePipeline>,
+    pub body_layout: wgpu::BindGroupLayout,
+    pub body_command_layout: wgpu::BindGroupLayout,
+    pub body: BodyPipelines,
+    pub body_commands: BodyCommandPipelines,
     pub created: u64,
+}
+
+/// The body substeps' kernels, in the order a substep dispatches them.
+pub struct BodyPipelines {
+    pub bins_clear: wgpu::ComputePipeline,
+    pub body_begin: wgpu::ComputePipeline,
+    pub bins_count: wgpu::ComputePipeline,
+    pub bins_scan: wgpu::ComputePipeline,
+    pub bins_scatter: wgpu::ComputePipeline,
+    pub pairs_count: wgpu::ComputePipeline,
+    pub pairs_position: wgpu::ComputePipeline,
+    pub pairs_velocity: wgpu::ComputePipeline,
+    pub pairs_residual: wgpu::ComputePipeline,
+    pub claims_clear: wgpu::ComputePipeline,
+    pub contact_prepare: wgpu::ComputePipeline,
+    pub contact_apply: wgpu::ComputePipeline,
+    pub contact_response: wgpu::ComputePipeline,
+    pub displace_prepare: wgpu::ComputePipeline,
+    pub displace_apply: wgpu::ComputePipeline,
+    pub body_end: wgpu::ComputePipeline,
+    pub body_observe: wgpu::ComputePipeline,
+}
+
+pub struct BodyCommandPipelines {
+    pub resolve_target: wgpu::ComputePipeline,
+    pub spawn_body: wgpu::ComputePipeline,
+    pub remove_body: wgpu::ComputePipeline,
+    pub drive_body: wgpu::ComputePipeline,
+    pub jump_body: wgpu::ComputePipeline,
+    pub attract_bodies: wgpu::ComputePipeline,
+    pub lift_bodies: wgpu::ComputePipeline,
 }
 
 /// The bind groups of one set of window buffers.
@@ -313,6 +407,8 @@ pub struct BindGroups {
     pub world: wgpu::BindGroup,
     pub sim: wgpu::BindGroup,
     pub args: wgpu::BindGroup,
+    pub bodies: wgpu::BindGroup,
+    pub body_commands: wgpu::BindGroup,
 }
 
 fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -430,6 +526,38 @@ impl Pipelines {
             label: Some("dispatch arguments"),
             entries: &[storage(0, false)],
         });
+        let body_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("body substeps"),
+            entries: &[
+                uniform(0, false, crate::layout::TickParams::BYTES),
+                uniform(1, false, BodyParams::BYTES),
+                uniform(2, true, BodyDispatch::BYTES),
+                storage(3, false),
+                storage(4, true),
+                storage(5, false),
+                storage(6, false),
+                storage(7, false),
+                storage(8, false),
+                storage(9, false),
+                storage(10, false),
+            ],
+        });
+        let body_command_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("body commands"),
+                entries: &[
+                    uniform(0, false, crate::layout::TickParams::BYTES),
+                    uniform(1, true, DispatchParams::BYTES),
+                    uniform(2, false, BodyParams::BYTES),
+                    storage(3, true),
+                    storage(4, false),
+                    storage(5, true),
+                    storage(6, true),
+                    storage(7, false),
+                    storage(8, false),
+                    storage(9, false),
+                ],
+            });
         let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
@@ -443,6 +571,8 @@ impl Pipelines {
             "dispatch arguments",
             &[Some(&sim_layout), Some(&args_layout)],
         );
+        let body_pipeline_layout = layout("body substeps", &[Some(&body_layout)]);
+        let body_command_pipeline_layout = layout("body commands", &[Some(&body_command_layout)]);
 
         let world = compile(context, &shader::world_assembly())?;
         let sim = compile(context, &shader::sim_assembly())?;
@@ -461,7 +591,46 @@ impl Pipelines {
         let commit = m("commit")?;
         let candidate_args = a("candidate_args")?;
         let process_args = a("process_args")?;
-        let mut created = 12;
+        let bodies = compile(context, &shader::body_assembly())?;
+        let body_commands = compile(context, &shader::body_command_assembly())?;
+        let s = |entry| pipeline(context, &body_pipeline_layout, &bodies, entry);
+        let c = |entry| {
+            pipeline(
+                context,
+                &body_command_pipeline_layout,
+                &body_commands,
+                entry,
+            )
+        };
+        let body = BodyPipelines {
+            bins_clear: s("bins_clear")?,
+            body_begin: s("body_begin")?,
+            bins_count: s("bins_count")?,
+            bins_scan: s("bins_scan")?,
+            bins_scatter: s("bins_scatter")?,
+            pairs_count: s("pairs_count")?,
+            pairs_position: s("pairs_position")?,
+            pairs_velocity: s("pairs_velocity")?,
+            pairs_residual: s("pairs_residual")?,
+            claims_clear: s("claims_clear")?,
+            contact_prepare: s("contact_prepare")?,
+            contact_apply: s("contact_apply")?,
+            contact_response: s("contact_response")?,
+            displace_prepare: s("displace_prepare")?,
+            displace_apply: s("displace_apply")?,
+            body_end: s("body_end")?,
+            body_observe: s("body_observe")?,
+        };
+        let body_commands = BodyCommandPipelines {
+            resolve_target: c("resolve_target")?,
+            spawn_body: c("spawn_body")?,
+            remove_body: c("remove_body")?,
+            drive_body: c("drive_body")?,
+            jump_body: c("jump_body")?,
+            attract_bodies: c("attract_bodies")?,
+            lift_bodies: c("lift_bodies")?,
+        };
+        let mut created = 12 + 17 + 7;
         let (flood_events, react_unmatched) = if fault_injection {
             let faults = compile(context, &shader::fault_assembly())?;
             created += 2;
@@ -501,15 +670,19 @@ impl Pipelines {
             commit,
             flood_events,
             react_unmatched,
+            body_layout,
+            body_command_layout,
+            body,
+            body_commands,
             created,
         })
     }
 
-    pub fn bind_groups(
+    pub fn bind_groups<'a>(
         &self,
         context: &GpuContext,
-        fixed: &FixedBuffers,
-        window: &WindowBuffers,
+        fixed: &'a FixedBuffers,
+        window: &'a WindowBuffers,
     ) -> BindGroups {
         fn whole(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
@@ -559,7 +732,54 @@ impl Pipelines {
             layout: &self.args_layout,
             entries: &[whole(0, &fixed.dispatch_args)],
         });
-        BindGroups { world, sim, args }
+        let dynamic = |binding: u32, buffer: &'a wgpu::Buffer, size: u64| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer,
+                offset: 0,
+                size: NonZeroU64::new(size),
+            }),
+        };
+        let bodies = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("body substeps"),
+            layout: &self.body_layout,
+            entries: &[
+                whole(0, &fixed.tick_params),
+                whole(1, &fixed.body_params),
+                dynamic(2, &fixed.body_dispatch, BodyDispatch::BYTES),
+                whole(3, &window.cells),
+                whole(4, &window.window_map),
+                whole(5, &fixed.bodies),
+                whole(6, &fixed.bins),
+                whole(7, &window.claims),
+                whole(8, &window.activity),
+                whole(9, &fixed.diagnostics),
+                whole(10, &fixed.events),
+            ],
+        });
+        let body_commands = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("body commands"),
+            layout: &self.body_command_layout,
+            entries: &[
+                whole(0, &fixed.tick_params),
+                dynamic(1, &fixed.dispatch_params, DispatchParams::BYTES),
+                whole(2, &fixed.body_params),
+                whole(3, &fixed.commands),
+                whole(4, &fixed.results),
+                whole(5, &window.cells),
+                whole(6, &window.window_map),
+                whole(7, &fixed.bodies),
+                whole(8, &window.activity),
+                whole(9, &fixed.diagnostics),
+            ],
+        });
+        BindGroups {
+            world,
+            sim,
+            args,
+            bodies,
+            body_commands,
+        }
     }
 }
 

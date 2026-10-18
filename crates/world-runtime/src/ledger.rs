@@ -8,17 +8,19 @@
 //!   the device's event buffer or this ring is full they are dropped, and every drop is
 //!   counted and shown.
 //!
-//! Later stages add producers (contacts, immersion) to these two classes rather than invent
-//! another queue.
+//! Bodies add both classes: their interaction counters are important (cumulative on the
+//! device, turned into events by the [`BodyMonitor`] against a watermark, so nothing is lost or
+//! applied twice), while their per-tick contact and splash notices are cosmetic events.
 
 use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::{
+    bodies::BodyMonitor,
     ids::Tick,
     port::{
-        AbandonReason, CaptureTicket, CommandOutcome, CosmeticEvent, Obligation, Outcome,
-        TickReport, UploadTicket,
+        AbandonReason, CaptureTicket, CommandOutcome, CommandResult, CosmeticEvent, Obligation,
+        Outcome, TickReport, UploadTicket,
     },
     receipts::Receipts,
 };
@@ -53,7 +55,7 @@ pub struct Series {
 }
 
 impl Series {
-    fn add(&mut self, value: f64) {
+    pub(crate) fn add(&mut self, value: f64) {
         self.count += 1;
         self.sum += value;
         if value > self.max {
@@ -81,10 +83,14 @@ pub struct LedgerSummary {
     pub tick_latency_ms: Series,
     /// Device time of the whole tick, in milliseconds, when timestamps are available.
     pub gpu_time_ms: Series,
-    /// Ticks whose material phases did not balance their accounting or saw an inconsistent
-    /// transfer, and the latest such tick: an important error, never a cosmetic one.
+    /// Ticks whose material phases or body substeps did not balance their accounting or saw
+    /// an inconsistent transfer, and the latest such tick: an important error, never a
+    /// cosmetic one. `body_inconsistent_ticks` counts the body substeps' share.
     pub inconsistent_ticks: u64,
     pub last_inconsistent_tick: Option<Tick>,
+    pub body_inconsistent_ticks: u64,
+    /// Device time of the body substeps, in milliseconds, when timestamps are available.
+    pub body_time_ms: Series,
     pub cosmetic_received: u64,
     /// Cosmetic events the device could not record.
     pub cosmetic_dropped_on_device: u64,
@@ -95,6 +101,7 @@ pub struct LedgerSummary {
 
 #[derive(Debug)]
 pub struct OutcomeLedger {
+    bodies: BodyMonitor,
     cosmetic: VecDeque<CosmeticEvent>,
     cosmetic_capacity: usize,
     residency: VecDeque<ResidencyOutcome>,
@@ -102,13 +109,19 @@ pub struct OutcomeLedger {
     residency_reserved: usize,
     summary: LedgerSummary,
     last_tick: Option<TickReport>,
+    // The latest tick counted inconsistent: its body report follows its tick report, and the
+    // tick counts once when both disagree.
+    counted_inconsistent: Option<Tick>,
 }
 
 impl OutcomeLedger {
     /// `residency_capacity` bounds outstanding uploads plus captures: each is reserved here
     /// before the request reaches the live world.
-    pub fn new(cosmetic_capacity: usize, residency_capacity: usize) -> Self {
+    ///
+    /// `bodies` consumes the body samples and the body command outcomes.
+    pub fn new(cosmetic_capacity: usize, residency_capacity: usize, bodies: BodyMonitor) -> Self {
         Self {
+            bodies,
             cosmetic: VecDeque::with_capacity(cosmetic_capacity),
             cosmetic_capacity,
             residency: VecDeque::with_capacity(residency_capacity),
@@ -116,6 +129,7 @@ impl OutcomeLedger {
             residency_reserved: 0,
             summary: LedgerSummary::default(),
             last_tick: None,
+            counted_inconsistent: None,
         }
     }
 
@@ -125,6 +139,14 @@ impl OutcomeLedger {
 
     pub fn last_tick(&self) -> Option<&TickReport> {
         self.last_tick.as_ref()
+    }
+
+    pub fn bodies(&self) -> &BodyMonitor {
+        &self.bodies
+    }
+
+    pub fn bodies_mut(&mut self) -> &mut BodyMonitor {
+        &mut self.bodies
     }
 
     /// Reserves room for one residency outcome. `false` means the residency owner must collect
@@ -164,6 +186,15 @@ impl OutcomeLedger {
     ) {
         match outcome {
             Outcome::Command(CommandOutcome { id, tick, result }) => {
+                match result {
+                    CommandResult::BodySpawned { body, position } => {
+                        self.bodies.spawned(body, tick, position);
+                    }
+                    CommandResult::BodyRemoved { body, counters } => {
+                        self.bodies.removed(body, tick, counters);
+                    }
+                    _ => {}
+                }
                 if let Some(receipt) = receipts.complete(id, tick, result, observed_at) {
                     self.summary.commands_completed += 1;
                     if let Some(latency) = receipt.input_latency_ticks() {
@@ -185,16 +216,22 @@ impl OutcomeLedger {
                 if let Some(gpu_time) = report.gpu_time {
                     self.summary.gpu_time_ms.add(millis(gpu_time));
                 }
+                if let Some(phases) = report.phases
+                    && phases.bodies > Duration::ZERO
+                {
+                    self.summary.body_time_ms.add(millis(phases.bodies));
+                }
                 if !report.cells.consistent() {
-                    self.summary.inconsistent_ticks += 1;
-                    self.summary.last_inconsistent_tick = Some(
-                        self.summary
-                            .last_inconsistent_tick
-                            .map_or(report.tick, |seen| seen.max(report.tick)),
-                    );
+                    self.inconsistent(report.tick);
                 }
                 if self.last_tick.is_none_or(|last| report.tick >= last.tick) {
                     self.last_tick = Some(report);
+                }
+            }
+            Outcome::BodiesCompleted { tick, report } => {
+                if !report.consistent() {
+                    self.summary.body_inconsistent_ticks += 1;
+                    self.inconsistent(tick);
                 }
             }
             Outcome::UploadActivated { ticket, tick } => {
@@ -203,6 +240,8 @@ impl OutcomeLedger {
             Outcome::CaptureReady { ticket, tick } => {
                 self.push_residency(ResidencyOutcome::CaptureReady { ticket, tick });
             }
+            Outcome::Body(sample) => self.bodies.sample(sample, observed_at),
+            Outcome::BodyGone { body, .. } => self.bodies.gone(body),
             Outcome::Cosmetic(event) => {
                 self.summary.cosmetic_received += 1;
                 if self.cosmetic.len() == self.cosmetic_capacity {
@@ -234,6 +273,19 @@ impl OutcomeLedger {
         }
     }
 
+    fn inconsistent(&mut self, tick: Tick) {
+        if self.counted_inconsistent == Some(tick) {
+            return;
+        }
+        self.counted_inconsistent = Some(tick);
+        self.summary.inconsistent_ticks += 1;
+        self.summary.last_inconsistent_tick = Some(
+            self.summary
+                .last_inconsistent_tick
+                .map_or(tick, |seen| seen.max(tick)),
+        );
+    }
+
     fn push_residency(&mut self, outcome: ResidencyOutcome) {
         // Every residency request reserved its entry before it was accepted, so the queue has
         // room. Growing here instead of dropping keeps the outcome if that invariant is broken.
@@ -255,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{
         ids::CommandId,
-        port::{CellReport, CommandResult, SupportedCommands},
+        port::{BodyReport, CellReport, SupportedCommands},
     };
 
     fn report(tick: u64) -> Outcome {
@@ -273,7 +325,7 @@ mod tests {
 
     #[test]
     fn an_unbalanced_tick_is_counted_as_inconsistent() {
-        let mut ledger = OutcomeLedger::new(0, 0);
+        let mut ledger = OutcomeLedger::new(0, 0, BodyMonitor::new(0, 0));
         let mut receipts = Receipts::new(1);
         let balanced = CellReport {
             fluid_in: 10,
@@ -309,8 +361,92 @@ mod tests {
     }
 
     #[test]
+    fn unbalanced_body_accounting_is_inconsistent_and_body_outcomes_reach_the_monitor() {
+        use world_model::{body::BodyHandle, glam::DVec3, observation::BodyCounters};
+
+        let mut ledger = OutcomeLedger::new(0, 0, BodyMonitor::new(4, 8));
+        let mut receipts = Receipts::new(1);
+        let compacted = BodyReport {
+            solid_in: 4,
+            solid_out: 7,
+            compaction: 3,
+            fluid_in: 9,
+            fluid_out: 9,
+            ..BodyReport::default()
+        };
+        assert!(compacted.consistent());
+        let lost = BodyReport {
+            fluid_out: 2,
+            fluid_in: 1,
+            ..BodyReport::default()
+        };
+        assert_eq!(lost.imbalance(), (-1, 0));
+        let lost_cells = CellReport {
+            fluid_out: 1,
+            ..CellReport::default()
+        };
+        // Tick 3 loses material in both: it counts once.
+        for (tick, cells, bodies) in [
+            (1, CellReport::default(), compacted),
+            (2, CellReport::default(), lost),
+            (3, lost_cells, lost),
+        ] {
+            let Outcome::TickCompleted(completed) = report(tick) else {
+                unreachable!()
+            };
+            ledger.consume(
+                Outcome::TickCompleted(TickReport { cells, ..completed }),
+                &mut receipts,
+                None,
+            );
+            ledger.consume(
+                Outcome::BodiesCompleted {
+                    tick: Tick::new(tick),
+                    report: bodies,
+                },
+                &mut receipts,
+                None,
+            );
+        }
+        let summary = *ledger.summary();
+        assert_eq!(summary.inconsistent_ticks, 2);
+        assert_eq!(summary.body_inconsistent_ticks, 2);
+        assert_eq!(summary.last_inconsistent_tick, Some(Tick::new(3)));
+
+        // Outcomes of commands without receipts still reach the monitor; the receipts count
+        // them as unknown, which is the port defect they would be.
+        let body = BodyHandle::new(1, 0);
+        for result in [
+            CommandResult::BodySpawned {
+                body,
+                position: DVec3::ONE,
+            },
+            CommandResult::BodyRemoved {
+                body,
+                counters: BodyCounters {
+                    craters: 1,
+                    ..BodyCounters::default()
+                },
+            },
+        ] {
+            ledger.consume(
+                Outcome::Command(CommandOutcome {
+                    id: crate::ids::CommandId::new(7),
+                    tick: Tick::new(3),
+                    result,
+                }),
+                &mut receipts,
+                None,
+            );
+        }
+        let events: Vec<_> = ledger.bodies_mut().drain_events().collect();
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(ledger.bodies().body(body).is_none());
+    }
+
+    #[test]
     fn cosmetic_drops_are_counted_on_the_device_and_in_the_ring() {
-        let mut ledger = OutcomeLedger::new(2, 0);
+        let mut ledger = OutcomeLedger::new(2, 0, BodyMonitor::new(0, 0));
         let mut receipts = Receipts::new(1);
         for kind in 0..3 {
             let event = CosmeticEvent {
@@ -338,7 +474,7 @@ mod tests {
 
     #[test]
     fn out_of_order_ticks_keep_the_latest_observation() {
-        let mut ledger = OutcomeLedger::new(0, 0);
+        let mut ledger = OutcomeLedger::new(0, 0, BodyMonitor::new(0, 0));
         let mut receipts = Receipts::new(1);
         for tick in [3, 5, 4] {
             ledger.consume(report(tick), &mut receipts, None);
@@ -350,7 +486,7 @@ mod tests {
 
     #[test]
     fn command_outcomes_complete_receipts_with_their_ages() {
-        let mut ledger = OutcomeLedger::new(0, 0);
+        let mut ledger = OutcomeLedger::new(0, 0, BodyMonitor::new(0, 0));
         let mut receipts = Receipts::new(2);
         let command = Command::EditMaterial(
             MaterialEdit::new(EditTool::Sand, IVec2::ZERO, 1, 1).expect("valid"),
@@ -362,6 +498,7 @@ mod tests {
             .insert(id, command, Some(Tick::new(1)))
             .expect("room");
         let result = CommandResult::Edited {
+            center: IVec2::ZERO,
             changed: 5,
             not_resident: 0,
         };
@@ -395,7 +532,7 @@ mod tests {
 
     #[test]
     fn residency_reservations_bound_outstanding_requests() {
-        let mut ledger = OutcomeLedger::new(0, 1);
+        let mut ledger = OutcomeLedger::new(0, 1, BodyMonitor::new(0, 0));
         assert!(ledger.reserve_residency());
         assert!(!ledger.reserve_residency());
         ledger.release_residency();

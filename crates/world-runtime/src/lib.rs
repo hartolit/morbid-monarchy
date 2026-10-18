@@ -9,9 +9,11 @@
 //! - [`port`]: the batch-oriented port, its tickets, refusals, outcomes and counters;
 //! - [`receipts`]: command admission, retries, conflicts and bounded retention;
 //! - [`ledger`]: the consumer of outcomes, separating important results from cosmetic events;
+//! - [`bodies`]: the consumer of body observations, deriving events from cumulative counters;
 //! - [`clock`]: the fixed logical clock and its bounded catch-up;
 //! - [`runtime`]: the `bevy_ecs` composition that runs one frame at a time.
 
+pub mod bodies;
 pub mod clock;
 pub mod ids;
 pub mod ledger;

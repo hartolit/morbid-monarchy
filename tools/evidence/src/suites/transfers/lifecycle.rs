@@ -335,6 +335,7 @@ pub(super) fn out_of_order_delivery(adapter: &str, check: &mut Check) -> Result<
             &format!("edit {:?}", command.id),
             driver.result(command.id),
             Some(CommandResult::Edited {
+                center: edit_center(&command.command),
                 changed: 1,
                 not_resident: 0,
             }),
@@ -352,7 +353,11 @@ pub(super) fn out_of_order_delivery(adapter: &str, check: &mut Check) -> Result<
             .insert(command.id, command.command, None)
             .map_err(|error| format!("{error:?}"))?;
     }
-    let mut ledger = world_runtime::ledger::OutcomeLedger::new(16, 0);
+    let mut ledger = world_runtime::ledger::OutcomeLedger::new(
+        16,
+        0,
+        world_runtime::bodies::BodyMonitor::new(0, 0),
+    );
     for outcome in driver.outcomes.drain(..) {
         ledger.consume(outcome, &mut receipts, Some(Tick::new(10)));
     }
@@ -572,6 +577,7 @@ pub(super) fn resize_success_and_refusal(adapter: &str, check: &mut Check) -> Re
         "edits after resize",
         after[0],
         CommandResult::Edited {
+            center: IVec2::new(1, 1),
             changed: 5,
             not_resident: 0,
         },
@@ -681,7 +687,9 @@ pub(super) fn device_loss_and_recreation(adapter: &str, check: &mut Check) -> Re
     let old_batch = TickBatch {
         session: old_session,
         tick: Tick::ZERO,
+        tick_rate_hz: 60.0,
         commands: &[],
+        observe: &[],
     };
     check.equal(
         "old session's tick",
@@ -798,4 +806,12 @@ pub(super) fn stop_and_drain(adapter: &str, check: &mut Check) -> Result<(), Str
         format!("waited only {:?}", report.waited)
     });
     Ok(())
+}
+
+/// The centre cell of a column-targeted stroke.
+fn edit_center(command: &world_model::command::Command) -> IVec2 {
+    match command {
+        world_model::command::Command::EditMaterial(edit) => edit.center().unwrap_or_default(),
+        _ => IVec2::ZERO,
+    }
 }

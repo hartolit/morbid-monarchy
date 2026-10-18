@@ -6,7 +6,7 @@ use bevy::{
     math::Vec3,
 };
 use world_model::{
-    body::AIR_DRAG_RATE,
+    body::tuning::{DEFORMATION, KINEMATIC},
     config::DEFAULT_ELEVATION_SCALE,
     units::{GRAVITY_Y, MAX_BODY_SUBSTEP_SECONDS},
 };
@@ -61,12 +61,12 @@ impl Default for KinematicProfile {
     fn default() -> Self {
         Self {
             mass: 1.0,
-            air_drag_rate: AIR_DRAG_RATE,
-            rolling_resistance_coefficient: 0.12,
-            ground_damping_rate: 0.4,
-            static_friction_coefficient: 0.2,
-            static_friction_speed: 0.5,
-            impact_restitution: 0.20,
+            air_drag_rate: KINEMATIC.air_drag_rate,
+            rolling_resistance_coefficient: KINEMATIC.rolling_resistance_coefficient,
+            ground_damping_rate: KINEMATIC.ground_damping_rate,
+            static_friction_coefficient: KINEMATIC.static_friction_coefficient,
+            static_friction_speed: KINEMATIC.static_friction_speed,
+            impact_restitution: KINEMATIC.impact_restitution,
         }
     }
 }
@@ -92,15 +92,15 @@ pub struct DeformationProfile {
 impl Default for DeformationProfile {
     fn default() -> Self {
         Self {
-            min_deformation_energy: 250.0,
-            energy_to_deformation_scale: 0.001,
-            cost_displace_granular: 2.0,
-            cost_crush_terrain: 3.0,
-            rut_depth_scale: 1.0,
-            rut_reference_mass: 4.0,
-            rut_width_ratio: 0.7,
-            rut_press_per_substep: 1,
-            rut_cost_per_unit: 1.0,
+            min_deformation_energy: DEFORMATION.min_deformation_energy,
+            energy_to_deformation_scale: DEFORMATION.energy_to_deformation_scale,
+            cost_displace_granular: DEFORMATION.cost_displace_granular,
+            cost_crush_terrain: DEFORMATION.cost_crush_terrain,
+            rut_depth_scale: DEFORMATION.rut_depth_scale,
+            rut_reference_mass: DEFORMATION.rut_reference_mass,
+            rut_width_ratio: DEFORMATION.rut_width_ratio,
+            rut_press_per_substep: DEFORMATION.rut_press_per_substep,
+            rut_cost_per_unit: DEFORMATION.rut_cost_per_unit,
         }
     }
 }

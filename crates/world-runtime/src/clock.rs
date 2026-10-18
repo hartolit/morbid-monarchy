@@ -19,6 +19,7 @@ pub enum ClockError {
 
 #[derive(Debug, Clone)]
 pub struct FixedClock {
+    tick_rate_hz: f64,
     tick_seconds: f64,
     max_ticks_per_frame: u32,
     accumulated_seconds: f64,
@@ -35,6 +36,7 @@ impl FixedClock {
             return Err(ClockError::MaxTicksPerFrame(max_ticks_per_frame));
         }
         Ok(Self {
+            tick_rate_hz,
             tick_seconds: 1.0 / tick_rate_hz,
             max_ticks_per_frame,
             accumulated_seconds: 0.0,
@@ -50,6 +52,7 @@ impl FixedClock {
         max_ticks_per_frame: u32,
     ) -> Result<(), ClockError> {
         let checked = Self::new(tick_rate_hz, max_ticks_per_frame)?;
+        self.tick_rate_hz = checked.tick_rate_hz;
         self.tick_seconds = checked.tick_seconds;
         self.max_ticks_per_frame = checked.max_ticks_per_frame;
         Ok(())
@@ -57,6 +60,11 @@ impl FixedClock {
 
     pub fn max_ticks_per_frame(&self) -> u32 {
         self.max_ticks_per_frame
+    }
+
+    /// Ticks per second: what every submitted tick's duration is derived from.
+    pub fn tick_rate_hz(&self) -> f64 {
+        self.tick_rate_hz
     }
 
     pub fn tick_duration(&self) -> Duration {

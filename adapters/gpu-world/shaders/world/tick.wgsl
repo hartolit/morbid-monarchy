@@ -24,6 +24,17 @@ fn begin_tick(@builtin(global_invocation_id) id: vec3<u32>) {
     results[index].word1 = 0u;
     results[index].slot_index = SLOT_NONE;
     results[index].slot_generation = 0u;
+    atomicStore(&results[index].count, 0u);
+    results[index].v0 = 0u;
+    results[index].v1 = 0u;
+    results[index].v2 = 0u;
+    results[index].v3 = 0u;
+    results[index].v4 = BODY_NONE;
+    results[index].v5 = 0u;
+    results[index].v6 = 0u;
+    results[index].v7 = 0u;
+    results[index].v8 = 0u;
+    results[index].v9 = 0u;
     var status = RESULT_PENDING;
     switch command.kind {
         case COMMAND_EDIT: {
@@ -39,6 +50,34 @@ fn begin_tick(@builtin(global_invocation_id) id: vec3<u32>) {
             for (var word = 0u; word < TOTALS_WORDS; word++) {
                 atomicStore(&diagnostics[base + word], 0u);
             }
+        }
+        // The body commands start from their success status; their kernels replace it when
+        // the target is missing or the body stale.
+        case COMMAND_SPAWN: {
+            status = RESULT_BODY_SPAWNED;
+        }
+        case COMMAND_REMOVE: {
+            status = RESULT_BODY_REMOVED;
+        }
+        case COMMAND_DRIVE: {
+            status = RESULT_DRIVEN;
+        }
+        case COMMAND_JUMP: {
+            status = RESULT_JUMPED;
+        }
+        case COMMAND_ATTRACT: {
+            status = RESULT_ATTRACTED;
+        }
+        case COMMAND_LIFT: {
+            status = RESULT_LIFTED;
+        }
+        case COMMAND_QUERY_RAY: {
+            status = RESULT_RAY;
+        }
+        // Answered on the CPU (a stale handle, a full body table): the status travels in
+        // `tool`.
+        case COMMAND_REFUSED: {
+            status = command.tool;
         }
         default: {}
     }

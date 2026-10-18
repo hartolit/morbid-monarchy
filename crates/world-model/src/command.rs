@@ -1,17 +1,22 @@
 //! Validated intent for the physical world.
 //!
-//! A command says what a user, a tool or a scenario asks for, in absolute cell coordinates and
+//! A command says what a user, a tool or a scenario asks for, in absolute coordinates and
 //! validated values; it does not say how the live world carries it out. The owner of the live
-//! world applies commands at a tick boundary: the CPU baseline today, the GPU world from prompts
-//! 02–04. Values outside the supported ranges in [`crate::config`] cannot be constructed, so a
-//! command that exists is one the world must either apply or refuse for a capacity reason.
+//! world applies commands at a tick boundary: the CPU baseline, or the GPU world since prompts
+//! 02–04. Values outside the supported ranges in [`crate::config`] and [`crate::body`] cannot
+//! be constructed, so a command that exists is one the world must either apply or refuse for a
+//! capacity or identity reason.
+//!
+//! Targets are a column or a ray. A ray is resolved by the live world against its own surface
+//! at the tick the command applies, never against a CPU copy of the terrain; the command's
+//! outcome reports where it hit.
 
 use std::fmt;
 
-use glam::{IVec2, Vec2};
+use glam::{DVec3, IVec2, Vec2, Vec3};
 
 use crate::{
-    body::{BodyHandle, BodyPreset},
+    body::{BodyHandle, BodyPreset, DriveStrength, SphereDescription},
     config,
     material::FluidMat,
     rules::SimulationRules,
@@ -55,11 +60,75 @@ impl EditTool {
     }
 }
 
-/// One brush stroke centred on a cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A ray in absolute render space (y up, cell `y` is render `-z`), as a pointer or a camera
+/// casts it. The origin is `f64` so a ray far from the world origin keeps its precision; the
+/// live world converts it to its window-local frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ray {
+    origin: DVec3,
+    direction: Vec3,
+    max_distance: f32,
+}
+
+impl Ray {
+    /// `direction` is normalized here; `max_distance` must lie in `(0, RAY_MAX_DISTANCE]`.
+    pub fn new(origin: DVec3, direction: Vec3, max_distance: f32) -> Result<Self, CommandError> {
+        if !origin.is_finite() {
+            return Err(CommandError::RayOrigin);
+        }
+        let length = direction.length();
+        if !(length.is_finite() && length > 0.0) {
+            return Err(CommandError::Direction);
+        }
+        if !(max_distance.is_finite()
+            && max_distance > 0.0
+            && max_distance <= config::RAY_MAX_DISTANCE)
+        {
+            return Err(CommandError::RayDistance(max_distance));
+        }
+        Ok(Self {
+            origin,
+            direction: direction / length,
+            max_distance,
+        })
+    }
+
+    pub fn origin(&self) -> DVec3 {
+        self.origin
+    }
+
+    /// A unit vector.
+    pub fn direction(&self) -> Vec3 {
+        self.direction
+    }
+
+    pub fn max_distance(&self) -> f32 {
+        self.max_distance
+    }
+}
+
+/// Where a command acts: the top of a column (at its cell vertex), or wherever a ray first
+/// meets the physical surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Target {
+    Column(IVec2),
+    Ray(Ray),
+}
+
+impl Target {
+    pub fn column(&self) -> Option<IVec2> {
+        match self {
+            Self::Column(cell) => Some(*cell),
+            Self::Ray(_) => None,
+        }
+    }
+}
+
+/// One brush stroke centred on a cell, or on the cell a ray hits.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialEdit {
     tool: EditTool,
-    center: IVec2,
+    target: Target,
     radius: i32,
     strength: u8,
 }
@@ -71,6 +140,17 @@ impl MaterialEdit {
         radius: i32,
         strength: u8,
     ) -> Result<Self, CommandError> {
+        Self::at(tool, Target::Column(center), radius, strength)
+    }
+
+    /// A stroke at `target`; a ray target strokes the quad cell its hit lies in, as the brush
+    /// tool does.
+    pub fn at(
+        tool: EditTool,
+        target: Target,
+        radius: i32,
+        strength: u8,
+    ) -> Result<Self, CommandError> {
         if !config::BRUSH_RADIUS_CELLS.contains(&radius) {
             return Err(CommandError::BrushRadius(radius));
         }
@@ -79,7 +159,7 @@ impl MaterialEdit {
         }
         Ok(Self {
             tool,
-            center,
+            target,
             radius,
             strength,
         })
@@ -89,8 +169,13 @@ impl MaterialEdit {
         self.tool
     }
 
-    pub fn center(&self) -> IVec2 {
-        self.center
+    pub fn target(&self) -> Target {
+        self.target
+    }
+
+    /// The centre cell of a column-targeted stroke.
+    pub fn center(&self) -> Option<IVec2> {
+        self.target.column()
     }
 
     /// Cells within this distance of the centre (inclusive) are edited.
@@ -104,33 +189,47 @@ impl MaterialEdit {
     }
 }
 
-/// A sphere dropped onto a column.
+/// A sphere dropped onto a column, or onto the point a ray hits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodySpawn {
-    preset: BodyPreset,
-    column: IVec2,
+    sphere: SphereDescription,
+    target: Target,
     drop_height: f32,
 }
 
 impl BodySpawn {
-    /// `drop_height` is in world units above the column's bedrock and loose material.
+    /// A preset dropped onto `column`'s vertex. `drop_height` is in world units above the
+    /// column's bedrock and loose material.
     pub fn new(preset: BodyPreset, column: IVec2, drop_height: f32) -> Result<Self, CommandError> {
+        Self::with(preset.description(), Target::Column(column), drop_height)
+    }
+
+    pub fn with(
+        sphere: SphereDescription,
+        target: Target,
+        drop_height: f32,
+    ) -> Result<Self, CommandError> {
         if !(drop_height.is_finite() && drop_height >= 0.0) {
             return Err(CommandError::DropHeight(drop_height));
         }
         Ok(Self {
-            preset,
-            column,
+            sphere,
+            target,
             drop_height,
         })
     }
 
-    pub fn preset(&self) -> BodyPreset {
-        self.preset
+    pub fn sphere(&self) -> SphereDescription {
+        self.sphere
     }
 
-    pub fn column(&self) -> IVec2 {
-        self.column
+    pub fn target(&self) -> Target {
+        self.target
+    }
+
+    /// The column of a column-targeted spawn.
+    pub fn column(&self) -> Option<IVec2> {
+        self.target.column()
     }
 
     pub fn drop_height(&self) -> f32 {
@@ -162,6 +261,38 @@ impl Direction {
     }
 }
 
+/// One tick of drive along a direction, with the controls' strength or a weaker one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drive {
+    direction: Direction,
+    strength: DriveStrength,
+}
+
+impl Drive {
+    /// The controls' drive.
+    pub fn controls(direction: Direction) -> Self {
+        Self {
+            direction,
+            strength: DriveStrength::CONTROLS,
+        }
+    }
+
+    pub fn with(direction: Direction, strength: DriveStrength) -> Self {
+        Self {
+            direction,
+            strength,
+        }
+    }
+
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+
+    pub fn strength(&self) -> DriveStrength {
+        self.strength
+    }
+}
+
 /// Ambient air temperature within the supported range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AmbientTemperature(f32);
@@ -179,35 +310,66 @@ impl AmbientTemperature {
     }
 }
 
+/// World units per elevation unit, within [`config::ELEVATION_SCALE`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ElevationScale(f32);
+
+impl ElevationScale {
+    pub const DEFAULT: Self = Self(config::DEFAULT_ELEVATION_SCALE);
+
+    pub fn new(scale: f32) -> Result<Self, CommandError> {
+        if !(scale.is_finite() && config::ELEVATION_SCALE.contains(&scale)) {
+            return Err(CommandError::ElevationScale(scale));
+        }
+        Ok(Self(scale))
+    }
+
+    pub fn value(self) -> f32 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     EditMaterial(MaterialEdit),
     SpawnBody(BodySpawn),
-    /// Accelerates the body along `direction` for one tick, up to the drive speed.
+    /// Removes a body. Its final interaction counters come back in the outcome.
+    RemoveBody {
+        body: BodyHandle,
+    },
+    /// Accelerates the body along the drive direction for one tick, up to the drive speed.
     DriveBody {
         body: BodyHandle,
-        direction: Direction,
+        drive: Drive,
     },
     /// Jumps the body along its ground normal if it is grounded; otherwise nothing happens.
     JumpBody {
         body: BodyHandle,
     },
-    /// Accelerates every body toward the top of `target`'s column for one tick.
+    /// Accelerates every body toward `target` (a column's top or a ray's hit) for one tick.
     AttractBodies {
-        target: IVec2,
+        target: Target,
     },
     /// Lifts bodies near `target`'s column for one tick.
     LiftBodies {
-        target: IVec2,
+        target: Target,
     },
     /// Sets the air temperature from this tick on. A change wakes every resident cell once.
     SetAmbientTemperature(AmbientTemperature),
     /// Sets which rule families run from this tick on. A change wakes every resident cell once.
     SetSimulationRules(SimulationRules),
+    /// Sets the elevation scale from this tick on: physical configuration that bodies collide
+    /// with and the renderer draws.
+    SetElevationScale(ElevationScale),
     /// Reads one column as it stands after the tick's earlier commands. An observation, not a
     /// change: the answer is a copy at a completed tick, never a writable value.
     QueryColumn {
         cell: IVec2,
+    },
+    /// Casts a ray against the physical surface and the bodies as they stand after the tick's
+    /// earlier commands.
+    QueryRay {
+        ray: Ray,
     },
     /// Sums the material of every resident cell as it stands after the tick's earlier commands:
     /// a diagnostic reduction whose answer is a handful of integers, never the cells.
@@ -220,13 +382,16 @@ pub enum Command {
 pub enum CommandKind {
     EditMaterial,
     SpawnBody,
+    RemoveBody,
     DriveBody,
     JumpBody,
     AttractBodies,
     LiftBodies,
     SetAmbientTemperature,
     SetSimulationRules,
+    SetElevationScale,
     QueryColumn,
+    QueryRay,
     MeasureTotals,
 }
 
@@ -235,14 +400,42 @@ impl Command {
         match self {
             Self::EditMaterial(_) => CommandKind::EditMaterial,
             Self::SpawnBody(_) => CommandKind::SpawnBody,
+            Self::RemoveBody { .. } => CommandKind::RemoveBody,
             Self::DriveBody { .. } => CommandKind::DriveBody,
             Self::JumpBody { .. } => CommandKind::JumpBody,
             Self::AttractBodies { .. } => CommandKind::AttractBodies,
             Self::LiftBodies { .. } => CommandKind::LiftBodies,
             Self::SetAmbientTemperature(_) => CommandKind::SetAmbientTemperature,
             Self::SetSimulationRules(_) => CommandKind::SetSimulationRules,
+            Self::SetElevationScale(_) => CommandKind::SetElevationScale,
             Self::QueryColumn { .. } => CommandKind::QueryColumn,
+            Self::QueryRay { .. } => CommandKind::QueryRay,
             Self::MeasureTotals => CommandKind::MeasureTotals,
+        }
+    }
+
+    /// The body a command addresses, if it names one.
+    pub const fn body(&self) -> Option<BodyHandle> {
+        match self {
+            Self::RemoveBody { body } | Self::DriveBody { body, .. } | Self::JumpBody { body } => {
+                Some(*body)
+            }
+            _ => None,
+        }
+    }
+
+    /// The ray the command's target or query casts, if any.
+    pub const fn ray(&self) -> Option<Ray> {
+        let target = match self {
+            Self::EditMaterial(edit) => edit.target,
+            Self::SpawnBody(spawn) => spawn.target,
+            Self::AttractBodies { target } | Self::LiftBodies { target } => *target,
+            Self::QueryRay { ray } => return Some(*ray),
+            _ => return None,
+        };
+        match target {
+            Target::Ray(ray) => Some(ray),
+            Target::Column(_) => None,
         }
     }
 }
@@ -255,6 +448,9 @@ pub enum CommandError {
     DropHeight(f32),
     Direction,
     Temperature(f32),
+    ElevationScale(f32),
+    RayOrigin,
+    RayDistance(f32),
 }
 
 impl fmt::Display for CommandError {
@@ -281,6 +477,17 @@ impl fmt::Display for CommandError {
                 f,
                 "temperature {degrees} °C is outside {:?} °C",
                 config::AMBIENT_TEMPERATURE_C
+            ),
+            Self::ElevationScale(scale) => write!(
+                f,
+                "elevation scale {scale} is outside {:?}",
+                config::ELEVATION_SCALE
+            ),
+            Self::RayOrigin => write!(f, "a ray origin must be finite"),
+            Self::RayDistance(distance) => write!(
+                f,
+                "ray length {distance} is outside (0, {}] world units",
+                config::RAY_MAX_DISTANCE
             ),
         }
     }
@@ -313,6 +520,20 @@ mod tests {
         assert!(Direction::new(0.0, 0.0).is_err());
         assert!(AmbientTemperature::celsius(41.0).is_err());
         assert!(AmbientTemperature::celsius(f32::INFINITY).is_err());
+        assert!(ElevationScale::new(0.005).is_err());
+        assert!(ElevationScale::new(5.0).is_ok());
+        assert!(Ray::new(DVec3::ZERO, Vec3::ZERO, 10.0).is_err());
+        assert!(Ray::new(DVec3::ZERO, Vec3::NEG_Y, 0.0).is_err());
+        assert!(Ray::new(DVec3::ZERO, Vec3::NEG_Y, 1000.5).is_err());
+        assert!(Ray::new(DVec3::new(f64::NAN, 0.0, 0.0), Vec3::NEG_Y, 10.0).is_err());
+        let ray = Ray::new(
+            DVec3::new(1e7, 50.0, -1e7),
+            Vec3::new(0.0, -3.0, 4.0),
+            1000.0,
+        )
+        .expect("valid");
+        assert!((ray.direction().length() - 1.0).abs() < 1e-6);
+        assert_eq!(ray.origin().x, 1e7, "the origin keeps its precision");
     }
 
     #[test]
@@ -338,6 +559,15 @@ mod tests {
             MaterialEdit::new(EditTool::Fire, IVec2::ZERO, 0, 1).expect("valid"),
         );
         assert_eq!(edit.kind(), CommandKind::EditMaterial);
+        assert_eq!(edit.ray(), None);
+        let ray = Ray::new(DVec3::Y * 10.0, Vec3::NEG_Y, 20.0).expect("valid");
+        let aimed = Command::EditMaterial(
+            MaterialEdit::at(EditTool::Sand, Target::Ray(ray), 3, 2).expect("valid"),
+        );
+        assert_eq!(aimed.ray(), Some(ray));
+        let body = BodyHandle::new(3, 1);
+        assert_eq!(Command::RemoveBody { body }.body(), Some(body));
+        assert_eq!(Command::MeasureTotals.body(), None);
     }
 
     #[test]
@@ -346,5 +576,7 @@ mod tests {
         assert!((direction.cells().length() - 1.0).abs() < 1e-6);
         let (x, z) = direction.render_xz();
         assert!((x + 0.6).abs() < 1e-6 && (z + 0.8).abs() < 1e-6);
+        let drive = Drive::controls(direction);
+        assert_eq!(drive.strength(), DriveStrength::CONTROLS);
     }
 }

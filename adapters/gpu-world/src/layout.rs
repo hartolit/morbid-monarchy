@@ -19,14 +19,17 @@
 use std::fmt::Write as _;
 
 use world_model::{
+    body::{self, tuning},
     cell::{Field, WorldCell},
     command::EditTool,
+    config,
     material::{
         CompassFlags, FluidMat, GranularMat, SurfaceMat, TerrainMat, fluid_properties,
-        granular_repose, is_combustible,
+        granular_repose, ground_softness, is_combustible, terrain_crush_hardness,
     },
     rules::{self, SimulationRules, salt},
     spatial::{CHUNK_CELL_COUNT, CHUNK_SIZE},
+    units,
 };
 
 /// The type of one 32-bit word of a record.
@@ -267,11 +270,23 @@ gpu_record! {
 
 gpu_record! {
     /// One command of a tick. `kind` selects which fields are meaningful:
-    /// - [`codes::COMMAND_EDIT`]: `tool`, `center_x`, `center_y`, `radius`, `strength`;
-    /// - [`codes::COMMAND_QUERY_COLUMN`]: `cell_x`, `cell_y`.
+    /// - [`codes::COMMAND_EDIT`]: `tool`, `center_x`, `center_y` (a column target), `radius`,
+    ///   `strength`;
+    /// - [`codes::COMMAND_QUERY_COLUMN`]: `cell_x`, `cell_y`;
+    /// - [`codes::COMMAND_SPAWN`]: `cell_x`, `cell_y` (a column target), `body_*` (the handle
+    ///   the CPU allocated), `a` mass, `b` radius, `c` relative density, `d` drop height;
+    /// - [`codes::COMMAND_REMOVE`], [`codes::COMMAND_JUMP`]: `body_*`;
+    /// - [`codes::COMMAND_DRIVE`]: `body_*`, `a`/`b` the render-space x/z direction, `c`
+    ///   acceleration, `d` speed cap;
+    /// - [`codes::COMMAND_ATTRACT`], [`codes::COMMAND_LIFT`]: `cell_x`, `cell_y` (a column
+    ///   target);
+    /// - [`codes::COMMAND_REFUSED`]: `tool` holds the result status the CPU decided.
     ///
-    /// Coordinates are window-local cells. `sequence` is the command's position in the tick and
-    /// the index of its result record.
+    /// `target_kind` is [`codes::TARGET_RAY`] when the command acts where its ray hits: `origin_*`,
+    /// `direction_*` and `ray_length` then describe the ray, and the `resolve_target` kernel
+    /// writes the hit into the command's result before the command's own kernel runs.
+    /// Coordinates are window-local: cells, or render-space world units (x = cell x, z = −cell
+    /// y). `sequence` is the command's position in the tick and the index of its result record.
     pub struct CommandRecord {
         kind: u32,
         id_lo: u32,
@@ -284,14 +299,41 @@ gpu_record! {
         strength: u32,
         cell_x: i32,
         cell_y: i32,
+        target_kind: u32,
+        body_index: u32,
+        body_generation: u32,
+        a: f32,
+        b: f32,
+        c: f32,
+        d: f32,
+        origin_x: f32,
+        origin_y: f32,
+        origin_z: f32,
+        direction_x: f32,
+        direction_y: f32,
+        direction_z: f32,
+        ray_length: f32,
         reserved0: u32,
+        reserved1: u32,
+        reserved2: u32,
     }
 }
 
 gpu_record! {
     /// One command's result. The `begin_tick` kernel writes the identity fields of every
-    /// command position in use each tick, so no result survives from an earlier tick; the
-    /// command's own kernel then fills the rest.
+    /// command position in use each tick, and zeroes the rest, so no result survives from an
+    /// earlier tick; the command's kernels then fill what their status uses:
+    ///
+    /// | Status | Fields |
+    /// | --- | --- |
+    /// | `RESULT_EDITED` | `changed`, `not_resident`; `word0`/`word1` the window-local centre |
+    /// | `RESULT_COLUMN` | `word0`/`word1` the column, `slot_index`/`slot_generation` |
+    /// | `RESULT_RAY`, and any ray-targeted command | `v0` the surface outcome (`SURFACE_*`), `v1`/`v2` the hit's quad cell, `v3` its distance; `v4`/`v5` the nearest body's handle (`v4` = `BODY_NONE` when none), `v6` its distance |
+    /// | `RESULT_BODY_SPAWNED` | `word0`/`word1` the anchor chunk, `v7`–`v9` the in-chunk cell x, cell y and height |
+    /// | `RESULT_BODY_REMOVED` | `word0` landings, `word1` liquid entries, `slot_index` body contacts, `slot_generation` craters, `v7` splashes, `v8` absorbed energy |
+    /// | `RESULT_JUMPED`, `RESULT_ATTRACTED`, `RESULT_LIFTED` | `count`: whether it jumped, or the bodies affected; `v7`–`v9` the window-local target |
+    ///
+    /// Floats are stored as their bits.
     pub struct ResultRecord {
         id_lo: u32,
         id_hi: u32,
@@ -299,16 +341,24 @@ gpu_record! {
         status: u32,
         tick_lo: u32,
         tick_hi: u32,
-        /// Edit: cells that took a new value.
         changed: atomic_u32,
-        /// Edit: cells outside the resident window or in a missing chunk.
         not_resident: atomic_u32,
-        /// Query: the column's two words.
         word0: u32,
         word1: u32,
-        /// Query: where the column was read.
         slot_index: u32,
         slot_generation: u32,
+        count: atomic_u32,
+        v0: u32,
+        v1: u32,
+        v2: u32,
+        v3: u32,
+        v4: u32,
+        v5: u32,
+        v6: u32,
+        v7: u32,
+        v8: u32,
+        v9: u32,
+        reserved0: u32,
     }
 }
 
@@ -436,31 +486,198 @@ gpu_record! {
 }
 
 gpu_record! {
-    /// One sphere body's physical state, as prompt 04's body kernels will hold it. Positions
-    /// are window-local world units (render axes, y up), velocities world units per second.
-    /// Declared here so its layout is executed with the others before a solver depends on it.
-    pub struct BodyRecord {
-        handle_index: u32,
-        handle_generation: u32,
-        flags: u32,
-        reserved0: u32,
-        position_x: f32,
-        position_y: f32,
-        position_z: f32,
-        radius: f32,
+    /// One body's persistent state: what every substep reads and writes. The position is an
+    /// absolute anchor chunk plus a position inside it (cell axes, so `local_y` grows north and
+    /// render z is its negative), so a body far outside the window keeps its precision and a
+    /// resize moves nothing; kernels work in window-local render coordinates derived from it.
+    /// Velocities are render-axis world units per second. The counters only grow (wrapping)
+    /// and are what the CPU's body monitor derives events from.
+    pub struct BodyState {
+        anchor_x: i32,
+        anchor_y: i32,
+        local_x: f32,
+        local_y: f32,
+        height: f32,
         velocity_x: f32,
         velocity_y: f32,
         velocity_z: f32,
+        /// `BODY_ALIVE`, `BODY_GROUNDED`, `BODY_SUSPENDED`, `BODY_PLANE_VALID`,
+        /// `BODY_TERRAIN`.
+        flags: u32,
+        generation: u32,
+        normal_x: f32,
+        normal_y: f32,
+        normal_z: f32,
+        submerged: f32,
+        previous_submerged: f32,
+        pending_wake: f32,
+        /// The filtered ground reference plane, around a point given relative to the anchor in
+        /// cell axes.
+        plane_origin_x: f32,
+        plane_origin_y: f32,
+        plane_height: f32,
+        plane_slope_x: f32,
+        plane_slope_y: f32,
+        landings: u32,
+        liquid_entries: u32,
+        body_contacts: u32,
+        craters: u32,
+        splashes: u32,
+        absorbed_energy: u32,
+        /// Bodies touched in the last substep, and the liquid material at the centre column.
+        touching: u32,
+        liquid: u32,
+        /// What this tick did, for its coalesced cosmetic event: `TICK_*` bits and the
+        /// strongest impact speed.
+        tick_events: u32,
+        tick_impact: f32,
+        /// The averaged terrain contact normal of the last substep (a wall as well as a
+        /// ground), octahedral in two 16-bit snorms; meaningful with `BODY_TERRAIN`.
+        terrain_normal: u32,
+    }
+}
+
+gpu_record! {
+    /// One body's configuration: written at spawn, read by every pass.
+    pub struct BodyConfig {
         mass: f32,
+        radius: f32,
         relative_density: f32,
-        submerged_fraction: f32,
+        inverse_mass: f32,
+    }
+}
+
+gpu_record! {
+    /// One selected body's state at the end of a tick, as the CPU receives it.
+    pub struct BodySampleRecord {
+        /// `SAMPLE_OK`, or `SAMPLE_GONE` when the handle names no live body.
+        status: u32,
+        index: u32,
+        generation: u32,
+        flags: u32,
+        anchor_x: i32,
+        anchor_y: i32,
+        local_x: f32,
+        local_y: f32,
+        height: f32,
+        velocity_x: f32,
+        velocity_y: f32,
+        velocity_z: f32,
+        normal_x: f32,
+        normal_y: f32,
+        normal_z: f32,
+        submerged: f32,
+        liquid: u32,
+        touching: u32,
+        landings: u32,
+        liquid_entries: u32,
+        body_contacts: u32,
+        craters: u32,
+        splashes: u32,
+        absorbed_energy: u32,
+    }
+}
+
+gpu_record! {
+    /// Per-tick parameters of the body kernels (uniform). Region bases are word offsets into
+    /// the bodies and bins buffers (`plan::BodyLayout`); they depend on the session's body
+    /// capacity, not on the tick.
+    pub struct BodyParams {
+        /// One past the highest body slot in use: the extent of every per-body dispatch.
+        body_count: u32,
+        capacity: u32,
+        substeps: u32,
+        substep_seconds: f32,
+        tick_seconds: f32,
+        elevation_scale: f32,
+        observe_count: u32,
+        /// `BROADPHASE_BINS` or `BROADPHASE_ALL_PAIRS`.
+        broadphase: u32,
+        hash_mask: u32,
+        state_base: u32,
+        config_base: u32,
+        work_base: u32,
+        samples_base: u32,
+        observe_base: u32,
+        counts_base: u32,
+        starts_base: u32,
+        fill_base: u32,
+        entries_base: u32,
+        bounds_base: u32,
+        /// Word offset of the [`BodyDiagnosticsRecord`] in the diagnostics buffer.
+        diagnostics_base: u32,
+        /// The highest surface any column can have, in world units: rays above it cannot hit
+        /// a column that is not resident.
+        max_surface: f32,
+        reserved0: u32,
         reserved1: u32,
         reserved2: u32,
+        reserved3: u32,
+        reserved4: u32,
+        reserved5: u32,
+        reserved6: u32,
+        reserved7: u32,
+        reserved8: u32,
+        reserved9: u32,
+        reserved10: u32,
+    }
+}
+
+gpu_record! {
+    /// Which substep and solver iteration a body dispatch runs (uniform, one entry per
+    /// combination at the uniform offset alignment, written once at creation): entry
+    /// `substep * 16 + iteration`.
+    pub struct BodyDispatch {
+        substep: u32,
+        iteration: u32,
+        /// `iteration & 1`: which half of the ping-pong buffers the iteration reads.
+        parity: u32,
+        reserved0: u32,
+    }
+}
+
+gpu_record! {
+    /// Per-tick accounting of the body substeps, written with atomics. 64-bit quantities are
+    /// a low and a high word. `residual_*` hold the bits of non-negative floats, compared as
+    /// integers (`atomicMax`).
+    pub struct BodyDiagnosticsRecord {
+        candidate_pairs_lo: atomic_u32,
+        candidate_pairs_hi: atomic_u32,
+        contact_pairs: atomic_u32,
+        swept_contacts: atomic_u32,
+        terrain_contacts: atomic_u32,
+        residual_overlap: atomic_u32,
+        residual_approach: atomic_u32,
+        speed_limited: atomic_u32,
+        swept_bodies: atomic_u32,
+        fluid_in_lo: atomic_u32,
+        fluid_in_hi: atomic_u32,
+        fluid_out_lo: atomic_u32,
+        fluid_out_hi: atomic_u32,
+        solid_in_lo: atomic_u32,
+        solid_in_hi: atomic_u32,
+        solid_out_lo: atomic_u32,
+        solid_out_hi: atomic_u32,
+        compaction_lo: atomic_u32,
+        compaction_hi: atomic_u32,
+        ice_broken: atomic_u32,
+        organics_cleared: atomic_u32,
+        craters: atomic_u32,
+        ruts: atomic_u32,
+        splashes: atomic_u32,
+        wakes: atomic_u32,
+        claims_lost: atomic_u32,
+        live: atomic_u32,
+        suspended: atomic_u32,
+        reserved0: u32,
+        reserved1: u32,
+        reserved2: u32,
+        reserved3: u32,
     }
 }
 
 /// Every record, in the order the generated module declares them.
-pub const RECORDS: [RecordLayout; 10] = [
+pub const RECORDS: [RecordLayout; 15] = [
     TickParams::LAYOUT,
     DispatchParams::LAYOUT,
     CommandRecord::LAYOUT,
@@ -470,8 +687,123 @@ pub const RECORDS: [RecordLayout; 10] = [
     ChunkSlotRecord::LAYOUT,
     DiagnosticsRecord::LAYOUT,
     TotalsRecord::LAYOUT,
-    BodyRecord::LAYOUT,
+    BodyState::LAYOUT,
+    BodyConfig::LAYOUT,
+    BodySampleRecord::LAYOUT,
+    BodyParams::LAYOUT,
+    BodyDispatch::LAYOUT,
+    BodyDiagnosticsRecord::LAYOUT,
 ];
+
+/// Words of a body's per-substep scratch in the bodies buffer, laid out by the body kernels
+/// (`shaders/body/bindings.wgsl`): ping-pong positions and velocities, the substep's start, and
+/// the terrain and displacement proposals between their prepare and apply passes.
+pub const BODY_WORK_WORDS: u32 = 56;
+
+/// Word offsets of a body's per-substep work region in the bodies buffer
+/// ([`BODY_WORK_WORDS`] per body), its flags and the decisions its rounds record. Positions are
+/// window-local render coordinates, three words each; `POS_A`/`POS_B` and `VEL_A`/`VEL_B` are
+/// the solver's ping-pong halves, and every substep starts and ends in `A`. Generated into the
+/// kernels' declarations as `WORK_*`, `DECIDE_*` and `DISPLACE_*`.
+pub mod body_work {
+    pub const WORK_POS_A: u32 = 0;
+    pub const WORK_POS_B: u32 = 4;
+    pub const WORK_VEL_A: u32 = 8;
+    pub const WORK_VEL_B: u32 = 12;
+    /// The position at the start of the substep.
+    pub const WORK_PREV: u32 = 16;
+    /// The contacts the solver scales each pair by.
+    pub const WORK_PAIRS: u32 = 19;
+    /// `ACTIVE`, `SWEPT`, `WAS_GROUNDED`.
+    pub const WORK_FLAGS: u32 = 20;
+    pub const WORK_REACH: u32 = 21;
+    /// The terrain round's centre (lifted out of the ground, or stopped by a sweep).
+    pub const WORK_CENTER: u32 = 22;
+    /// The terrain round's decision and its parameters.
+    pub const WORK_DECISION: u32 = 25;
+    pub const WORK_APPROACH: u32 = 26;
+    pub const WORK_NORMAL: u32 = 27;
+    pub const WORK_ENERGY: u32 = 30;
+    pub const WORK_EXTENSION: u32 = 31;
+    pub const WORK_CRUSH_COST: u32 = 32;
+    pub const WORK_SINKAGE_PER_SOFTNESS: u32 = 33;
+    pub const WORK_MAX_SINKAGE: u32 = 34;
+    pub const WORK_HEADING: u32 = 35;
+    pub const WORK_BERM_CEILING: u32 = 37;
+    pub const WORK_RIM_CEILING: u32 = 38;
+    /// The displacement round's decision and its parameters.
+    pub const WORK_DISPLACE: u32 = 39;
+    pub const WORK_FLUID: u32 = 40;
+    pub const WORK_BUDGET: u32 = 41;
+    pub const WORK_INNER: u32 = 42;
+    pub const WORK_OUTER: u32 = 43;
+    pub const WORK_ENTRY_ENERGY: u32 = 44;
+    pub const WORK_WAKE_HEADING: u32 = 45;
+    /// Bodies touched at the end of the solve.
+    pub const WORK_TOUCHING: u32 = 47;
+    /// Where the body was binned this substep (the end of its integration): the position its
+    /// candidate pairs are generated from.
+    pub const WORK_BINNED: u32 = 48;
+    /// The velocity the pair solve started from (the end of integration): the approach its
+    /// restitution targets are taken from.
+    pub const WORK_SOLVE_VELOCITY: u32 = 51;
+    /// Integrated this substep (alive and not suspended).
+    pub const WORK_ACTIVE: u32 = 1;
+    pub const WORK_SWEPT: u32 = 2;
+    pub const WORK_WAS_GROUNDED: u32 = 4;
+    pub const DECIDE_NONE: u32 = 0;
+    pub const DECIDE_CRATER: u32 = 1;
+    pub const DECIDE_RUT: u32 = 2;
+    pub const DISPLACE_NONE: u32 = 0;
+    pub const DISPLACE_SPLASH: u32 = 1;
+    pub const DISPLACE_WAKE: u32 = 2;
+
+    // Positions and vectors take three words from their offset.
+    const _: () = assert!(WORK_SOLVE_VELOCITY + 3 <= super::BODY_WORK_WORDS);
+
+    /// Every constant, for the generated declarations.
+    pub const ALL: [(&str, u32); 39] = [
+        ("WORK_POS_A", WORK_POS_A),
+        ("WORK_POS_B", WORK_POS_B),
+        ("WORK_VEL_A", WORK_VEL_A),
+        ("WORK_VEL_B", WORK_VEL_B),
+        ("WORK_PREV", WORK_PREV),
+        ("WORK_PAIRS", WORK_PAIRS),
+        ("WORK_FLAGS", WORK_FLAGS),
+        ("WORK_REACH", WORK_REACH),
+        ("WORK_CENTER", WORK_CENTER),
+        ("WORK_DECISION", WORK_DECISION),
+        ("WORK_APPROACH", WORK_APPROACH),
+        ("WORK_NORMAL", WORK_NORMAL),
+        ("WORK_ENERGY", WORK_ENERGY),
+        ("WORK_EXTENSION", WORK_EXTENSION),
+        ("WORK_CRUSH_COST", WORK_CRUSH_COST),
+        ("WORK_SINKAGE_PER_SOFTNESS", WORK_SINKAGE_PER_SOFTNESS),
+        ("WORK_MAX_SINKAGE", WORK_MAX_SINKAGE),
+        ("WORK_HEADING", WORK_HEADING),
+        ("WORK_BERM_CEILING", WORK_BERM_CEILING),
+        ("WORK_RIM_CEILING", WORK_RIM_CEILING),
+        ("WORK_DISPLACE", WORK_DISPLACE),
+        ("WORK_FLUID", WORK_FLUID),
+        ("WORK_BUDGET", WORK_BUDGET),
+        ("WORK_INNER", WORK_INNER),
+        ("WORK_OUTER", WORK_OUTER),
+        ("WORK_ENTRY_ENERGY", WORK_ENTRY_ENERGY),
+        ("WORK_WAKE_HEADING", WORK_WAKE_HEADING),
+        ("WORK_TOUCHING", WORK_TOUCHING),
+        ("WORK_BINNED", WORK_BINNED),
+        ("WORK_SOLVE_VELOCITY", WORK_SOLVE_VELOCITY),
+        ("WORK_ACTIVE", WORK_ACTIVE),
+        ("WORK_SWEPT", WORK_SWEPT),
+        ("WORK_WAS_GROUNDED", WORK_WAS_GROUNDED),
+        ("DECIDE_NONE", DECIDE_NONE),
+        ("DECIDE_CRATER", DECIDE_CRATER),
+        ("DECIDE_RUT", DECIDE_RUT),
+        ("DISPLACE_NONE", DISPLACE_NONE),
+        ("DISPLACE_SPLASH", DISPLACE_SPLASH),
+        ("DISPLACE_WAKE", DISPLACE_WAKE),
+    ];
+}
 
 /// 64-bit sums a [`DiagnosticsRecord`] holds, as `(low word, high word)` pairs.
 pub fn wide(lo: u32, hi: u32) -> u64 {
@@ -486,6 +818,19 @@ pub mod codes {
     /// A configuration change the CPU applies to the tick parameters; no kernel runs for it.
     pub const COMMAND_CONFIGURE: u32 = 3;
     pub const COMMAND_TOTALS: u32 = 4;
+    pub const COMMAND_SPAWN: u32 = 5;
+    pub const COMMAND_REMOVE: u32 = 6;
+    pub const COMMAND_DRIVE: u32 = 7;
+    pub const COMMAND_JUMP: u32 = 8;
+    pub const COMMAND_ATTRACT: u32 = 9;
+    pub const COMMAND_LIFT: u32 = 10;
+    pub const COMMAND_QUERY_RAY: u32 = 11;
+    /// A command the CPU already answered (a stale handle, no free body slot); its `tool`
+    /// field holds the status, and no kernel runs for it.
+    pub const COMMAND_REFUSED: u32 = 12;
+
+    pub const TARGET_COLUMN: u32 = 0;
+    pub const TARGET_RAY: u32 = 1;
 
     pub const RESULT_PENDING: u32 = 0;
     pub const RESULT_EDITED: u32 = 1;
@@ -493,6 +838,42 @@ pub mod codes {
     pub const RESULT_COLUMN_NOT_RESIDENT: u32 = 3;
     pub const RESULT_CONFIGURED: u32 = 4;
     pub const RESULT_TOTALS: u32 = 5;
+    pub const RESULT_TARGET_MISSED: u32 = 6;
+    pub const RESULT_TARGET_NOT_RESIDENT: u32 = 7;
+    pub const RESULT_BODY_SPAWNED: u32 = 8;
+    pub const RESULT_BODY_CAPACITY: u32 = 9;
+    pub const RESULT_BODY_REMOVED: u32 = 10;
+    pub const RESULT_STALE_BODY: u32 = 11;
+    pub const RESULT_DRIVEN: u32 = 12;
+    pub const RESULT_JUMPED: u32 = 13;
+    pub const RESULT_ATTRACTED: u32 = 14;
+    pub const RESULT_LIFTED: u32 = 15;
+    pub const RESULT_RAY: u32 = 16;
+
+    /// What a ray met (result `v0`).
+    pub const SURFACE_MISS: u32 = 0;
+    pub const SURFACE_HIT: u32 = 1;
+    pub const SURFACE_NOT_RESIDENT: u32 = 2;
+    pub const BODY_NONE: u32 = u32::MAX;
+
+    /// Body state flags.
+    pub const BODY_ALIVE: u32 = 1;
+    pub const BODY_GROUNDED: u32 = 2;
+    pub const BODY_SUSPENDED: u32 = 4;
+    pub const BODY_PLANE_VALID: u32 = 8;
+    /// Touching terrain at the end of the last substep (`BodyState::terrain_normal` is set).
+    pub const BODY_TERRAIN: u32 = 16;
+    /// What a tick did to a body (`BodyState::tick_events`), for its cosmetic event.
+    pub const TICK_CRATER: u32 = 1;
+    pub const TICK_SPLASH: u32 = 2;
+    pub const TICK_CONTACT: u32 = 4;
+    pub const TICK_LANDED: u32 = 8;
+
+    pub const SAMPLE_OK: u32 = 1;
+    pub const SAMPLE_GONE: u32 = 2;
+
+    pub const BROADPHASE_BINS: u32 = 0;
+    pub const BROADPHASE_ALL_PAIRS: u32 = 1;
 
     /// A window entry or result slot with no chunk.
     pub const SLOT_NONE: u32 = u32::MAX;
@@ -501,6 +882,10 @@ pub mod codes {
 
     /// Events appended by the pressure-injection kernel (fault injection only).
     pub const EVENT_INJECTED: u32 = 1;
+    /// A body's coalesced notice for a tick: `a` its index, `b` its generation, `c` the
+    /// `TICK_*` bits in the low byte and its strongest impact speed (world units per second,
+    /// rounded) above them.
+    pub const EVENT_BODY: u32 = 2;
 }
 
 /// The activity buffer, the flow words and the dispatch arguments, shared with the material
@@ -686,16 +1071,240 @@ pub fn wgsl_declarations_for(layout: &[Field]) -> Result<String, String> {
     for (name, value) in constants {
         let _ = writeln!(text, "const {name}: u32 = {value:#x}u;");
     }
+    write_body_codes(&mut text);
     text.push('\n');
     write_material_functions(&mut text);
     write_rule_constants(&mut text);
+    write_body_constants(&mut text);
     write_offsets(&mut text, "DIAG", &DiagnosticsRecord::LAYOUT);
     write_offsets(&mut text, "TOTALS", &TotalsRecord::LAYOUT);
+    write_offsets(&mut text, "BDIAG", &BodyDiagnosticsRecord::LAYOUT);
     text.push('\n');
     for record in RECORDS {
         text.push_str(&record.wgsl());
     }
     Ok(text)
+}
+
+/// The body command, result, flag and sample codes.
+fn write_body_codes(text: &mut String) {
+    use codes::*;
+    let constants = [
+        ("COMMAND_SPAWN", COMMAND_SPAWN),
+        ("COMMAND_REMOVE", COMMAND_REMOVE),
+        ("COMMAND_DRIVE", COMMAND_DRIVE),
+        ("COMMAND_JUMP", COMMAND_JUMP),
+        ("COMMAND_ATTRACT", COMMAND_ATTRACT),
+        ("COMMAND_LIFT", COMMAND_LIFT),
+        ("COMMAND_QUERY_RAY", COMMAND_QUERY_RAY),
+        ("COMMAND_REFUSED", COMMAND_REFUSED),
+        ("TARGET_COLUMN", TARGET_COLUMN),
+        ("TARGET_RAY", TARGET_RAY),
+        ("RESULT_TARGET_MISSED", RESULT_TARGET_MISSED),
+        ("RESULT_TARGET_NOT_RESIDENT", RESULT_TARGET_NOT_RESIDENT),
+        ("RESULT_BODY_SPAWNED", RESULT_BODY_SPAWNED),
+        ("RESULT_BODY_CAPACITY", RESULT_BODY_CAPACITY),
+        ("RESULT_BODY_REMOVED", RESULT_BODY_REMOVED),
+        ("RESULT_STALE_BODY", RESULT_STALE_BODY),
+        ("RESULT_DRIVEN", RESULT_DRIVEN),
+        ("RESULT_JUMPED", RESULT_JUMPED),
+        ("RESULT_ATTRACTED", RESULT_ATTRACTED),
+        ("RESULT_LIFTED", RESULT_LIFTED),
+        ("RESULT_RAY", RESULT_RAY),
+        ("SURFACE_MISS", SURFACE_MISS),
+        ("SURFACE_HIT", SURFACE_HIT),
+        ("SURFACE_NOT_RESIDENT", SURFACE_NOT_RESIDENT),
+        ("BODY_NONE", BODY_NONE),
+        ("BODY_ALIVE", BODY_ALIVE),
+        ("BODY_GROUNDED", BODY_GROUNDED),
+        ("BODY_SUSPENDED", BODY_SUSPENDED),
+        ("BODY_PLANE_VALID", BODY_PLANE_VALID),
+        ("BODY_TERRAIN", BODY_TERRAIN),
+        ("TICK_CRATER", TICK_CRATER),
+        ("TICK_SPLASH", TICK_SPLASH),
+        ("TICK_CONTACT", TICK_CONTACT),
+        ("TICK_LANDED", TICK_LANDED),
+        ("SAMPLE_OK", SAMPLE_OK),
+        ("SAMPLE_GONE", SAMPLE_GONE),
+        ("BROADPHASE_BINS", BROADPHASE_BINS),
+        ("BROADPHASE_ALL_PAIRS", BROADPHASE_ALL_PAIRS),
+        ("EVENT_BODY", EVENT_BODY),
+        ("BODY_STATE_WORDS", BodyState::WORDS as u32),
+        ("BODY_CONFIG_WORDS", BodyConfig::WORDS as u32),
+        ("BODY_SAMPLE_WORDS", BodySampleRecord::WORDS as u32),
+        ("BODY_WORK_WORDS", BODY_WORK_WORDS),
+    ];
+    for (name, value) in constants {
+        let _ = writeln!(text, "const {name}: u32 = {value:#x}u;");
+    }
+    for (name, value) in body_work::ALL {
+        let _ = writeln!(text, "const {name}: u32 = {value}u;");
+    }
+}
+
+/// The sphere solver's constants, from `world_model::{body, units}`, as WGSL constants: every
+/// tuning value the baseline engine reads is the one the kernels read.
+fn write_body_constants(text: &mut String) {
+    let k = tuning::KINEMATIC;
+    let d = tuning::DEFORMATION;
+    let c = tuning::CRATER;
+    let floats: [(&str, f32); 61] = [
+        ("GRAVITY_Y", units::GRAVITY_Y),
+        ("MAX_BODY_SPEED", body::MAX_BODY_SPEED),
+        ("TERRAIN_SWEEP_STEP", body::TERRAIN_SWEEP_STEP),
+        ("DRIVE_ACCELERATION", body::DRIVE_ACCELERATION),
+        ("JUMP_IMPULSE", body::JUMP_IMPULSE),
+        ("ATTRACT_ACCELERATION", body::ATTRACT_ACCELERATION),
+        ("LIFT_ACCELERATION", body::LIFT_ACCELERATION),
+        (
+            "LIFT_CENTERING_ACCELERATION",
+            body::LIFT_CENTERING_ACCELERATION,
+        ),
+        ("LIFT_INFLUENCE_RADIUS", body::LIFT_INFLUENCE_RADIUS),
+        ("TARGET_EPSILON_SQUARED", body::TARGET_EPSILON_SQUARED),
+        (
+            "MIN_BODY_RELATIVE_DENSITY",
+            *body::BODY_RELATIVE_DENSITY.start(),
+        ),
+        ("RAY_MAX_DISTANCE", config::RAY_MAX_DISTANCE),
+        ("CONTACT_SLOP", tuning::CONTACT_SLOP),
+        ("GROUND_NORMAL_MIN_Y", tuning::GROUND_NORMAL_MIN_Y),
+        ("DUPLICATE_NORMAL_COSINE", tuning::DUPLICATE_NORMAL_COSINE),
+        ("INTERNAL_EDGE_COSINE", tuning::INTERNAL_EDGE_COSINE),
+        ("CONSTRAINT_TOLERANCE", tuning::CONSTRAINT_TOLERANCE),
+        ("GROUND_NORMAL_BAND", tuning::GROUND_NORMAL_BAND),
+        ("DEGENERATE_DISTANCE", tuning::DEGENERATE_DISTANCE),
+        ("COINCIDENT_DISTANCE", tuning::COINCIDENT_DISTANCE),
+        (
+            "RESISTANCE_CLIFF_THRESHOLD",
+            tuning::RESISTANCE_CLIFF_THRESHOLD,
+        ),
+        ("RESISTANCE_MULTIPLIER", tuning::RESISTANCE_MULTIPLIER),
+        ("SPLASH_MIN_SPEED", tuning::SPLASH_MIN_SPEED),
+        ("SPLASH_UNITS_PER_ENERGY", tuning::SPLASH_UNITS_PER_ENERGY),
+        ("SPLASH_ENERGY_PER_UNIT", tuning::SPLASH_ENERGY_PER_UNIT),
+        ("SPLASH_CAVITY_RATIO", tuning::SPLASH_CAVITY_RATIO),
+        ("SPLASH_RING_OUTER_RATIO", tuning::SPLASH_RING_OUTER_RATIO),
+        ("WAKE_MIN_SPEED", tuning::WAKE_MIN_SPEED),
+        ("WAKE_LAYER_UNITS", tuning::WAKE_LAYER_UNITS),
+        ("WAKE_RING_WIDTH", tuning::WAKE_RING_WIDTH),
+        ("WAKE_MAX_PENDING", tuning::WAKE_MAX_PENDING),
+        ("RUT_REFERENCE_RING_RATIO", tuning::RUT_REFERENCE_RING_RATIO),
+        ("RUT_TRIM_DEPTH", tuning::RUT_TRIM_DEPTH),
+        (
+            "RUT_REFERENCE_SMOOTHING_SECONDS",
+            tuning::RUT_REFERENCE_SMOOTHING_SECONDS,
+        ),
+        ("MAX_SINKAGE_RATIO", tuning::MAX_SINKAGE_RATIO),
+        ("PLANE_SINGULARITY", tuning::PLANE_SINGULARITY),
+        ("RUT_BERM_INNER_RATIO", tuning::RUT_BERM_INNER_RATIO),
+        ("RUT_BERM_OUTER_RATIO", tuning::RUT_BERM_OUTER_RATIO),
+        ("RUT_BERM_HEIGHT_RATIO", tuning::RUT_BERM_HEIGHT_RATIO),
+        ("RUT_BERM_SIDE_COSINE", tuning::RUT_BERM_SIDE_COSINE),
+        ("RUT_HEADING_MIN_SPEED", tuning::RUT_HEADING_MIN_SPEED),
+        ("QUANTIZATION_TOLERANCE", tuning::QUANTIZATION_TOLERANCE),
+        ("AIR_DRAG_RATE", k.air_drag_rate),
+        ("ROLLING_RESISTANCE", k.rolling_resistance_coefficient),
+        ("GROUND_DAMPING_RATE", k.ground_damping_rate),
+        ("STATIC_FRICTION_COEFFICIENT", k.static_friction_coefficient),
+        ("STATIC_FRICTION_SPEED", k.static_friction_speed),
+        ("IMPACT_RESTITUTION", k.impact_restitution),
+        ("MIN_DEFORMATION_ENERGY", d.min_deformation_energy),
+        ("ENERGY_TO_DEFORMATION", d.energy_to_deformation_scale),
+        ("COST_DISPLACE_GRANULAR", d.cost_displace_granular),
+        ("COST_CRUSH_TERRAIN", d.cost_crush_terrain),
+        ("RUT_DEPTH_SCALE", d.rut_depth_scale),
+        ("RUT_REFERENCE_MASS", d.rut_reference_mass),
+        ("RUT_WIDTH_RATIO", d.rut_width_ratio),
+        ("RUT_COST_PER_UNIT", d.rut_cost_per_unit),
+        ("RIM_INNER_RATIO", c.rim_inner_radius_ratio),
+        ("RIM_EXPANSION", c.rim_expansion_factor),
+        ("BLADE_CEILING_RATIO", c.blade_ceiling_ratio),
+        ("MAX_DEFORMATION_SIZE_RATIO", c.max_deformation_size_ratio),
+        ("GROUNDING_DRIFT_BUFFER", c.grounding_drift_buffer),
+    ];
+    for (name, value) in floats {
+        let _ = writeln!(text, "const {name}: f32 = {value:?};");
+    }
+    let _ = writeln!(
+        text,
+        "const MINIMUM_BOUNCE_SPEED: f32 = {:?};",
+        c.minimum_bounce_speed
+    );
+    let words: [(&str, u32); 11] = [
+        ("CONTACT_ITERATIONS", tuning::CONTACT_ITERATIONS as u32),
+        ("VELOCITY_ITERATIONS", tuning::VELOCITY_ITERATIONS as u32),
+        (
+            "MAX_MANIFOLD_CONTACTS",
+            tuning::MAX_MANIFOLD_CONTACTS as u32,
+        ),
+        (
+            "RESISTANCE_SAMPLE_RINGS",
+            tuning::RESISTANCE_SAMPLE_RINGS as u32,
+        ),
+        (
+            "RESISTANCE_SAMPLE_STRIDE",
+            tuning::RESISTANCE_SAMPLE_STRIDE as u32,
+        ),
+        (
+            "SPLASH_MAX_PER_CELL",
+            u32::from(tuning::SPLASH_MAX_PER_CELL),
+        ),
+        ("WAKE_MAX_PER_CELL", u32::from(tuning::WAKE_MAX_PER_CELL)),
+        (
+            "WAKE_MAX_RING_PER_CELL",
+            u32::from(tuning::WAKE_MAX_RING_PER_CELL),
+        ),
+        (
+            "RUT_REFERENCE_SAMPLES",
+            tuning::RUT_REFERENCE_SAMPLES as u32,
+        ),
+        (
+            "RUT_MIN_REFERENCE_SAMPLES",
+            tuning::RUT_MIN_REFERENCE_SAMPLES as u32,
+        ),
+        ("RUT_PRESS_PER_SUBSTEP", u32::from(d.rut_press_per_substep)),
+    ];
+    for (name, value) in words {
+        let _ = writeln!(text, "const {name}: u32 = {value}u;");
+    }
+    let _ = writeln!(
+        text,
+        "const MAX_RIM_DEPOSIT: u32 = {}u;",
+        c.max_rim_deposit_per_cell
+    );
+}
+
+/// WGSL functions that load and store `layout`'s record from a flat `array<u32>` global named
+/// `array`, the record starting at word `base`: `load_<prefix>(base)` and
+/// `store_<prefix>(base, value)`. Generated, like the structs, so a field cannot be read at
+/// one offset and written at another. Atomic fields are not supported here.
+pub fn word_access(layout: &RecordLayout, array: &str, prefix: &str) -> String {
+    let mut text = format!(
+        "fn load_{prefix}(base: u32) -> {} {{\n    var r: {};\n",
+        layout.name, layout.name
+    );
+    for (index, field) in layout.fields.iter().enumerate() {
+        let read = format!("{array}[base + {index}u]");
+        let value = match field.ty {
+            WordType::U32 => read,
+            WordType::I32 => format!("bitcast<i32>({read})"),
+            WordType::F32 => format!("bitcast<f32>({read})"),
+            WordType::AtomicU32 => panic!("{}.{} is atomic", layout.name, field.name),
+        };
+        let _ = writeln!(text, "    r.{} = {value};", field.name);
+    }
+    text.push_str("    return r;\n}\n");
+    let _ = writeln!(text, "fn store_{prefix}(base: u32, r: {}) {{", layout.name);
+    for (index, field) in layout.fields.iter().enumerate() {
+        let _ = writeln!(
+            text,
+            "    {array}[base + {index}u] = bitcast<u32>(r.{});",
+            field.name
+        );
+    }
+    text.push_str("}\n");
+    text
 }
 
 /// Word offsets of a record's fields (`<PREFIX>_<FIELD>`) and its length (`<PREFIX>_WORDS`),
@@ -777,6 +1386,29 @@ fn write_material_functions(text: &mut String) {
     });
     material_table(text, "terrain_to_granular", "u32", 16, |m| {
         u(TerrainMat(m).to_granular().map_or(none, |g| u32::from(g.0)))
+    });
+    let f = |value: f32| format!("{value:?}");
+    material_table(text, "fluid_relative_density", "f32", 8, |m| {
+        f(fluid_properties(FluidMat(m)).relative_density)
+    });
+    material_table(text, "fluid_drag_rate", "f32", 8, |m| {
+        f(fluid_properties(FluidMat(m)).drag_rate)
+    });
+    material_table(text, "terrain_crush_hardness", "f32", 16, |m| {
+        f(terrain_crush_hardness(TerrainMat(m)))
+    });
+    // `ground_softness` reads the loose layer when there is one, the bedrock otherwise, and
+    // nothing under ice; the kernels combine these two tables the same way.
+    material_table(text, "loose_softness", "f32", 16, |m| {
+        let mut cell = WorldCell::default();
+        cell.set_granular_mat(GranularMat(m));
+        cell.set_granular_vol(1);
+        f(ground_softness(&cell))
+    });
+    material_table(text, "bedrock_softness", "f32", 16, |m| {
+        let mut cell = WorldCell::default();
+        cell.set_terrain_mat(TerrainMat(m));
+        f(ground_softness(&cell))
     });
 }
 
@@ -927,9 +1559,12 @@ mod tests {
             center_y: 70,
             radius: 64,
             strength: 255,
-            cell_x: 0,
-            cell_y: 0,
-            reserved0: 0,
+            target_kind: codes::TARGET_RAY,
+            body_generation: 6,
+            d: 0.5,
+            origin_z: -2.0,
+            ray_length: 1000.0,
+            ..CommandRecord::default()
         };
         let mut words = [0u32; CommandRecord::WORDS];
         command.write_words(&mut words);
@@ -947,25 +1582,43 @@ mod tests {
                 255,
                 0,
                 0,
+                1,
+                0,
+                6,
+                0,
+                0,
+                0,
+                // 0.5f32, -2.0f32 and 1000.0f32 written out as bits.
+                0x3F00_0000,
+                0,
+                0,
+                0xC000_0000,
+                0,
+                0,
+                0,
+                0x447A_0000,
+                0,
+                0,
                 0
             ]
         );
         assert_eq!(CommandRecord::read_words(&words), command);
 
-        let body = BodyRecord {
-            handle_index: 9,
-            handle_generation: 2,
-            position_y: -1.5,
-            mass: 4.0,
-            ..BodyRecord::default()
+        let body = BodyState {
+            anchor_x: -3,
+            generation: 2,
+            local_y: -1.5,
+            touching: 7,
+            ..BodyState::default()
         };
-        let mut bytes = [0u8; 64];
+        let mut bytes = [0u8; 128];
         body.write_bytes(&mut bytes);
-        assert_eq!(&bytes[0..8], &[9, 0, 0, 0, 2, 0, 0, 0]);
-        // -1.5f32 is 0xBFC00000, little-endian, at word 5.
-        assert_eq!(&bytes[20..24], &[0x00, 0x00, 0xC0, 0xBF]);
-        assert_eq!(&bytes[44..48], &4.0f32.to_le_bytes());
-        assert_eq!(BodyRecord::read_bytes(&bytes), body);
+        assert_eq!(&bytes[0..4], &(-3i32).to_le_bytes());
+        // -1.5f32 is 0xBFC00000, little-endian, at word 3.
+        assert_eq!(&bytes[12..16], &[0x00, 0x00, 0xC0, 0xBF]);
+        assert_eq!(&bytes[36..40], &[2, 0, 0, 0]);
+        assert_eq!(&bytes[108..112], &[7, 0, 0, 0]);
+        assert_eq!(BodyState::read_bytes(&bytes), body);
     }
 
     #[test]
@@ -982,9 +1635,16 @@ mod tests {
                 ChunkSlotRecord::BYTES,
                 DiagnosticsRecord::BYTES,
                 TotalsRecord::BYTES,
-                BodyRecord::BYTES,
+                BodyState::BYTES,
+                BodyConfig::BYTES,
+                BodySampleRecord::BYTES,
+                BodyParams::BYTES,
+                BodyDispatch::BYTES,
+                BodyDiagnosticsRecord::BYTES,
             ],
-            [128, 16, 48, 48, 16, 16, 32, 144, 96, 64]
+            [
+                128, 16, 112, 96, 16, 16, 32, 144, 96, 128, 16, 96, 128, 16, 128
+            ]
         );
         assert_eq!(TickParams::LAYOUT.offset_of("origin_key_x"), Some(36));
         assert_eq!(TickParams::LAYOUT.offset_of("rule_key"), Some(68));
@@ -997,13 +1657,30 @@ mod tests {
         assert_eq!(TotalsRecord::LAYOUT.offset_of("elevation_lo"), Some(64));
         assert_eq!(ResultRecord::LAYOUT.offset_of("changed"), Some(24));
         assert_eq!(ResultRecord::LAYOUT.offset_of("word1"), Some(36));
+        assert_eq!(ResultRecord::LAYOUT.offset_of("count"), Some(48));
+        assert_eq!(ResultRecord::LAYOUT.offset_of("v9"), Some(88));
+        assert_eq!(CommandRecord::LAYOUT.offset_of("body_index"), Some(48));
+        assert_eq!(CommandRecord::LAYOUT.offset_of("ray_length"), Some(96));
         assert_eq!(ChunkSlotRecord::LAYOUT.offset_of("generation"), Some(12));
         assert_eq!(TickParams::LAYOUT.offset_of("window_width"), Some(16));
         assert_eq!(TickParams::LAYOUT.offset_of("injected_events"), Some(32));
-        assert_eq!(BodyRecord::LAYOUT.offset_of("velocity_x"), Some(32));
+        assert_eq!(BodyState::LAYOUT.offset_of("velocity_x"), Some(20));
+        assert_eq!(BodyState::LAYOUT.offset_of("landings"), Some(84));
+        assert_eq!(BodySampleRecord::LAYOUT.offset_of("landings"), Some(72));
+        assert_eq!(BodyParams::LAYOUT.offset_of("diagnostics_base"), Some(76));
+        assert_eq!(
+            BodyDiagnosticsRecord::LAYOUT.offset_of("compaction_lo"),
+            Some(68)
+        );
         // Uniform structs must be multiples of 16 bytes.
-        assert_eq!(TickParams::BYTES % 16, 0);
-        assert_eq!(DispatchParams::BYTES % 16, 0);
+        for bytes in [
+            TickParams::BYTES,
+            DispatchParams::BYTES,
+            BodyParams::BYTES,
+            BodyDispatch::BYTES,
+        ] {
+            assert_eq!(bytes % 16, 0);
+        }
     }
 
     #[test]

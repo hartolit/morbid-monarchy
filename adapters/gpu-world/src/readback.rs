@@ -1,8 +1,10 @@
 //! Decoding a tick's readback into outcomes, with identity and consistency checks.
 //!
 //! A tick readback holds the tick's result records, the cosmetic event buffer, the tick's
-//! diagnostics record, the totals records of its totals commands and, when enabled, a begin and
-//! an end timestamp per compute pass. Decoding checks every record against what the CPU encoded: the
+//! diagnostics record, the totals records of its totals commands, the body substeps' record,
+//! the selected body samples and, when enabled, a begin and an end timestamp per compute pass.
+//! Window-local results (hit cells, stroke centres, target points) become absolute values here,
+//! with the window origin the tick was encoded against. Decoding checks every record against what the CPU encoded: the
 //! command identity, its position and the tick. A mismatch means a layout error or a result
 //! that is not this tick's, and faults the session instead of reporting a wrong outcome. The
 //! event header must account for every dropped append; a header whose drops do not match its
@@ -10,17 +12,27 @@
 
 use std::time::Duration;
 
-use world_model::{cell::WorldCell, command::CommandKind, observation::WorldTotals};
+use world_model::{
+    body::BodyHandle,
+    cell::WorldCell,
+    command::CommandKind,
+    glam::{DVec3, IVec2, Vec3},
+    material::FluidMat,
+    observation::{BodyCounters, BodyHit, BodySample, SurfaceHit, WorldTotals},
+    spatial::CHUNK_SIZE,
+};
 use world_runtime::{
     ids::{CommandId, Tick},
-    port::{CellReport, CommandOutcome, CommandResult, CosmeticEvent, Outcome, PhaseTimes},
+    port::{
+        BodyReport, CellReport, CommandOutcome, CommandResult, CosmeticEvent, Outcome, PhaseTimes,
+    },
 };
 
 use crate::{
     commands::Expected,
     layout::{
-        DiagnosticsRecord, EventHeader, EventRecord, GpuRecord, ResultRecord, TotalsRecord, codes,
-        wide,
+        BodyDiagnosticsRecord, BodySampleRecord, DiagnosticsRecord, EventHeader, EventRecord,
+        GpuRecord, ResultRecord, TotalsRecord, codes, wide,
     },
 };
 
@@ -48,6 +60,10 @@ pub enum DecodeError {
         dropped: u32,
         capacity: u32,
     },
+    /// Body sample `position` names another handle than the one selected there.
+    Sample {
+        position: u32,
+    },
 }
 
 /// Decodes `results` (one record per expected command) into command outcomes. `totals` holds
@@ -71,26 +87,12 @@ pub fn decode_results(
     }
     for (position, (bytes, expected)) in results.chunks_exact(stride).zip(expected).enumerate() {
         let record = ResultRecord::read_bytes(bytes);
-        let result = match (expected.kind, record.status) {
-            (CommandKind::EditMaterial, _) => CommandResult::Edited {
-                changed: record.changed,
-                not_resident: record.not_resident + expected.outside_window,
-            },
-            (_, codes::RESULT_CONFIGURED) => CommandResult::Configured,
-            (_, codes::RESULT_TOTALS) => {
-                let at = position * TotalsRecord::BYTES as usize;
-                CommandResult::Totals(decode_totals(
-                    &totals[at..at + TotalsRecord::BYTES as usize],
-                ))
-            }
-            (_, codes::RESULT_COLUMN) => CommandResult::Column {
-                cell: expected.cell,
-                column: WorldCell::from_words([record.word0, record.word1]),
-            },
-            _ => CommandResult::ColumnNotResident {
-                cell: expected.cell,
-            },
-        };
+        let at = position * TotalsRecord::BYTES as usize;
+        let result = decode_result(
+            &record,
+            expected,
+            &totals[at..at + TotalsRecord::BYTES as usize],
+        );
         out.push(Outcome::Command(CommandOutcome {
             id: expected.id,
             tick,
@@ -98,6 +100,140 @@ pub fn decode_results(
         }));
     }
     Ok(())
+}
+
+fn f32_word(word: u32) -> f32 {
+    f32::from_bits(word)
+}
+
+/// Where a ray went, from its result's `v0`–`v6`.
+fn decode_ray(record: &ResultRecord, expected: &Expected) -> (SurfaceHit, Option<BodyHit>) {
+    let point = |distance: f32| {
+        expected.ray.map_or(DVec3::ZERO, |ray| {
+            ray.origin() + ray.direction().as_dvec3() * f64::from(distance)
+        })
+    };
+    let distance = f32_word(record.v3);
+    let surface = match record.v0 {
+        codes::SURFACE_HIT => SurfaceHit::Hit {
+            cell: expected.absolute_cell(IVec2::new(record.v1 as i32, record.v2 as i32)),
+            position: point(distance),
+            distance,
+        },
+        codes::SURFACE_NOT_RESIDENT => SurfaceHit::NotResident { distance },
+        _ => SurfaceHit::Miss,
+    };
+    let body = (record.v4 != codes::BODY_NONE).then(|| {
+        let distance = f32_word(record.v6);
+        BodyHit {
+            body: BodyHandle::new(record.v4, record.v5),
+            position: point(distance),
+            distance,
+        }
+    });
+    (surface, body)
+}
+
+fn target(record: &ResultRecord, expected: &Expected) -> DVec3 {
+    expected.absolute_point([
+        f32_word(record.v7),
+        f32_word(record.v8),
+        f32_word(record.v9),
+    ])
+}
+
+fn stale(expected: &Expected) -> CommandResult {
+    CommandResult::StaleBody {
+        body: expected.body.unwrap_or(BodyHandle::new(u32::MAX, 0)),
+    }
+}
+
+fn decode_result(record: &ResultRecord, expected: &Expected, totals: &[u8]) -> CommandResult {
+    let status = record.status;
+    match status {
+        codes::RESULT_TARGET_MISSED => {
+            return CommandResult::TargetMissed(decode_ray(record, expected).0);
+        }
+        codes::RESULT_TARGET_NOT_RESIDENT => {
+            return CommandResult::TargetNotResident {
+                cell: expected.cell,
+            };
+        }
+        codes::RESULT_STALE_BODY => return stale(expected),
+        codes::RESULT_BODY_CAPACITY => {
+            return CommandResult::BodyCapacity {
+                capacity: expected.body_capacity,
+            };
+        }
+        _ => {}
+    }
+    let body = expected.body.unwrap_or(BodyHandle::new(u32::MAX, 0));
+    match expected.kind {
+        CommandKind::EditMaterial => CommandResult::Edited {
+            center: if expected.outside_window > 0 {
+                expected.cell
+            } else {
+                expected.absolute_cell(IVec2::new(record.word0 as i32, record.word1 as i32))
+            },
+            changed: record.changed,
+            not_resident: record.not_resident + expected.outside_window,
+        },
+        CommandKind::SetAmbientTemperature
+        | CommandKind::SetSimulationRules
+        | CommandKind::SetElevationScale => CommandResult::Configured,
+        CommandKind::MeasureTotals => CommandResult::Totals(decode_totals(totals)),
+        CommandKind::QueryColumn if status == codes::RESULT_COLUMN => CommandResult::Column {
+            cell: expected.cell,
+            column: WorldCell::from_words([record.word0, record.word1]),
+        },
+        CommandKind::QueryColumn => CommandResult::ColumnNotResident {
+            cell: expected.cell,
+        },
+        CommandKind::QueryRay => {
+            let (surface, body) = decode_ray(record, expected);
+            CommandResult::Ray { surface, body }
+        }
+        CommandKind::SpawnBody => {
+            let anchor = DVec3::new(
+                f64::from(record.word0 as i32) * CHUNK_SIZE as f64,
+                0.0,
+                -f64::from(record.word1 as i32) * CHUNK_SIZE as f64,
+            );
+            CommandResult::BodySpawned {
+                body,
+                position: anchor
+                    + DVec3::new(
+                        f64::from(f32_word(record.v7)),
+                        f64::from(f32_word(record.v9)),
+                        -f64::from(f32_word(record.v8)),
+                    ),
+            }
+        }
+        CommandKind::RemoveBody => CommandResult::BodyRemoved {
+            body,
+            counters: BodyCounters {
+                landings: record.word0,
+                liquid_entries: record.word1,
+                body_contacts: record.slot_index,
+                craters: record.slot_generation,
+                splashes: record.v7,
+                absorbed_energy: record.v8,
+            },
+        },
+        CommandKind::DriveBody => CommandResult::Driven { body },
+        CommandKind::JumpBody => CommandResult::Jumped {
+            body,
+            jumped: record.count > 0,
+        },
+        CommandKind::AttractBodies => CommandResult::Attracted {
+            bodies: record.count,
+            target: target(record, expected),
+        },
+        CommandKind::LiftBodies => CommandResult::Lifted {
+            bodies: record.count,
+            target: target(record, expected),
+        },
+    }
 }
 
 fn check(
@@ -121,17 +257,34 @@ fn check(
             found: found_tick,
         });
     }
+    let ray = expected.ray.is_some();
+    let body = |success: u32| record.status == success || record.status == codes::RESULT_STALE_BODY;
+    let targeted = |success: u32| {
+        record.status == success
+            || (ray && record.status == codes::RESULT_TARGET_MISSED)
+            || (!ray && record.status == codes::RESULT_TARGET_NOT_RESIDENT)
+    };
     let valid = match expected.kind {
-        CommandKind::EditMaterial => record.status == codes::RESULT_EDITED,
+        CommandKind::EditMaterial => targeted(codes::RESULT_EDITED),
         CommandKind::QueryColumn => matches!(
             record.status,
             codes::RESULT_COLUMN | codes::RESULT_COLUMN_NOT_RESIDENT
         ),
-        CommandKind::SetAmbientTemperature | CommandKind::SetSimulationRules => {
-            record.status == codes::RESULT_CONFIGURED
-        }
+        CommandKind::SetAmbientTemperature
+        | CommandKind::SetSimulationRules
+        | CommandKind::SetElevationScale => record.status == codes::RESULT_CONFIGURED,
         CommandKind::MeasureTotals => record.status == codes::RESULT_TOTALS,
-        _ => false,
+        CommandKind::QueryRay => record.status == codes::RESULT_RAY,
+        CommandKind::SpawnBody => {
+            record.status == codes::RESULT_BODY_CAPACITY
+                || record.status == codes::RESULT_TARGET_NOT_RESIDENT
+                || targeted(codes::RESULT_BODY_SPAWNED)
+        }
+        CommandKind::RemoveBody => body(codes::RESULT_BODY_REMOVED),
+        CommandKind::DriveBody => body(codes::RESULT_DRIVEN),
+        CommandKind::JumpBody => body(codes::RESULT_JUMPED),
+        CommandKind::AttractBodies => targeted(codes::RESULT_ATTRACTED),
+        CommandKind::LiftBodies => targeted(codes::RESULT_LIFTED),
     };
     if valid {
         Ok(())
@@ -244,11 +397,11 @@ fn span(begin: u64, end: u64, period_ns: f32) -> Option<Duration> {
     Some(Duration::from_nanos(nanoseconds.round() as u64))
 }
 
-/// The tick's device time and its three passes' times from the resolved timestamps (begin and
+/// The tick's device time and its four passes' times from the resolved timestamps (begin and
 /// end of each pass), or `None` when they are not ordered (a device may report unusable values;
 /// they are not turned into a measurement).
 pub fn decode_timestamps(bytes: &[u8], period_ns: f32) -> Option<(Duration, PhaseTimes)> {
-    let mut stamps = [0u64; 6];
+    let mut stamps = [0u64; 8];
     for (index, stamp) in stamps.iter_mut().enumerate() {
         *stamp = timestamp(bytes, index)?;
     }
@@ -256,13 +409,104 @@ pub fn decode_timestamps(bytes: &[u8], period_ns: f32) -> Option<(Duration, Phas
         return None;
     }
     Some((
-        span(stamps[0], stamps[5], period_ns)?,
+        span(stamps[0], stamps[7], period_ns)?,
         PhaseTimes {
             commands: span(stamps[0], stamps[1], period_ns)?,
             activity: span(stamps[2], stamps[3], period_ns)?,
             material: span(stamps[4], stamps[5], period_ns)?,
+            bodies: span(stamps[6], stamps[7], period_ns)?,
         },
     ))
+}
+
+/// The body substeps' record as a [`BodyReport`]; `substeps` comes from the CPU.
+pub fn decode_body_diagnostics(bytes: &[u8], substeps: u32) -> BodyReport {
+    let r = BodyDiagnosticsRecord::read_bytes(bytes);
+    BodyReport {
+        substeps,
+        live: r.live,
+        suspended: r.suspended,
+        candidate_pairs: wide(r.candidate_pairs_lo, r.candidate_pairs_hi),
+        contact_pairs: r.contact_pairs,
+        swept_contacts: r.swept_contacts,
+        terrain_contacts: r.terrain_contacts,
+        residual_overlap: f32::from_bits(r.residual_overlap),
+        residual_approach: f32::from_bits(r.residual_approach),
+        speed_limited: r.speed_limited,
+        swept_bodies: r.swept_bodies,
+        fluid_in: wide(r.fluid_in_lo, r.fluid_in_hi),
+        fluid_out: wide(r.fluid_out_lo, r.fluid_out_hi),
+        solid_in: wide(r.solid_in_lo, r.solid_in_hi),
+        solid_out: wide(r.solid_out_lo, r.solid_out_hi),
+        compaction: wide(r.compaction_lo, r.compaction_hi),
+        ice_broken: r.ice_broken,
+        organics_cleared: r.organics_cleared,
+        craters: r.craters,
+        ruts: r.ruts,
+        splashes: r.splashes,
+        wakes: r.wakes,
+        claims_lost: r.claims_lost,
+    }
+}
+
+/// Decodes `count` body samples of `tick` into outcomes, checking each echoes the handle the
+/// CPU selected at its position.
+pub fn decode_samples(
+    bytes: &[u8],
+    selected: &[BodyHandle],
+    tick: Tick,
+    out: &mut Vec<Outcome>,
+) -> Result<(), DecodeError> {
+    const SAMPLE_BYTES: usize = BodySampleRecord::BYTES as usize;
+    let (records, _) = bytes.as_chunks::<SAMPLE_BYTES>();
+    for (position, (bytes, handle)) in records.iter().zip(selected).enumerate() {
+        let r = BodySampleRecord::read_bytes(bytes);
+        let found = BodyHandle::new(r.index, r.generation);
+        if found != *handle {
+            return Err(DecodeError::Sample {
+                position: position as u32,
+            });
+        }
+        match r.status {
+            codes::SAMPLE_OK => {
+                let size = CHUNK_SIZE as f64;
+                let position = DVec3::new(
+                    f64::from(r.anchor_x) * size + f64::from(r.local_x),
+                    f64::from(r.height),
+                    -(f64::from(r.anchor_y) * size + f64::from(r.local_y)),
+                );
+                out.push(Outcome::Body(BodySample {
+                    body: found,
+                    tick: tick.value(),
+                    position,
+                    velocity: Vec3::new(r.velocity_x, r.velocity_y, r.velocity_z),
+                    ground_normal: Vec3::new(r.normal_x, r.normal_y, r.normal_z),
+                    grounded: r.flags & codes::BODY_GROUNDED != 0,
+                    suspended: r.flags & codes::BODY_SUSPENDED != 0,
+                    submerged_fraction: r.submerged,
+                    liquid: (r.liquid != u32::from(FluidMat::EMPTY.0))
+                        .then_some(FluidMat(r.liquid as u8)),
+                    touching: r.touching,
+                    counters: BodyCounters {
+                        landings: r.landings,
+                        liquid_entries: r.liquid_entries,
+                        body_contacts: r.body_contacts,
+                        craters: r.craters,
+                        splashes: r.splashes,
+                        absorbed_energy: r.absorbed_energy,
+                    },
+                }));
+            }
+            codes::SAMPLE_GONE => out.push(Outcome::BodyGone { body: found, tick }),
+            status => {
+                return Err(DecodeError::Status {
+                    position: position as u32,
+                    status,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -287,6 +531,7 @@ mod tests {
             word1: 0x0123_4567,
             slot_index: 0,
             slot_generation: 1,
+            ..ResultRecord::default()
         };
         let mut bytes = vec![0u8; ResultRecord::BYTES as usize];
         record.write_bytes(&mut bytes);
@@ -299,6 +544,10 @@ mod tests {
             kind,
             cell: IVec2::new(3, -4),
             outside_window: 5,
+            body: None,
+            ray: None,
+            origin: (0, 0),
+            body_capacity: 0,
         }
     }
 
@@ -353,6 +602,7 @@ mod tests {
                 id: CommandId::new(10),
                 tick: Tick::new(4),
                 result: CommandResult::Edited {
+                    center: IVec2::new(3, -4),
                     changed: 7,
                     not_resident: 7
                 },
@@ -462,9 +712,142 @@ mod tests {
     }
 
     #[test]
+    fn body_results_become_absolute_and_samples_must_echo_their_handles() {
+        use world_model::command::Ray;
+
+        let body = BodyHandle::new(5, 2);
+        let base = |id: u64, kind: CommandKind| Expected {
+            body: Some(body),
+            origin: (-128, 64),
+            ..expected(id, kind)
+        };
+        let ray = Ray::new(DVec3::new(-100.0, 50.0, -70.0), Vec3::NEG_Y, 200.0).expect("ray");
+        let mut spawned = ResultRecord::read_bytes(&record(1, 0, 9, codes::RESULT_BODY_SPAWNED));
+        spawned.word0 = (-2i32) as u32;
+        spawned.word1 = 1;
+        spawned.v7 = 10.5f32.to_bits();
+        spawned.v8 = 3.0f32.to_bits();
+        spawned.v9 = 21.0f32.to_bits();
+        let mut hit = ResultRecord::read_bytes(&record(2, 1, 9, codes::RESULT_RAY));
+        hit.v0 = codes::SURFACE_HIT;
+        hit.v1 = 28;
+        hit.v2 = 5;
+        hit.v3 = 30.0f32.to_bits();
+        hit.v4 = 5;
+        hit.v5 = 2;
+        hit.v6 = 12.0f32.to_bits();
+        let mut removed = ResultRecord::read_bytes(&record(3, 2, 9, codes::RESULT_BODY_REMOVED));
+        removed.word0 = 4;
+        removed.v8 = u32::MAX;
+        let stale = ResultRecord::read_bytes(&record(4, 3, 9, codes::RESULT_STALE_BODY));
+        let mut bytes = vec![0u8; 4 * ResultRecord::BYTES as usize];
+        for (index, record) in [spawned, hit, removed, stale].iter().enumerate() {
+            record.write_bytes(&mut bytes[index * ResultRecord::BYTES as usize..]);
+        }
+        let totals = vec![0u8; 4 * TotalsRecord::BYTES as usize];
+        let mut out = Vec::new();
+        let ray_query = Expected {
+            ray: Some(ray),
+            ..base(2, CommandKind::QueryRay)
+        };
+        decode_results(
+            &bytes,
+            &totals,
+            &[
+                base(1, CommandKind::SpawnBody),
+                ray_query,
+                base(3, CommandKind::RemoveBody),
+                base(4, CommandKind::DriveBody),
+            ],
+            Tick::new(9),
+            &mut out,
+        )
+        .expect("consistent");
+        let results: Vec<CommandResult> = out
+            .iter()
+            .map(|outcome| match outcome {
+                Outcome::Command(command) => command.result,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        // Anchor (-2, 1): cell x -128 + 10.5, cell y 64 + 3, height 21.
+        assert_eq!(
+            results[0],
+            CommandResult::BodySpawned {
+                body,
+                position: DVec3::new(-117.5, 21.0, -67.0)
+            }
+        );
+        // Hit cell (28, 5) in a window starting at cell (-128, 64).
+        let CommandResult::Ray {
+            surface: SurfaceHit::Hit { cell, position, .. },
+            body: Some(crossed),
+        } = results[1]
+        else {
+            panic!("{:?}", results[1]);
+        };
+        assert_eq!(cell, IVec2::new(-100, 69));
+        assert_eq!(position, DVec3::new(-100.0, 20.0, -70.0));
+        assert_eq!(crossed.body, body);
+        assert_eq!(crossed.position, DVec3::new(-100.0, 38.0, -70.0));
+        let CommandResult::BodyRemoved { counters, .. } = results[2] else {
+            panic!("{:?}", results[2]);
+        };
+        assert_eq!((counters.landings, counters.absorbed_energy), (4, u32::MAX));
+        assert_eq!(results[3], CommandResult::StaleBody { body });
+
+        let mut sample = BodySampleRecord {
+            status: codes::SAMPLE_OK,
+            index: 5,
+            generation: 2,
+            flags: codes::BODY_ALIVE | codes::BODY_GROUNDED,
+            anchor_x: -1,
+            local_x: 2.0,
+            local_y: 1.0,
+            height: 3.0,
+            liquid: u32::from(FluidMat::FLUID_WATER.0),
+            craters: 7,
+            ..BodySampleRecord::default()
+        };
+        let mut bytes = vec![0u8; 2 * BodySampleRecord::BYTES as usize];
+        sample.write_bytes(&mut bytes);
+        let gone = BodySampleRecord {
+            status: codes::SAMPLE_GONE,
+            index: 1,
+            generation: 0,
+            ..BodySampleRecord::default()
+        };
+        gone.write_bytes(&mut bytes[BodySampleRecord::BYTES as usize..]);
+        let mut out = Vec::new();
+        let selected = [body, BodyHandle::new(1, 0)];
+        decode_samples(&bytes, &selected, Tick::new(9), &mut out).expect("echoed");
+        let Outcome::Body(decoded) = out[0] else {
+            panic!("{:?}", out[0]);
+        };
+        assert_eq!(decoded.position, DVec3::new(-62.0, 3.0, -1.0));
+        assert!(decoded.grounded && !decoded.suspended);
+        assert_eq!(decoded.liquid, Some(FluidMat::FLUID_WATER));
+        assert_eq!(decoded.counters.craters, 7);
+        assert_eq!(
+            out[1],
+            Outcome::BodyGone {
+                body: BodyHandle::new(1, 0),
+                tick: Tick::new(9)
+            }
+        );
+        // A sample that names another handle than the one selected is refused.
+        sample.generation = 3;
+        sample.write_bytes(&mut bytes);
+        assert_eq!(
+            decode_samples(&bytes, &selected, Tick::new(9), &mut Vec::new()),
+            Err(DecodeError::Sample { position: 0 })
+        );
+    }
+
+    #[test]
     fn timestamps_convert_with_the_period_and_refuse_unordered_pairs() {
-        let mut bytes = [0u8; 48];
-        for (index, stamp) in [1_000u64, 1_400, 1_500, 1_600, 2_000, 3_000]
+        let mut bytes = [0u8; 64];
+        for (index, stamp) in [1_000u64, 1_400, 1_500, 1_600, 2_000, 3_000, 3_100, 3_300]
             .iter()
             .enumerate()
         {
@@ -473,15 +856,16 @@ mod tests {
         assert_eq!(
             decode_timestamps(&bytes, 1.5),
             Some((
-                Duration::from_nanos(3_000),
+                Duration::from_nanos(3_450),
                 PhaseTimes {
                     commands: Duration::from_nanos(600),
                     activity: Duration::from_nanos(150),
                     material: Duration::from_nanos(1_500),
+                    bodies: Duration::from_nanos(300),
                 }
             ))
         );
-        bytes[40..].copy_from_slice(&500u64.to_le_bytes());
+        bytes[40..48].copy_from_slice(&500u64.to_le_bytes());
         assert_eq!(decode_timestamps(&bytes, 1.0), None);
     }
 

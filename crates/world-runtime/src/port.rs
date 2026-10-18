@@ -14,11 +14,12 @@
 use std::time::Duration;
 
 use world_model::{
+    body::BodyHandle,
     cell::WorldCell,
     command::{Command, CommandKind},
     config,
-    glam::IVec2,
-    observation::WorldTotals,
+    glam::{DVec3, IVec2},
+    observation::{BodyCounters, BodyHit, BodySample, SurfaceHit, WorldTotals},
     spatial::{CHUNK_CELL_COUNT, ChunkKey, ChunkView},
 };
 
@@ -37,7 +38,14 @@ pub struct AdmittedCommand {
 pub struct TickBatch<'a> {
     pub session: SessionId,
     pub tick: Tick,
+    /// The fixed clock's rate when this tick was due: the tick lasts `1 / tick_rate_hz`
+    /// seconds, which body substeps divide. Inside [`config::TICK_RATE_HZ`].
+    pub tick_rate_hz: f64,
     pub commands: &'a [AdmittedCommand],
+    /// Bodies to sample at the end of the tick, at most
+    /// [`PortCapabilities::body_samples_per_tick`]. A handle that names no live body is
+    /// reported gone, not sampled.
+    pub observe: &'a [BodyHandle],
 }
 
 /// Proof that a tick was submitted. `serial` orders submissions within the session.
@@ -338,6 +346,13 @@ pub enum PayloadError {
     },
     /// The capture is not ready yet; poll until its outcome arrives.
     CaptureNotReady,
+    /// The batch asks for more body samples than one tick reports.
+    TooManySamples {
+        count: usize,
+        limit: u32,
+    },
+    /// The batch's tick rate is outside the supported range.
+    TickRate,
 }
 
 /// A request beyond what the device or a budget supports.
@@ -377,6 +392,12 @@ pub enum LimitedResource {
 pub enum Outcome {
     Command(CommandOutcome),
     TickCompleted(TickReport),
+    /// What `tick`'s body substeps did: delivered in the same poll as its `TickCompleted`,
+    /// right after it.
+    BodiesCompleted {
+        tick: Tick,
+        report: BodyReport,
+    },
     /// An upload became resident with `tick`'s submission.
     UploadActivated {
         ticket: UploadTicket,
@@ -385,6 +406,13 @@ pub enum Outcome {
     /// A capture is ready to collect.
     CaptureReady {
         ticket: CaptureTicket,
+        tick: Tick,
+    },
+    /// A selected body's state at the end of a tick.
+    Body(BodySample),
+    /// A selected body that no longer exists: removed, or its slot reused, before the tick.
+    BodyGone {
+        body: BodyHandle,
         tick: Tick,
     },
     Cosmetic(CosmeticEvent),
@@ -410,18 +438,77 @@ pub struct CommandOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CommandResult {
-    /// A brush stroke ran. `changed` cells took a new value; `not_resident` cells of the
-    /// stroke lay outside the resident window or in a chunk that is not resident (a closed
-    /// boundary), and were left alone.
-    Edited { changed: u32, not_resident: u32 },
+    /// A brush stroke ran around `center` (the target column, or the cell its ray hit).
+    /// `changed` cells took a new value; `not_resident` cells of the stroke lay outside the
+    /// resident window or in a chunk that is not resident (a closed boundary), and were left
+    /// alone.
+    Edited {
+        center: IVec2,
+        changed: u32,
+        not_resident: u32,
+    },
+    /// The command's ray found no surface to act on (a miss, or a column that is not
+    /// resident); nothing changed.
+    TargetMissed(SurfaceHit),
+    /// The command's target column is not resident; nothing changed.
+    TargetNotResident {
+        cell: IVec2,
+    },
     /// The column at `cell` after the tick's earlier commands.
-    Column { cell: IVec2, column: WorldCell },
+    Column {
+        cell: IVec2,
+        column: WorldCell,
+    },
     /// `cell` is outside the resident window or in a chunk that is not resident.
-    ColumnNotResident { cell: IVec2 },
+    ColumnNotResident {
+        cell: IVec2,
+    },
     /// A configuration change took effect from this tick on.
     Configured,
     /// The resident world's totals after the tick's earlier commands.
     Totals(WorldTotals),
+    /// A body now exists under `body`, centred at `position` (absolute render space).
+    BodySpawned {
+        body: BodyHandle,
+        position: DVec3,
+    },
+    /// Every body slot is taken; nothing was spawned.
+    BodyCapacity {
+        capacity: u32,
+    },
+    /// The body is gone, with the interaction counters it ended with.
+    BodyRemoved {
+        body: BodyHandle,
+        counters: BodyCounters,
+    },
+    /// The command named no live body: never spawned, removed, or a reused slot's older
+    /// generation. Nothing changed.
+    StaleBody {
+        body: BodyHandle,
+    },
+    Driven {
+        body: BodyHandle,
+    },
+    /// `jumped` is false when the body was not grounded.
+    Jumped {
+        body: BodyHandle,
+        jumped: bool,
+    },
+    /// `bodies` were accelerated toward `target` (absolute render space).
+    Attracted {
+        bodies: u32,
+        target: DVec3,
+    },
+    /// `bodies` were within reach of `target` and lifted.
+    Lifted {
+        bodies: u32,
+        target: DVec3,
+    },
+    /// Where a ray met the surface, and the nearest body it crossed before that.
+    Ray {
+        surface: SurfaceHit,
+        body: Option<BodyHit>,
+    },
 }
 
 /// One completed tick, as observed by the CPU.
@@ -437,17 +524,19 @@ pub struct TickReport {
     pub latency: Duration,
     pub upload_bytes: u32,
     pub readback_bytes: u32,
-    /// What the material phases did.
+    /// What the material phases did. The body substeps report separately
+    /// ([`Outcome::BodiesCompleted`]).
     pub cells: CellReport,
 }
 
-/// Device time of a tick's phases: the ordered commands, the activity scheduling and the
-/// material passes.
+/// Device time of a tick's phases: the ordered commands, the activity scheduling, the
+/// material passes and the body substeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PhaseTimes {
     pub commands: Duration,
     pub activity: Duration,
     pub material: Duration,
+    pub bodies: Duration,
 }
 
 /// A tick's accounting of the material phases and the tools, and the work its scheduling did.
@@ -509,6 +598,64 @@ impl CellReport {
     }
 }
 
+/// A tick's body substeps: their work, their solver's convergence and their material
+/// accounting.
+///
+/// Bodies change cells only by moving loose material and liquid between columns, which must
+/// balance (`*_in == *_out`), and by compacting bedrock under craters and trails, the one
+/// declared sink (`compaction`, counted inside `solid_out`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BodyReport {
+    pub substeps: u32,
+    /// Live bodies at the tick's end, and those of them suspended at the residency edge.
+    pub live: u32,
+    pub suspended: u32,
+    /// Candidate pairs the broadphase handed to the narrowphase (each pair counted by both
+    /// bodies, summed over substeps and solver passes), and pairs found in contact.
+    pub candidate_pairs: u64,
+    pub contact_pairs: u32,
+    /// Contacts found only along the swept segments: pairs that would otherwise tunnel.
+    pub swept_contacts: u32,
+    /// Body substeps that touched the terrain.
+    pub terrain_contacts: u32,
+    /// Largest overlap left after the position iterations, and largest approach speed left
+    /// after the velocity iterations, over the tick's substeps.
+    pub residual_overlap: f32,
+    pub residual_approach: f32,
+    /// Body substeps whose speed was capped at the supported limit, and those that swept the
+    /// terrain in short steps.
+    pub speed_limited: u32,
+    pub swept_bodies: u32,
+    pub fluid_in: u64,
+    pub fluid_out: u64,
+    pub solid_in: u64,
+    pub solid_out: u64,
+    pub compaction: u64,
+    pub ice_broken: u32,
+    pub organics_cleared: u32,
+    pub craters: u32,
+    pub ruts: u32,
+    pub splashes: u32,
+    pub wakes: u32,
+    /// Footprint cells a body wanted that another body owned for the round: displacement it
+    /// did not do (the material stayed where it was).
+    pub claims_lost: u32,
+}
+
+impl BodyReport {
+    /// `(ΔL, ΔS + compaction)`: both zero when every unit a body moved arrived.
+    pub fn imbalance(&self) -> (i128, i128) {
+        (
+            i128::from(self.fluid_in) - i128::from(self.fluid_out),
+            i128::from(self.solid_in) - i128::from(self.solid_out) + i128::from(self.compaction),
+        )
+    }
+
+    pub fn consistent(&self) -> bool {
+        self.imbalance() == (0, 0)
+    }
+}
+
 /// A transient notification that may be coalesced or dropped under pressure, with the drop
 /// counted. Gameplay-relevant results never travel this way; they are command outcomes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -549,6 +696,10 @@ pub struct PortCapabilities {
     pub capture_slots: u32,
     pub window: ResidentWindow,
     pub supported: SupportedCommands,
+    /// Bodies the world holds at once.
+    pub body_capacity: u32,
+    /// Bodies one tick samples.
+    pub body_samples_per_tick: u32,
 }
 
 /// The command kinds a live world executes.
@@ -616,6 +767,8 @@ impl UploadBytes {
 pub struct ReadbackBytes {
     pub results: u64,
     pub events: u64,
+    /// Selected body samples.
+    pub samples: u64,
     /// The per-tick accounting record and the totals of totals commands.
     pub diagnostics: u64,
     pub timestamps: u64,
@@ -624,7 +777,12 @@ pub struct ReadbackBytes {
 
 impl ReadbackBytes {
     pub fn total(&self) -> u64 {
-        self.results + self.events + self.diagnostics + self.timestamps + self.captures
+        self.results
+            + self.events
+            + self.samples
+            + self.diagnostics
+            + self.timestamps
+            + self.captures
     }
 }
 

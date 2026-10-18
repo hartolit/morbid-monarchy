@@ -16,15 +16,17 @@
 //! - [`resources`]: device buffers, compiled pipelines and the shared bind group;
 //! - [`staging`]: pooled upload and readback buffers with generation-checked map delivery;
 //! - [`slots`]: chunk slots and the window map, as metadata;
+//! - [`bodies`]: body slots and their generations, as metadata;
 //! - [`commands`], [`readback`]: command records in, identity-checked outcomes out;
 //! - [`world`]: [`world::GpuWorld`], which ties them together tick by tick;
 //! - [`faults`]: controlled fault injection for conformance runs.
 //!
-//! Physical rules (material flow, bodies) arrive in prompts 03 and 04 as kernels on this owner;
-//! the command and observation path they use is the one here.
+//! The physical rules are kernels on this owner: the material phases (03) under
+//! `shaders/sim/`, the body substeps and body commands (04) under `shaders/body/`.
 
 #[macro_use]
 pub mod layout;
+pub mod bodies;
 pub mod commands;
 pub mod context;
 pub mod faults;

@@ -355,6 +355,7 @@ mod tests {
             "an outcome nobody has seen cannot be forgotten"
         );
         let result = CommandResult::Edited {
+            center: world_model::glam::IVec2::ZERO,
             changed: 3,
             not_resident: 0,
         };
@@ -379,6 +380,7 @@ mod tests {
             .insert(CommandId::new(5), edit(1), Some(Tick::new(9)))
             .expect("room");
         let result = CommandResult::Edited {
+            center: world_model::glam::IVec2::ZERO,
             changed: 1,
             not_resident: 0,
         };

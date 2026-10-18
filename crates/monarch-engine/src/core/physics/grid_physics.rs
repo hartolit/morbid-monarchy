@@ -1,6 +1,7 @@
 use crate::core::{entities::GlobalPhysicsConfig, world::grid::ActiveWorldGrid};
 use bevy::math::{IVec2, Vec3};
 use world_model::{
+    body::tuning::QUANTIZATION_TOLERANCE,
     cell::WorldCell,
     material::{FluidMat, GranularMat, SurfaceMat, ground_softness, terrain_crush_hardness},
     spatial::cell_render_xz,
@@ -40,10 +41,6 @@ fn apportion(total: u32, slots: &[DisplacementSlot]) -> Vec<u16> {
     }
     shares
 }
-
-/// Fraction of an elevation unit by which a height comparison may miss its target, so float
-/// noise neither strands a unit just above a limit nor removes one just below it.
-const QUANTIZATION_TOLERANCE: f32 = 0.1;
 
 pub struct GridPhysicsApi<'a> {
     pub grid: &'a mut ActiveWorldGrid,

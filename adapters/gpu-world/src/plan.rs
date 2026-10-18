@@ -12,16 +12,25 @@
 //!
 //! Terrain-related state per window of `N` cells, `C` chunks and `T = 64 C` tiles, in bytes:
 //! cells `8N`, flow words `8N`, scratch cells `8N`, the activity buffer
-//! `4·(16 + C + 2T + 16T)`, the window map `4C` and slot records `32C`: `25.125 N + 40 C + 64`,
-//! inside the `48 N + 64 C` envelope. Every list and scratch region is sized for every tile being
-//! active, so none can overflow.
+//! `4·(16 + C + 2T + 16T)`, body claim words `4N`, the window map `4C` and slot records `32C`:
+//! `29.125 N + 40 C + 64`, inside the `48 N + 64 C` envelope. Every list and scratch region is
+//! sized for every tile being active, so none can overflow.
+//!
+//! Body state is sized by the body capacity `B` and the samples per tick `S`, not by the window
+//! ([`BodyLayout`]): `4·(92 B + 26 S)` bytes of bodies buffer and `4·(3 H + B + 4)` of bins, with
+//! `H` the bin hash table (a power of two at least `2 B`). Bins hold every body and are counted
+//! and prefix-summed every substep, so no bin can overflow and no pair is dropped.
 
-use world_model::spatial::CHUNK_CELL_COUNT;
+use world_model::{
+    body::{MAX_BODIES, MAX_SUBSTEPS_PER_TICK},
+    spatial::CHUNK_CELL_COUNT,
+};
 use world_runtime::port::{CapacityLimit, LimitedResource, ResidentWindow};
 
 use crate::layout::{
-    ChunkSlotRecord, CommandRecord, DiagnosticsRecord, DispatchParams, EventHeader, EventRecord,
-    GpuRecord, ResultRecord, TickParams, TotalsRecord, activity,
+    BODY_WORK_WORDS, BodyConfig, BodyDiagnosticsRecord, BodyDispatch, BodyParams, BodySampleRecord,
+    BodyState, ChunkSlotRecord, CommandRecord, DiagnosticsRecord, DispatchParams, EventHeader,
+    EventRecord, GpuRecord, ResultRecord, TickParams, TotalsRecord, activity,
 };
 
 /// Bytes of one packed cell: two `u32` words.
@@ -41,9 +50,11 @@ pub const STORAGE_BUFFERS_PER_STAGE: u32 = 8;
 pub const FLOW_BYTES_PER_CELL: u64 = 8;
 /// The largest brush radius in cells (`world_model::config::BRUSH_RADIUS_CELLS`).
 const MAX_BRUSH_RADIUS: u32 = 64;
-/// The tick's three compute passes (commands, activity, material) each record a begin and an
-/// end timestamp.
-pub const TIMESTAMP_QUERIES: u32 = 6;
+/// The tick's four compute passes (commands, activity, material, bodies) each record a begin
+/// and an end timestamp.
+pub const TIMESTAMP_QUERIES: u32 = 8;
+/// Solver iterations a body dispatch entry can name per substep ([`BodyDispatch`]).
+pub const BODY_DISPATCH_ITERATIONS: u32 = 16;
 /// Bytes the resolved timestamps occupy; the resolve buffer must start at a 256-byte offset.
 pub const TIMESTAMP_BYTES: u64 = TIMESTAMP_QUERIES as u64 * wgpu::QUERY_SIZE as u64;
 pub const TIMESTAMP_RESOLVE_BYTES: u64 = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
@@ -89,6 +100,11 @@ pub struct TransferConfig {
     pub capture_slots: u32,
     /// Slot-record and window-entry changes one tick can carry (activations and retirements).
     pub metadata_patches_per_tick: u32,
+    /// Bodies the world holds at once (at most `world_model::body::MAX_BODIES`).
+    pub bodies: u32,
+    /// Bodies one tick samples for the CPU. 64 samples are 6 KiB per tick, 24 KiB per frame at
+    /// four ticks.
+    pub body_samples_per_tick: u32,
 }
 
 impl Default for TransferConfig {
@@ -100,6 +116,8 @@ impl Default for TransferConfig {
             chunk_upload_slots: 32,
             capture_slots: 32,
             metadata_patches_per_tick: 96,
+            bodies: MAX_BODIES,
+            body_samples_per_tick: 64,
         }
     }
 }
@@ -107,7 +125,7 @@ impl Default for TransferConfig {
 impl TransferConfig {
     /// Checks every size against its supported range.
     pub fn validate(&self) -> Result<(), PlanError> {
-        let ranges: [(&'static str, u32, u32, u32); 6] = [
+        let ranges: [(&'static str, u32, u32, u32); 8] = [
             (
                 "max_in_flight",
                 self.max_in_flight,
@@ -124,6 +142,9 @@ impl TransferConfig {
                 1,
                 4096,
             ),
+            ("bodies", self.bodies, 1, MAX_BODIES),
+            // A tick may sample stale handles too, so samples are not bounded by the bodies.
+            ("body_samples_per_tick", self.body_samples_per_tick, 1, 1024),
         ];
         for (field, value, min, max) in ranges {
             if !(min..=max).contains(&value) {
@@ -244,6 +265,16 @@ pub enum BufferRole {
     Diagnostics,
     /// Indirect dispatch arguments of the candidate and process lists.
     DispatchArgs,
+    /// One owner word per cell for the body substeps' deformation and displacement claims.
+    Claims,
+    /// Body state, configuration, per-substep scratch, samples and the observe list
+    /// ([`BodyLayout`]).
+    Bodies,
+    /// The body broadphase: bin counts, starts, fill cursors, entries and live bounds.
+    Bins,
+    BodyParams,
+    /// One [`BodyDispatch`] per substep and iteration, written once at creation.
+    BodyDispatch,
     TimestampResolve,
     TickUploadStaging,
     TickReadbackStaging,
@@ -252,7 +283,7 @@ pub enum BufferRole {
 }
 
 impl BufferRole {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 23] = [
         Self::Cells,
         Self::WindowMap,
         Self::SlotRecords,
@@ -266,6 +297,11 @@ impl BufferRole {
         Self::Events,
         Self::Diagnostics,
         Self::DispatchArgs,
+        Self::Claims,
+        Self::Bodies,
+        Self::Bins,
+        Self::BodyParams,
+        Self::BodyDispatch,
         Self::TimestampResolve,
         Self::TickUploadStaging,
         Self::TickReadbackStaging,
@@ -283,6 +319,7 @@ impl BufferRole {
                 | Self::Flow
                 | Self::Scratch
                 | Self::Activity
+                | Self::Claims
         )
     }
 
@@ -341,6 +378,9 @@ pub struct TickUploadLayout {
     /// One word holding 1, copied into the chunk wake request of each activated or retired
     /// chunk.
     pub one: u64,
+    /// The tick's [`BodyParams`] and the handles to sample (two words each).
+    pub body_params: u64,
+    pub observe: u64,
     pub size: u64,
 }
 
@@ -352,6 +392,9 @@ pub struct TickReadbackLayout {
     pub diagnostics: u64,
     /// One [`TotalsRecord`] per command position; only totals commands' records are copied.
     pub totals: u64,
+    /// The tick's [`BodyDiagnosticsRecord`], then its body samples.
+    pub body_diagnostics: u64,
+    pub samples: u64,
     pub timestamps: u64,
     pub size: u64,
 }
@@ -396,6 +439,77 @@ impl ActivityLayout {
     }
 }
 
+/// Word offsets of the regions of the bodies and bins buffers, fixed by the body capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyLayout {
+    pub capacity: u32,
+    pub samples: u32,
+    pub state: u32,
+    pub config: u32,
+    pub work: u32,
+    pub sample_records: u32,
+    pub observe: u32,
+    pub body_words: u32,
+    /// Bin hash table slots: a power of two at least twice the capacity.
+    pub hash_slots: u32,
+    pub counts: u32,
+    pub starts: u32,
+    pub fill: u32,
+    pub entries: u32,
+    pub bounds: u32,
+    pub bin_words: u32,
+    /// Word offset of the [`BodyDiagnosticsRecord`] in the diagnostics buffer.
+    pub diagnostics: u32,
+}
+
+/// Words of the bins buffer's live-bounds record: the largest radius and the farthest travel
+/// of the substep, as float bits.
+pub const BIN_BOUNDS_WORDS: u32 = 4;
+
+impl BodyLayout {
+    /// The regions for `capacity` bodies, `samples` samples per tick and `commands` command
+    /// positions (whose totals records precede the body record in the diagnostics buffer).
+    pub fn new(capacity: u32, samples: u32, commands: u32) -> Option<Self> {
+        let words = |count: u32, per: usize| count.checked_mul(per as u32);
+        let state = 0;
+        let config = state + words(capacity, BodyState::WORDS)?;
+        let work = config.checked_add(words(capacity, BodyConfig::WORDS)?)?;
+        let sample_records = work.checked_add(capacity.checked_mul(BODY_WORK_WORDS)?)?;
+        let observe = sample_records.checked_add(words(samples, BodySampleRecord::WORDS)?)?;
+        let body_words = observe.checked_add(samples.checked_mul(2)?)?;
+        let hash_slots = capacity
+            .checked_mul(2)?
+            .checked_next_power_of_two()?
+            .max(64);
+        let counts = 0;
+        let starts = hash_slots;
+        let fill = starts.checked_add(hash_slots)?;
+        let entries = fill.checked_add(hash_slots)?;
+        let bounds = entries.checked_add(capacity)?;
+        let bin_words = bounds.checked_add(BIN_BOUNDS_WORDS)?;
+        let diagnostics = (DiagnosticsRecord::WORDS as u32)
+            .checked_add(commands.checked_mul(TotalsRecord::WORDS as u32)?)?;
+        Some(Self {
+            capacity,
+            samples,
+            state,
+            config,
+            work,
+            sample_records,
+            observe,
+            body_words,
+            hash_slots,
+            counts,
+            starts,
+            fill,
+            entries,
+            bounds,
+            bin_words,
+            diagnostics,
+        })
+    }
+}
+
 /// A checked plan for one resident window and transfer configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourcePlan {
@@ -408,6 +522,8 @@ pub struct ResourcePlan {
     pub dispatch_param_stride: u64,
     pub tick_upload: TickUploadLayout,
     pub tick_readback: TickReadbackLayout,
+    pub bodies: BodyLayout,
+    pub body_dispatch_stride: u64,
     /// One entry per [`BufferRole`], in [`BufferRole::ALL`] order.
     pub buffers: [BufferPlan; BufferRole::ALL.len()],
     pub device_bytes: u64,
@@ -521,6 +637,19 @@ pub fn plan(
         ),
     )?;
 
+    let body_layout = BodyLayout::new(
+        transfer.bodies,
+        transfer.body_samples_per_tick,
+        transfer.commands_per_tick,
+    )
+    .ok_or(PlanError::Overflow(BufferRole::Bodies))?;
+    let body_dispatch_stride = checked(
+        BufferRole::BodyDispatch,
+        align_up(
+            BodyDispatch::BYTES,
+            u64::from(limits.min_uniform_offset_alignment),
+        ),
+    )?;
     let tiles = slots
         .checked_mul(activity::TILES_PER_CHUNK)
         .ok_or(PlanError::Overflow(BufferRole::Activity))?;
@@ -548,9 +677,14 @@ pub fn plan(
                 .checked_mul(WINDOW_ENTRY_BYTES)
                 .and_then(|bytes| bytes.checked_add(entries_at)),
         )?;
+        let body_params = checked(BufferRole::TickUploadStaging, align_up(one + 4, 16))?;
+        let observe = body_params + BodyParams::BYTES;
         let size = checked(
             BufferRole::TickUploadStaging,
-            align_up(one + 4, wgpu::COPY_BUFFER_ALIGNMENT),
+            align_up(
+                observe + u64::from(transfer.body_samples_per_tick) * 8,
+                wgpu::COPY_BUFFER_ALIGNMENT,
+            ),
         )?;
         TickUploadLayout {
             params,
@@ -559,6 +693,8 @@ pub fn plan(
             slot_records: records_at,
             window_entries: entries_at,
             one,
+            body_params,
+            observe,
             size,
         }
     };
@@ -575,18 +711,23 @@ pub fn plan(
                 .and_then(|bytes| bytes.checked_add(EventHeader::BYTES + events_at)),
         )?;
         let totals_at = diagnostics_at + DiagnosticsRecord::BYTES;
-        let timestamps_at = checked(
+        let body_diagnostics_at = checked(
             BufferRole::TickReadbackStaging,
             commands
                 .checked_mul(TotalsRecord::BYTES)
                 .and_then(|bytes| bytes.checked_add(totals_at)),
         )?;
+        let samples_at = body_diagnostics_at + BodyDiagnosticsRecord::BYTES;
+        let timestamps_at =
+            samples_at + u64::from(transfer.body_samples_per_tick) * BodySampleRecord::BYTES;
         let size = timestamps_at + TIMESTAMP_BYTES;
         TickReadbackLayout {
             results,
             events: events_at,
             diagnostics: diagnostics_at,
             totals: totals_at,
+            body_diagnostics: body_diagnostics_at,
+            samples: samples_at,
             timestamps: timestamps_at,
             size,
         }
@@ -602,7 +743,16 @@ pub fn plan(
     let event_bytes = EventHeader::BYTES + events * EventRecord::BYTES;
     let flow_bytes = checked(BufferRole::Flow, cells.checked_mul(FLOW_BYTES_PER_CELL))?;
     let activity_bytes = u64::from(activity_layout.words) * 4;
-    let diagnostics_bytes = DiagnosticsRecord::BYTES + commands * TotalsRecord::BYTES;
+    let diagnostics_bytes =
+        DiagnosticsRecord::BYTES + commands * TotalsRecord::BYTES + BodyDiagnosticsRecord::BYTES;
+    let claims_bytes = checked(BufferRole::Claims, cells.checked_mul(4))?;
+    let body_bytes = u64::from(body_layout.body_words) * 4;
+    let bin_bytes = u64::from(body_layout.bin_words) * 4;
+    let body_dispatch_bytes = checked(
+        BufferRole::BodyDispatch,
+        u64::from(MAX_SUBSTEPS_PER_TICK * BODY_DISPATCH_ITERATIONS)
+            .checked_mul(body_dispatch_stride),
+    )?;
     // One more tick staging buffer than submissions in flight: a buffer is still being
     // remapped (upload) or decoded (readback) while the next tick encodes.
     let in_flight_pool = transfer.max_in_flight + 1;
@@ -680,6 +830,29 @@ pub fn plan(
             storage | Usage::INDIRECT,
             Binding::Storage,
         ),
+        bound(BufferRole::Claims, claims_bytes, storage, Binding::Storage),
+        bound(
+            BufferRole::Bodies,
+            body_bytes,
+            storage | Usage::COPY_SRC | Usage::COPY_DST,
+            Binding::Storage,
+        ),
+        bound(BufferRole::Bins, bin_bytes, storage, Binding::Storage),
+        bound(
+            BufferRole::BodyParams,
+            BodyParams::BYTES,
+            Usage::UNIFORM | Usage::COPY_DST,
+            Binding::Uniform,
+        ),
+        BufferPlan {
+            binding_size: BodyDispatch::BYTES,
+            ..bound(
+                BufferRole::BodyDispatch,
+                body_dispatch_bytes,
+                Usage::UNIFORM,
+                Binding::Uniform,
+            )
+        },
         unbound(
             BufferRole::TimestampResolve,
             TIMESTAMP_RESOLVE_BYTES,
@@ -774,7 +947,8 @@ pub fn plan(
         .saturating_mul(4)
         .div_ceil(LINEAR_WORKGROUP_SIZE);
     // `scan_tiles` and `measure_totals` dispatch one workgroup (row) per window chunk; list
-    // dispatches split at DISPATCH_SPLIT along x and continue along y.
+    // dispatches split at DISPATCH_SPLIT along x and continue along y. Body kernels dispatch
+    // one workgroup per body slot or per 64 bin slots.
     let list_rows = tiles.div_ceil(activity::DISPATCH_SPLIT);
     for groups in [
         edit_groups,
@@ -783,6 +957,8 @@ pub fn plan(
         slots,
         activity::DISPATCH_SPLIT,
         list_rows,
+        transfer.bodies,
+        body_layout.hash_slots / LINEAR_WORKGROUP_SIZE,
     ] {
         if groups > limits.max_workgroups_per_dimension {
             return Err(limit(
@@ -848,6 +1024,8 @@ pub fn plan(
         dispatch_param_stride,
         tick_upload,
         tick_readback,
+        bodies: body_layout,
+        body_dispatch_stride,
         buffers,
         device_bytes,
         staging_bytes,
@@ -1074,8 +1252,12 @@ mod tests {
             plan.tick_readback.diagnostics,
             plan.tick_readback.totals,
             plan.tick_readback.timestamps,
+            plan.tick_readback.body_diagnostics,
+            plan.tick_readback.samples,
             plan.tick_readback.size,
             plan.tick_upload.one,
+            plan.tick_upload.body_params,
+            plan.tick_upload.observe,
         ] {
             assert_eq!(offset % wgpu::COPY_BUFFER_ALIGNMENT, 0, "{offset}");
         }
@@ -1087,11 +1269,21 @@ mod tests {
             .sum();
         assert_eq!(plan.staging_bytes, staging);
         assert!(plan.terrain_bytes <= plan.cells * 48 + u64::from(plan.slots) * 64);
-        // The documented formula: 25.125 bytes per cell, 40 per chunk and the 64-byte header.
+        // The documented formula: 29.125 bytes per cell, 40 per chunk and the 64-byte header.
         assert_eq!(
             plan.terrain_bytes,
-            plan.cells * 25 + plan.cells / 8 + u64::from(plan.slots) * 40 + 64
+            plan.cells * 29 + plan.cells / 8 + u64::from(plan.slots) * 40 + 64
         );
+        // Body state: 92 words per body and 26 per sample; bins 3 H + B + 4 words.
+        let bodies = plan.bodies;
+        assert_eq!(bodies.hash_slots, 8192);
+        assert_eq!(bodies.body_words, 92 * 4096 + 26 * 64);
+        assert_eq!(bodies.bin_words, 3 * 8192 + 4096 + 4);
+        assert_eq!(
+            plan.buffer(BufferRole::Bodies).size,
+            4 * (92 * 4096 + 26 * 64)
+        );
+        assert_eq!(plan.body_dispatch_stride % 256, 0);
         assert_eq!(plan.tiles, plan.slots * 64);
         assert_eq!(
             plan.activity.words,

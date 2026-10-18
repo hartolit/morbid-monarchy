@@ -69,6 +69,7 @@ pub(super) fn ordered_edit_query(adapter: &str, check: &mut Check) -> Result<(),
         "seam stroke",
         seam[0],
         CommandResult::Edited {
+            center: IVec2::new(0, 30),
             changed: 29,
             not_resident: 0,
         },
@@ -153,6 +154,7 @@ pub(super) fn edit_partial_workgroups(adapter: &str, check: &mut Check) -> Resul
             &format!("radius {radius}"),
             result[0],
             CommandResult::Edited {
+                center,
                 changed: stroke_cell_count(radius),
                 not_resident: 0,
             },
@@ -194,6 +196,7 @@ pub(super) fn edit_outside_window(adapter: &str, check: &mut Check) -> Result<()
         "resident stroke",
         results[0],
         CommandResult::Edited {
+            center: IVec2::new(32, 32),
             changed: 29,
             not_resident: 0,
         },
@@ -203,6 +206,7 @@ pub(super) fn edit_outside_window(adapter: &str, check: &mut Check) -> Result<()
         "stroke into a missing chunk",
         results[1],
         CommandResult::Edited {
+            center: IVec2::new(0, 32),
             changed: 18,
             not_resident: 11,
         },
@@ -211,6 +215,7 @@ pub(super) fn edit_outside_window(adapter: &str, check: &mut Check) -> Result<()
         "stroke outside the window",
         results[2],
         CommandResult::Edited {
+            center: IVec2::new(-200, 0),
             changed: 0,
             not_resident: 13,
         },
@@ -219,6 +224,7 @@ pub(super) fn edit_outside_window(adapter: &str, check: &mut Check) -> Result<()
         "far stroke",
         results[3],
         CommandResult::Edited {
+            center: IVec2::new(i32::MAX - 10, i32::MIN + 10),
             changed: 0,
             not_resident: 13,
         },
@@ -271,18 +277,19 @@ pub(super) fn empty_batches(adapter: &str, check: &mut Check) -> Result<(), Stri
         .windows(2)
         .all(|pair| pair[1].tick.value() == pair[0].tick.value() + 1);
     check.that(ordered, || "ticks were not completed in order".to_owned());
-    // Tick parameters (128), the event header reset (16) and the wake-request word (4) up; the
-    // event buffer (16 + 64 x 16) and the diagnostics record (144) back.
+    // Tick parameters (128), the event header reset (16), the wake-request word (4) and the
+    // body parameters (128, since 04) up; the event buffer (16 + 64 x 16), the diagnostics
+    // record (144) and the body record (128) back. No body is sampled.
     let events = 16 + 64 * 16;
     check.equal(
         "upload bytes per empty tick",
         ticks[0].upload_bytes,
-        128 + 16 + 4,
+        128 + 16 + 4 + 128,
     );
     check.equal(
         "readback bytes per empty tick",
         ticks[0].readback_bytes,
-        events + 144,
+        events + 144 + 128,
     );
     Ok(())
 }
@@ -306,6 +313,7 @@ pub(super) fn command_count_boundaries(adapter: &str, check: &mut Check) -> Resu
             if index % 2 == 0 {
                 *result
                     == CommandResult::Edited {
+                        center: IVec2::new((index % 64) as i32, (index / 64) as i32),
                         changed: 1,
                         not_resident: 0,
                     }
@@ -476,7 +484,9 @@ pub(super) fn stale_session_and_slot(adapter: &str, check: &mut Check) -> Result
     let batch = TickBatch {
         session: other,
         tick: driver.next_tick,
+        tick_rate_hz: 60.0,
         commands: &[],
+        observe: &[],
     };
     check.equal(
         "another session's tick",
@@ -543,7 +553,9 @@ pub(super) fn out_of_bounds_payload(adapter: &str, check: &mut Check) -> Result<
     let skipped = TickBatch {
         session,
         tick: Tick::new(5),
+        tick_rate_hz: 60.0,
         commands: &[],
+        observe: &[],
     };
     check.equal(
         "tick out of order",
@@ -553,22 +565,43 @@ pub(super) fn out_of_bounds_payload(adapter: &str, check: &mut Check) -> Result<
             presented: Tick::new(5),
         }),
     );
+    // Since 04 every command kind executes; a batch can still be malformed.
+    let limit = driver.world.capabilities().body_samples_per_tick;
+    let too_many = vec![world_model::body::BodyHandle::new(0, 0); limit as usize + 1];
+    let oversampled = TickBatch {
+        session,
+        tick: Tick::ZERO,
+        tick_rate_hz: 60.0,
+        commands: &[],
+        observe: &too_many,
+    };
+    check.equal(
+        "more samples than a tick reports",
+        driver.world.submit_tick(&oversampled).err(),
+        Some(Refusal::InvalidPayload(PayloadError::TooManySamples {
+            count: too_many.len(),
+            limit,
+        })),
+    );
+    let slow = TickBatch {
+        session,
+        tick: Tick::ZERO,
+        tick_rate_hz: 5.0,
+        commands: &[],
+        observe: &[],
+    };
+    check.equal(
+        "an unsupported tick rate",
+        driver.world.submit_tick(&slow).err(),
+        Some(Refusal::InvalidPayload(PayloadError::TickRate)),
+    );
     let spawn =
         Command::SpawnBody(BodySpawn::new(BodyPreset::Wood, IVec2::ZERO, 2.0).expect("valid"));
-    check.equal(
-        "body command before prompt 04",
-        driver.submit(&[spawn]).err(),
-        Some(Refusal::NotSupported(
-            world_model::command::CommandKind::SpawnBody,
-        )),
-    );
     let mut runtime = runtime_world(adapter, |_| {}, RuntimeConfig::default())?;
     check.equal(
         "runtime admission of a body command",
         runtime.submit(CommandId::new(1), spawn),
-        Err(AdmissionError::NotSupported(
-            world_model::command::CommandKind::SpawnBody,
-        )),
+        Ok(world_runtime::receipts::Admission::Admitted),
     );
     Ok(())
 }

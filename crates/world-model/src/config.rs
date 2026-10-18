@@ -41,6 +41,10 @@ pub const DEFAULT_BRUSH_RADIUS_CELLS: i32 = 5;
 pub const BRUSH_STRENGTH: RangeInclusive<u8> = 1..=255;
 pub const DEFAULT_BRUSH_STRENGTH: u8 = 1;
 
+/// Longest ray a pointer, a brush or a query casts, in world units: the baseline brush's
+/// march distance. It bounds a ray's traversal to about 1,415 cells.
+pub const RAY_MAX_DISTANCE: f32 = 1000.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;

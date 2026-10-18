@@ -337,11 +337,13 @@ impl Twin {
     fn apply_to_reference(&mut self, command: &Command) -> Option<CommandResult> {
         match *command {
             Command::EditMaterial(edit) => {
-                let inside = self.stroke_inside(edit.center(), edit.radius());
+                let center = edit.center()?;
+                let inside = self.stroke_inside(center, edit.radius());
                 let changed =
                     self.reference
-                        .edit(edit.tool(), edit.center(), edit.radius(), edit.strength());
+                        .edit(edit.tool(), center, edit.radius(), edit.strength());
                 inside.then_some(CommandResult::Edited {
+                    center,
                     changed,
                     not_resident: 0,
                 })

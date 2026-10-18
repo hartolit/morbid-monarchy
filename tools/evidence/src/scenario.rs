@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use world_model::{
     body::{self, BodyHandle},
     command::{
-        AmbientTemperature, BodySpawn, Command, CommandError, Direction, EditTool, MaterialEdit,
+        AmbientTemperature, BodySpawn, Command, CommandError, Direction, Drive, EditTool,
+        MaterialEdit, Target,
     },
     config,
     glam::IVec2,
@@ -307,7 +308,7 @@ impl Action {
                         _ => cell,
                     };
                     commands.push(Command::AttractBodies {
-                        target: target.into(),
+                        target: Target::Column(target.into()),
                     });
                 }
             }
@@ -318,7 +319,7 @@ impl Action {
             } => {
                 if active(from_tick, to_tick) {
                     commands.push(Command::LiftBodies {
-                        target: cell.into(),
+                        target: Target::Column(cell.into()),
                     });
                 }
             }
@@ -340,7 +341,10 @@ impl Action {
             } => {
                 if let Some(body) = driven.filter(|_| active(from_tick, to_tick)) {
                     let direction = Direction::new(direction[0], direction[1])?;
-                    commands.push(Command::DriveBody { body, direction });
+                    commands.push(Command::DriveBody {
+                        body,
+                        drive: Drive::controls(direction),
+                    });
                     if jump_every_ticks > 0 && (tick - from_tick).is_multiple_of(jump_every_ticks) {
                         commands.push(Command::JumpBody { body });
                     }
@@ -768,7 +772,7 @@ every_ticks = 1
             commands.as_slice(),
             [Command::EditMaterial(edit)]
                 if edit.tool() == EditTool::Water
-                    && edit.center() == IVec2::new(220, 300)
+                    && edit.center() == Some(IVec2::new(220, 300))
                     && edit.radius() == 6
                     && edit.strength() == 20
         ));
@@ -802,7 +806,7 @@ every_ticks = 1
             .spawns()
             .expect("valid")
             .iter()
-            .map(|spawn| spawn.column())
+            .filter_map(|spawn| spawn.column())
             .collect();
         assert_eq!(
             columns,

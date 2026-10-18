@@ -1184,6 +1184,168 @@ expectation = "is_combustible(surface, fluid) equals combustible surface or fuel
 destination = "gpu-world layout (03)"
 determinism = "exact"
 
+# --- Bodies: world-model, world-runtime and gpu-world (04) ---
+
+[[behavior]]
+id = "model.body.substeps"
+package = "world-model"
+target = "lib"
+test = "body::tests::a_tick_is_split_into_the_fewest_substeps_of_at_most_a_120th"
+origin = "transition"
+expectation = "A tick at 10 to 240 Hz is split into the fewest substeps of at most 1/120 s (12 at 10 Hz, 2 at 60 Hz, 1 at 120 and above), and the substep travel limit is 5 units."
+destination = "world-model body semantics (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.apportion"
+package = "world-model"
+target = "lib"
+test = "body::tests::apportioning_is_exact_and_respects_every_capacity"
+origin = "transition"
+expectation = "Cumulative apportioning of every amount over the baseline's and independent capacities sums exactly to min(amount, capacity), never exceeds a slot, and matches a hand-worked split."
+destination = "world-model body semantics (04), the rule the GPU displacement uses"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.envelope"
+package = "world-model"
+target = "lib"
+test = "body::tests::descriptions_and_drives_outside_the_envelope_are_refused"
+origin = "transition"
+expectation = "Sphere descriptions outside radius 2..8, positive finite mass and density, and drives above the controls' acceleration or speed are refused with the offending field."
+destination = "world-model body semantics (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.reach"
+package = "world-model"
+target = "lib"
+test = "body::tests::the_reach_covers_the_splash_ring_and_the_travel"
+origin = "transition"
+expectation = "The deformation reach is 2.75 r + 2 plus the travel; the largest fits within two chunks per axis."
+destination = "world-model body semantics (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.mul-div"
+package = "world-model"
+target = "lib"
+test = "body::tests::the_split_multiply_divide_is_exact_at_its_limits"
+origin = "transition"
+expectation = "The 32-bit split multiply-divide the GPU uses equals the 64-bit quotient at its 21-bit operand limit and on independent cases."
+destination = "world-model body semantics (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.body.cap-volume"
+package = "world-model"
+target = "lib"
+test = "body::tests::submerged_fraction_follows_the_cap_volume"
+origin = "transition"
+expectation = "The submerged fraction is 0.15625 at a quarter of the diameter, symmetric about the equator, and zero above the surface or for a zero radius."
+destination = "world-model body semantics (04)"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "model.observation.counter-wrap"
+package = "world-model"
+target = "lib"
+test = "observation::tests::counter_differences_survive_wrapping"
+origin = "transition"
+expectation = "Body counter differences are exact across a u32 wrap, and a counter set has no difference from itself."
+destination = "world-model observations (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.bodies.ring-pressure"
+package = "world-runtime"
+target = "lib"
+test = "bodies::tests::a_full_ring_counts_what_it_overwrote_and_the_counters_stay_exact"
+origin = "transition"
+expectation = "A full event ring counts what it overwrote while the tracked counters stay exact."
+destination = "world-runtime body monitor (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.bodies.reused-slot"
+package = "world-runtime"
+target = "lib"
+test = "bodies::tests::a_reused_slot_does_not_inherit_or_repeat_the_old_body"
+origin = "transition"
+expectation = "A slot reused under a new generation starts from zero counters; samples of the removed generation are counted as retired and change nothing."
+destination = "world-runtime body monitor (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.bodies.reordered-samples"
+package = "world-runtime"
+target = "lib"
+test = "bodies::tests::delayed_and_reordered_samples_apply_each_change_once"
+origin = "transition"
+expectation = "Delayed and reordered samples of one body emit each counter change exactly once, and an older sample never replaces a newer one."
+destination = "world-runtime body monitor (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.bodies.selection"
+package = "world-runtime"
+target = "lib"
+test = "bodies::tests::selection_keeps_the_controlled_body_and_rotates_the_rest"
+origin = "transition"
+expectation = "Sample selection always includes the controlled body and rotates through the other tracked bodies within the per-tick limit."
+destination = "world-runtime body monitor (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.ledger.body-accounting"
+package = "world-runtime"
+target = "lib"
+test = "ledger::tests::unbalanced_body_accounting_is_inconsistent_and_body_outcomes_reach_the_monitor"
+origin = "transition"
+expectation = "A body report whose loose material or liquid does not balance (compaction excepted) marks its tick inconsistent, counted once with the cells; spawn and removal outcomes reach the body monitor."
+destination = "world-runtime outcome ledger (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.slot-reuse"
+package = "gpu-world"
+target = "lib"
+test = "bodies::tests::slots_are_reused_lowest_first_under_a_new_generation"
+origin = "transition"
+expectation = "Body slots are allocated lowest first; a released handle is stale at once and stays stale after its slot is reused under the next generation; the extent shrinks with the highest live slot."
+destination = "gpu-world body table (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.capacity"
+package = "gpu-world"
+target = "lib"
+test = "bodies::tests::a_full_table_refuses_and_an_exhausted_generation_retires_its_slot"
+origin = "transition"
+expectation = "A full table refuses with capacity, and a slot whose generation is exhausted is retired rather than reused."
+destination = "gpu-world body table (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.commands.body-encoding"
+package = "gpu-world"
+target = "lib"
+test = "commands::tests::body_commands_take_and_check_slots_and_rays_become_window_local"
+origin = "transition"
+expectation = "Body commands encode their slot and generation, a spawn takes a slot only when admitted, a stale handle is refused on the CPU, and rays are encoded relative to the window."
+destination = "gpu-world command encoding (04)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.readback.body-results"
+package = "gpu-world"
+target = "lib"
+test = "readback::tests::body_results_become_absolute_and_samples_must_echo_their_handles"
+origin = "transition"
+expectation = "Body results decode to absolute positions and cells, and a sample whose echoed handle differs from the requested one is a decode error."
+destination = "gpu-world readback decoding (04)"
+determinism = "exact"
+
 # --- GPU suite `transfers`: cases run by `cargo evidence test gpu` on an adapter (02). The CPU lane
 # skips `gpu:` targets; the GPU lane requires every case to be defined, registered and passed. ---
 
@@ -1778,3 +1940,245 @@ origin = "transition"
 expectation = "At radius 6 on generated terrain, an idle sparse window visits no tile, dense visits all 10,816 every tick, mixed and growing activity visit a fraction, a woken tick visits all; every tick balances, no buffer is created and no frame wait occurs; pass times, encode time, bytes by purpose and allocations are reported."
 destination = "gpu-world material phases on the selected adapter (03); the hardware measurement of record"
 determinism = "exact"
+
+# --- GPU suite `bodies`: coupled bodies and interaction (04). ---
+
+[[behavior]]
+id = "gpu.bodies.geometry.closest-point"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "closest-point-regions"
+origin = "transition"
+expectation = "The WGSL closest point on a triangle (the body contact's) lies on the face, at the vertex or on the edge for points in each region and matches an independent f64 reference within 1e-6; GPU port of body.geometry.closest-point."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.buoyancy.cap-volume"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "cap-volume"
+origin = "transition"
+expectation = "The WGSL submerged fraction is 0, 1/2 and 1 at depths 0, r and 2r, clamped beyond, and matches a Simpson integral of the cap within 1e-6; GPU port of body.buoyancy.cap-volume."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.apportion.exact-capacity"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "apportionment"
+origin = "transition"
+expectation = "The GPU's exact 32-bit mul-div and cumulative apportionment split displaced units exactly, never exceed a slot's capacity and equal world-model's apportion for every hand-worked and swept share; GPU port of body.apportion.exact-capacity."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.broadphase.complete"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "broadphase-oracle"
+origin = "transition"
+expectation = "On the production bin kernels, every pair within the generation bound (radii, slop, both travels, solver margin) is visited, none twice, and the bins find exactly the pairs and contact kinds all pairs find: sparse, dense mixed-radius, coincident centres, bin-edge lattice and fast bodies."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.handles.generations"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-handles"
+origin = "transition"
+expectation = "Spawns beyond capacity are refused with the capacity; a removed handle is stale for every body command; a slot is reused with a new generation; a spawn whose target misses frees its slot; a removed body's sample reports it gone."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.clock.substeps"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "fixed-tick-substeps"
+origin = "transition"
+expectation = "Ticks at 10 to 240 Hz split into ceil(1/(rate x 1/120)) substeps (12 at 10 Hz, 2 at 60 Hz, 1 at 144 Hz); free fall matches the semi-implicit scheme in f64 within 1e-3 and the continuous fall within the scheme's error; a body attracted from 3000 units up is capped at 600 units/s with the capped substeps counted and no substep travelling more than 5 units."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.clock.presentation-invariant"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-presentation-rates"
+origin = "transition"
+expectation = "Scheduled spawns, drives and jumps paced by the runtime at 30, 60 and 144 Hz and with stalled frames give bit-identical body samples at the same tick."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.rest.soft-ground"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "resting-soft-ground"
+origin = "transition"
+expectation = "A steel sphere on soil is grounded after 180 ticks, drifts under 0.05 horizontally and sinks no more than the rut depth scale plus 0.25; GPU port of body.rest.soft-ground."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.roll.slope"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "slope-roll"
+origin = "transition"
+expectation = "On a rock slope of rise over run 0.5 a sphere rolls more than 3 units downhill in 90 ticks, veers under 0.5, stays grounded and changes no elevation or loose material; GPU port of body.roll.slope."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.drive.bumpy-no-hop"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "bumpy-drive"
+origin = "transition"
+expectation = "A driven sphere crosses one-unit bumps to x = 52 within 120 ticks and is grounded on at least 90% of them; GPU port of body.drive.bumpy-no-hop."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.drive.flat-rock-grounded"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "flat-rock-full-speed"
+origin = "transition"
+expectation = "Driven at full speed on flat rock, a sphere is grounded with vertical speed under 0.05 on every tick and covers the course; GPU port of body.drive.flat-rock-grounded."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.rut.bounded-conserved"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "rut-conserved"
+origin = "transition"
+expectation = "Rolling over sand leaves a trail no deeper than the sand's softness and berms that conserve sand and bedrock exactly; GPU port of body.rut.bounded-conserved."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.drive.climb-hill"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "hill-climb"
+origin = "transition"
+expectation = "A pushed sphere climbs a 16-unit ramp and reaches the plateau within 180 ticks; GPU port of body.drive.climb-hill."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.impact.crater-conserved"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "crater-conserved"
+origin = "transition"
+expectation = "A steel sphere dropped 30 units onto sand craters the impact cell (counted), ends grounded and conserves sand exactly; GPU port of body.impact.crater-conserved."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.buoyancy.float-sink"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "float-and-sink"
+origin = "transition"
+expectation = "Wood floats ungrounded with a submerged share within 0.05 of its relative density; steel sinks to the bed and rests on it; GPU port of body.buoyancy.float-sink."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.wake.surface-cut"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "wake-scaling"
+origin = "transition"
+expectation = "A half-submerged sphere moving at 8 units/s raises a nonzero wave more than three times larger than a barely covered one's; GPU port of body.wake.surface-cut."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.splash.conserved"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "splash-conserved"
+origin = "transition"
+expectation = "A steel sphere plunging into water opens a cavity below half depth at the impact cell and conserves water on every tick; GPU port of body.splash.conserved."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.pairs.collision"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "pair-collision"
+origin = "transition"
+expectation = "Equal and metal-and-wood bodies meeting in mid-air keep their horizontal momentum within 1%, gain no kinetic energy and part at the impact restitution (0.2) within 0.03."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.pairs.coincident"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "coincident-centres"
+origin = "transition"
+expectation = "Bodies spawned at one centre separate along a deterministic axis without a non-finite value and come to rest apart."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.pairs.dense-cluster"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "dense-cluster"
+origin = "transition"
+expectation = "512 bodies of radius 2 to 8 crushed together on sand by attraction, then settling 240 ticks: sand and bedrock are accounted exactly, nothing goes non-finite, a second bins run and the all-pairs broadphase give bit-identical bodies, settled pairs overlap by at most 0.4 of the smaller radius at the default iterations, and pairs overlapping by more than 0.4 fall from 4x4 to 8x8 to 16x16 passes."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.pairs.no-tunnelling"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "fast-bodies"
+origin = "transition"
+expectation = "A body falling at the speed limit onto a resting one stays above it; two bodies closing at more than their combined diameter per substep never pass through each other; a body at the speed limit stays on its side of a one-cell wall."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.deformation.contested"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "shared-deformation"
+origin = "transition"
+expectation = "Six bodies rutting the same sand while brush strokes edit those cells, and five bodies plunging into a lake under water strokes, account for every sand, bedrock and water unit each tick; contested claims are counted."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.deformation.edit-under-body"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "edit-under-resting-body"
+origin = "transition"
+expectation = "Raising the ground under a resting body lifts it onto the new surface without sinking into it; lowering it lets the body fall and rest on the lowered ground."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"
+
+[[behavior]]
+id = "gpu.bodies.residency.suspension"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "residency-edge"
+origin = "transition"
+expectation = "A body reaching non-resident terrain suspends with its state, blocks other bodies as an immovable obstacle and refuses controls; it resumes when the chunk is resident again and survives the window moving away and back."
+destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
+determinism = "float-tolerance"

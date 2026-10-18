@@ -20,9 +20,10 @@ use bevy_ecs::{
     prelude::*,
     schedule::{ScheduleLabel, SingleThreadedExecutor},
 };
-use world_model::{cell::WorldCell, command::Command, spatial::ChunkKey};
+use world_model::{body::BodyHandle, cell::WorldCell, command::Command, spatial::ChunkKey};
 
 use crate::{
+    bodies::BodyMonitor,
     clock::{ClockError, FixedClock},
     ids::{ChunkRevision, CommandId, SessionId, Tick},
     ledger::{OutcomeLedger, ResidencyOutcome},
@@ -45,6 +46,8 @@ pub struct RuntimeConfig {
     pub receipts: u32,
     /// Cosmetic events kept for displays.
     pub cosmetic_events: u32,
+    /// Body events (landings, liquid entries, contacts, craters, splashes) kept until drained.
+    pub body_events: u32,
 }
 
 impl Default for RuntimeConfig {
@@ -55,6 +58,7 @@ impl Default for RuntimeConfig {
             pending_commands: 1024,
             receipts: 4096,
             cosmetic_events: 256,
+            body_events: 1024,
         }
     }
 }
@@ -124,6 +128,7 @@ struct Ledger(OutcomeLedger);
 #[derive(Resource, Default)]
 struct Buffers {
     batch: Vec<AdmittedCommand>,
+    observe: Vec<BodyHandle>,
     outcomes: Vec<Outcome>,
 }
 
@@ -173,9 +178,11 @@ impl Runtime {
         world.insert_resource(Ledger(OutcomeLedger::new(
             config.cosmetic_events as usize,
             residency,
+            BodyMonitor::new(capabilities.body_capacity, config.body_events),
         )));
         world.insert_resource(Buffers {
             batch: Vec::with_capacity(capabilities.commands_per_tick as usize),
+            observe: Vec::with_capacity(capabilities.body_samples_per_tick as usize),
             outcomes: Vec::with_capacity(capabilities.outcomes_per_poll as usize),
         });
         world.insert_resource(LastFrame::default());
@@ -282,6 +289,20 @@ impl Runtime {
 
     pub fn ledger_mut(&mut self) -> &mut OutcomeLedger {
         &mut self.world.resource_mut::<Ledger>().into_inner().0
+    }
+
+    /// What the runtime knows about the live world's bodies.
+    pub fn bodies(&self) -> &BodyMonitor {
+        self.ledger().bodies()
+    }
+
+    pub fn bodies_mut(&mut self) -> &mut BodyMonitor {
+        self.ledger_mut().bodies_mut()
+    }
+
+    /// Samples `body` every tick (the possessed body a camera follows), or stops doing so.
+    pub fn set_controlled(&mut self, body: Option<BodyHandle>) {
+        self.bodies_mut().set_controlled(body);
     }
 
     pub fn last_submitted_tick(&self) -> Option<Tick> {
@@ -441,6 +462,8 @@ fn submit_due_ticks(
     }
     let session = port.0.session();
     let per_tick = admission.capabilities.commands_per_tick as usize;
+    let samples = admission.capabilities.body_samples_per_tick as usize;
+    let tick_rate_hz = clock.clock.tick_rate_hz();
     for _ in 0..frame.0.ticks_due {
         if clock.exhausted {
             break;
@@ -460,10 +483,14 @@ fn submit_due_ticks(
                 .take(take)
                 .map(|pending| pending.command),
         );
+        let buffers = &mut *buffers;
+        ledger.0.bodies_mut().select(samples, &mut buffers.observe);
         let batch = TickBatch {
             session,
             tick,
+            tick_rate_hz,
             commands: &buffers.batch,
+            observe: &buffers.observe,
         };
         match port.0.submit_tick(&batch) {
             Ok(_) => {
@@ -608,6 +635,8 @@ mod tests {
                 window: ResidentWindow::new(ChunkKey::new(0, 0, 0), 1, 1).expect("window"),
                 supported: SupportedCommands::default()
                     .with(world_model::command::CommandKind::EditMaterial),
+                body_capacity: 4,
+                body_samples_per_tick: 2,
             }
         }
 
@@ -689,6 +718,7 @@ mod tests {
                         id: *id,
                         tick: *tick,
                         result: CommandResult::Edited {
+                            center: IVec2::ZERO,
                             changed: 1,
                             not_resident: 0,
                         },

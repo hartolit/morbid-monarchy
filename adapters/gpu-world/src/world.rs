@@ -12,10 +12,13 @@
 //! abandoned and nothing further is admitted. A new session (a new epoch) starts from the last
 //! durable state; it does not inherit anything from this one.
 //!
-//! Each tick runs the material phases after its commands (`docs/reference/gpu-contract.md`,
-//! "Cell phases"). The session holds the simulation configuration (rules, ambient temperature,
-//! rule seed) on the CPU and applies configuration commands to the tick they arrive in; a change
-//! wakes every resident cell for that tick, as a resize does for the first tick after it.
+//! Each tick runs the material phases after its commands, then the body substeps
+//! (`docs/reference/gpu-contract.md`, "Cell phases" and "Bodies"). The session holds the
+//! simulation configuration (rules, ambient temperature, elevation scale, rule seed) on the CPU
+//! and applies configuration commands to the tick they arrive in; a rule or climate change wakes
+//! every resident cell for that tick, as a resize does for the first tick after it. Body
+//! identity (which slots hold which generation) is kept here in a [`BodyTable`]; body physics
+//! lives on the device.
 
 use std::{
     sync::Arc,
@@ -23,8 +26,9 @@ use std::{
 };
 
 use world_model::{
+    body::BodyHandle,
     cell::WorldCell,
-    command::{AmbientTemperature, CommandKind},
+    command::{AmbientTemperature, CommandKind, ElevationScale},
     config::DEFAULT_AMBIENT_TEMPERATURE_C,
     rules::SimulationRules,
     spatial::{CHUNK_CELL_COUNT, ChunkKey},
@@ -40,6 +44,7 @@ use world_runtime::{
 };
 
 use crate::{
+    bodies::BodyTable,
     commands::{Dispatch, Expected},
     context::{
         AdapterRecord, AllocationCounters, ContextError, DeviceNeeds, GpuContext, LimitCeiling,
@@ -79,9 +84,64 @@ pub struct GpuWorldConfig {
     /// composition root derives it from the world's identity.
     pub rule_seed: u64,
     pub execution: Execution,
+    /// How body pairs are found. Bins are the production broadphase; all pairs is the
+    /// comparison the measurements keep.
+    pub broadphase: Broadphase,
+    /// Jacobi passes of the body pair solver per substep.
+    pub pair_iterations: PairIterations,
+    /// World units per elevation unit; `SetElevationScale` changes it at a tick boundary.
+    pub elevation_scale: ElevationScale,
     /// The first tick the session runs: 0 for a new world, the next tick after a checkpoint
     /// for a resumed one.
     pub first_tick: Tick,
+}
+
+/// Jacobi passes of the pair solver per substep: position corrections, then velocity
+/// impulses. Each count is even (a pass reads one half of the ping-pong buffers and writes the
+/// other, and a substep starts and ends in the first) and at most
+/// [`plan::BODY_DISPATCH_ITERATIONS`].
+///
+/// The default is the most the plan allows: in the `bodies` suite's dense cluster (512 mixed
+/// bodies crushed together, then left to settle) fewer velocity passes leave the pile
+/// compressed, since a body averages its impulses over every partner it touches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairIterations {
+    pub position: u32,
+    pub velocity: u32,
+}
+
+impl PairIterations {
+    pub const DEFAULT: Self = Self {
+        position: 16,
+        velocity: 16,
+    };
+
+    fn validate(self) -> Result<Self, PlanError> {
+        for (field, value) in [
+            ("pair_iterations.position", self.position),
+            ("pair_iterations.velocity", self.velocity),
+        ] {
+            if value % 2 != 0 || !(2..=plan::BODY_DISPATCH_ITERATIONS).contains(&value) {
+                return Err(PlanError::Config {
+                    field,
+                    value,
+                    min: 2,
+                    max: plan::BODY_DISPATCH_ITERATIONS,
+                });
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// How the body solver finds candidate pairs. Both find every pair that can touch; bins visit
+/// only nearby bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Broadphase {
+    #[default]
+    Bins,
+    /// Every body against every body: the baseline's arrangement, kept for comparison.
+    AllPairs,
 }
 
 /// How the material phases traverse the window. Both give the same result by construction; the
@@ -114,6 +174,9 @@ impl GpuWorldConfig {
                 .expect("the default temperature is supported"),
             rule_seed: 0,
             execution: Execution::Sparse,
+            broadphase: Broadphase::Bins,
+            pair_iterations: PairIterations::DEFAULT,
+            elevation_scale: ElevationScale::DEFAULT,
             first_tick: Tick::ZERO,
         }
     }
@@ -163,6 +226,8 @@ pub struct WorldView<'a> {
     pub slot_records: &'a wgpu::Buffer,
     /// Tile records and lists of the material phases, for diagnostic inspection.
     pub activity: &'a wgpu::Buffer,
+    /// Body state, configuration and samples (`plan::BodyLayout`).
+    pub bodies: &'a wgpu::Buffer,
     pub plan: &'a ResourcePlan,
     pub window: ResidentWindow,
     pub last_submitted_tick: Option<Tick>,
@@ -184,6 +249,9 @@ struct TickRecord {
     readback: StagingRef,
     submitted_at: Instant,
     expected: Vec<Expected>,
+    /// The bodies sampled after the tick, in sample order.
+    observed: Vec<BodyHandle>,
+    substeps: u32,
     upload_bytes: u32,
     readback_bytes: u32,
 }
@@ -248,6 +316,10 @@ pub struct GpuWorld {
     ambient_temperature: AmbientTemperature,
     rule_seed: u64,
     execution: Execution,
+    broadphase: Broadphase,
+    pair_iterations: PairIterations,
+    elevation_scale: ElevationScale,
+    bodies: BodyTable,
     /// The next tick wakes every resident cell (after a resize).
     wake_all_pending: bool,
 }
@@ -264,6 +336,7 @@ impl GpuWorld {
             world: config.world,
             epoch: config.epoch,
         };
+        let pair_iterations = config.pair_iterations.validate().map_err(OpenError::Plan)?;
         let (max_buffer_size, max_storage_binding) =
             plan::largest_supported_needs(config.transfer).map_err(OpenError::Plan)?;
         let mut context = GpuContext::open(
@@ -352,6 +425,8 @@ impl GpuWorld {
                 },
                 submitted_at: Instant::now(),
                 expected: Vec::with_capacity(commands),
+                observed: Vec::with_capacity(config.transfer.body_samples_per_tick as usize),
+                substeps: 0,
                 upload_bytes: 0,
                 readback_bytes: 0,
             })
@@ -410,6 +485,10 @@ impl GpuWorld {
             ambient_temperature: config.ambient_temperature,
             rule_seed: config.rule_seed,
             execution: config.execution,
+            broadphase: config.broadphase,
+            pair_iterations,
+            elevation_scale: config.elevation_scale,
+            bodies: BodyTable::new(config.transfer.bodies),
             wake_all_pending: false,
         };
         world.refresh_counters();
@@ -458,6 +537,15 @@ impl GpuWorld {
         self.execution
     }
 
+    pub fn elevation_scale(&self) -> ElevationScale {
+        self.elevation_scale
+    }
+
+    /// Body slots in use, by the commands encoded so far.
+    pub fn live_bodies(&self) -> u32 {
+        self.bodies.live()
+    }
+
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
             session: self.session,
@@ -466,6 +554,7 @@ impl GpuWorld {
             window_map: &self.window.window_map,
             slot_records: &self.window.slot_records,
             activity: &self.window.activity,
+            bodies: &self.fixed.bodies,
             plan: &self.plan,
             window: self.slots.window(),
             last_submitted_tick: self.last_submitted,
@@ -598,7 +687,10 @@ impl PhysicalWorld for GpuWorld {
 
     fn capabilities(&self) -> PortCapabilities {
         let ticks = self.tick_readbacks.capacity();
-        let per_tick = self.transfer.commands_per_tick + self.transfer.events_per_tick + 2;
+        let per_tick = self.transfer.commands_per_tick
+            + self.transfer.events_per_tick
+            + self.transfer.body_samples_per_tick
+            + 3;
         PortCapabilities {
             commands_per_tick: self.transfer.commands_per_tick,
             max_in_flight: self.transfer.max_in_flight,
@@ -608,12 +700,25 @@ impl PhysicalWorld for GpuWorld {
             chunk_upload_slots: self.transfer.chunk_upload_slots,
             capture_slots: self.transfer.capture_slots,
             window: self.slots.window(),
-            supported: SupportedCommands::default()
-                .with(CommandKind::EditMaterial)
-                .with(CommandKind::QueryColumn)
-                .with(CommandKind::SetAmbientTemperature)
-                .with(CommandKind::SetSimulationRules)
-                .with(CommandKind::MeasureTotals),
+            supported: [
+                CommandKind::EditMaterial,
+                CommandKind::SpawnBody,
+                CommandKind::RemoveBody,
+                CommandKind::DriveBody,
+                CommandKind::JumpBody,
+                CommandKind::AttractBodies,
+                CommandKind::LiftBodies,
+                CommandKind::SetAmbientTemperature,
+                CommandKind::SetSimulationRules,
+                CommandKind::SetElevationScale,
+                CommandKind::QueryColumn,
+                CommandKind::QueryRay,
+                CommandKind::MeasureTotals,
+            ]
+            .into_iter()
+            .fold(SupportedCommands::default(), SupportedCommands::with),
+            body_capacity: self.transfer.bodies,
+            body_samples_per_tick: self.transfer.body_samples_per_tick,
         }
     }
 

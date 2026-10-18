@@ -1,5 +1,7 @@
 // apply_edit: one brush stroke, as the baseline tools apply it (morbid-app's apply_brush with
-// world_model's column rules).
+// world_model's column rules), around the command's centre cell or, for a ray-targeted stroke,
+// around the quad cell `resolve_target` found the ray's hit in. A stroke whose ray missed has
+// status RESULT_TARGET_MISSED and changes nothing.
 //
 // Dispatch: one invocation per cell of the stroke's (2r + 1)^2 bounding square, in 8 x 8
 // workgroups; invocations past the square (partial edge workgroups) and outside the circle
@@ -14,8 +16,16 @@
 fn apply_edit(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = dispatch_params.command_index;
     let command = commands[index];
-    if (command.kind != COMMAND_EDIT) {
+    if (command.kind != COMMAND_EDIT || results[index].status != RESULT_EDITED) {
         return;
+    }
+    var center = vec2<i32>(command.center_x, command.center_y);
+    if (command.target_kind == TARGET_RAY) {
+        center = vec2<i32>(bitcast<i32>(results[index].v1), bitcast<i32>(results[index].v2));
+    }
+    if (all(id.xy == vec2<u32>(0u))) {
+        results[index].word0 = bitcast<u32>(center.x);
+        results[index].word1 = bitcast<u32>(center.y);
     }
     let radius = i32(command.radius);
     let offset = vec2<i32>(id.xy) - vec2<i32>(radius);
@@ -25,7 +35,7 @@ fn apply_edit(@builtin(global_invocation_id) id: vec3<u32>) {
     if (offset.x * offset.x + offset.y * offset.y > radius * radius) {
         return;
     }
-    let local = vec2<i32>(command.center_x, command.center_y) + offset;
+    let local = center + offset;
     let slot = resident_slot(local);
     if (slot == SLOT_NONE) {
         atomicAdd(&results[index].not_resident, 1u);

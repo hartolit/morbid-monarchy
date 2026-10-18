@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use gpu_world::world::{GpuWorld, GpuWorldConfig};
 use world_model::{
+    body::BodyHandle,
     cell::WorldCell,
     command::Command,
     glam::IVec2,
@@ -40,6 +41,10 @@ pub struct Driver {
     pub world: GpuWorld,
     pub next_tick: Tick,
     pub outcomes: Vec<Outcome>,
+    /// The tick rate every submitted tick carries.
+    pub tick_rate_hz: f64,
+    /// Bodies the next submitted ticks sample.
+    pub observe: Vec<BodyHandle>,
     next_id: u64,
     in_flight: u32,
 }
@@ -56,6 +61,8 @@ impl Driver {
             world,
             next_tick: Tick::ZERO,
             outcomes: Vec::with_capacity(capacity),
+            tick_rate_hz: world_model::config::DEFAULT_TICK_RATE_HZ,
+            observe: Vec::new(),
             next_id: 1,
             in_flight: 0,
         }
@@ -78,7 +85,9 @@ impl Driver {
         let batch = TickBatch {
             session: self.session(),
             tick: self.next_tick,
+            tick_rate_hz: self.tick_rate_hz,
             commands,
+            observe: &self.observe,
         };
         let ticket = self.world.submit_tick(&batch)?;
         self.next_tick = Tick::new(self.next_tick.value() + 1);

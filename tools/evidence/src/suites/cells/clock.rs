@@ -117,6 +117,8 @@ const PACINGS: [Pacing; 4] = [
 /// discarded instead of running more ticks per frame.
 pub fn presentation_rates(adapter: &str, check: &mut Check) -> Result<(), String> {
     const TARGET: u64 = 160;
+    // Later than any activation takes to be observed.
+    const SCRIPT_START: u64 = 32;
     let key = ChunkKey::new(-1, 6, 0);
     let mut cells = flat(TerrainMat::TERRAIN_STONE, BED_ELEVATION);
     cells[at(30, 30)].inject_fluid(FluidMat::FLUID_WATER, 200);
@@ -127,9 +129,24 @@ pub fn presentation_rates(adapter: &str, check: &mut Check) -> Result<(), String
         let setup = Setup::new(key, 1).rules(physics_only());
         let mut runtime = runtime(adapter, setup, RuntimeConfig::default())?;
         let slot = runtime_upload(&mut runtime, key, &cells)?;
+        // The rules key their draws and the granular parity on the absolute tick, and how many
+        // ticks pass before the activation is observed depends on the device's timing, so
+        // every pacing starts its script at the same absolute tick.
+        while runtime
+            .last_submitted_tick()
+            .is_none_or(|tick| tick.value() + 1 < SCRIPT_START)
+        {
+            runtime.frame_ticks(1);
+            idle(&mut runtime)?;
+        }
         let start = runtime
             .last_submitted_tick()
             .map_or(0, |tick| tick.value() + 1);
+        check.equal(
+            &format!("{}: script start", pacing.name),
+            start,
+            SCRIPT_START,
+        );
         for (index, (tick, x, y)) in strokes.iter().enumerate() {
             let command = Command::EditMaterial(
                 MaterialEdit::new(EditTool::Water, origin + IVec2::new(*x, *y), 2, 30)

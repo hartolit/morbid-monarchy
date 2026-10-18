@@ -7,6 +7,7 @@
 //! notes and metrics; it passes only when it recorded no failure.
 
 pub mod alloc;
+pub mod bodies;
 pub mod cells;
 pub mod driver;
 pub mod probe;
@@ -96,6 +97,7 @@ pub fn cases(suite: GpuSuite) -> Option<&'static [Case]> {
     match suite {
         GpuSuite::Transfers => Some(transfers::CASES),
         GpuSuite::Cells => Some(cells::CASES),
+        GpuSuite::Bodies => Some(bodies::CASES),
         _ => None,
     }
 }

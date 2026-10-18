@@ -58,8 +58,8 @@ use morbid_app::{
 use spatial_lib::prelude::manager::ChunkManager;
 use world_model::{
     body::{BodyHandle, BodyPreset},
-    command::{Command, EditTool},
-    observation::BodyObservation,
+    command::{Command, EditTool, Target},
+    observation::{BodyCounters, BodySample},
     spatial::{CHUNK_SIZE, cell_render_xz},
 };
 
@@ -275,7 +275,7 @@ struct Driver {
     bodies: Vec<Entity>,
     driven_body: Option<BodyHandle>,
     /// The driven body's state at the end of each measured frame.
-    observations: Vec<BodyObservation>,
+    observations: Vec<BodySample>,
     previous: CounterSnapshot,
     /// The frame recorded in `Last`, completed with its duration at the next `First`.
     pending: Option<FrameSample>,
@@ -582,16 +582,23 @@ fn execute(
             .filter(|_| handle.generation() == 0)
             .copied()
     };
+    // The frozen scenarios target columns and drive with the controls' strength; the
+    // baseline has no ray resolution against a GPU surface, so ray targets do not reach it.
     match *command {
         Command::EditMaterial(edit) => {
             let settings = BrushSettings {
                 radius: edit.radius(),
                 strength: edit.strength(),
             };
-            apply_brush(grid, grid_brush(edit.tool()), &settings, edit.center());
+            if let Some(center) = edit.center() {
+                apply_brush(grid, grid_brush(edit.tool()), &settings, center);
+            }
         }
         Command::SpawnBody(request) => {
-            let (x, z) = cell_render_xz(request.column());
+            let Some(column) = request.column() else {
+                return;
+            };
+            let (x, z) = cell_render_xz(column);
             let entity = spawn_sphere(
                 &mut spawn.commands,
                 &mut spawn.meshes,
@@ -599,7 +606,7 @@ fn execute(
                 grid,
                 scale,
                 SphereSpawn {
-                    wood: request.preset() == BodyPreset::Wood,
+                    wood: request.sphere().preset() == Some(BodyPreset::Wood),
                     hit: Vec3::new(x, 0.0, z),
                     drop_height: request.drop_height(),
                 },
@@ -608,12 +615,12 @@ fn execute(
         }
         Command::DriveBody {
             body: handle,
-            direction,
+            drive,
         } => {
             if let Some(entity) = body(handle)
                 && let Ok((_, _, mut sphere)) = actors.bodies.get_mut(entity)
             {
-                let (x, z) = direction.render_xz();
+                let (x, z) = drive.direction().render_xz();
                 drive_sphere(&mut sphere, Vec3::new(x, 0.0, z), tick_seconds);
             }
         }
@@ -624,13 +631,17 @@ fn execute(
                 jump_sphere(&mut sphere);
             }
         }
-        Command::AttractBodies { target } => {
+        Command::AttractBodies {
+            target: Target::Column(target),
+        } => {
             let target = column_point(grid, target, scale);
             for (_, transform, mut sphere) in &mut actors.bodies {
                 attract_sphere(transform, &mut sphere, target, tick_seconds);
             }
         }
-        Command::LiftBodies { target } => {
+        Command::LiftBodies {
+            target: Target::Column(target),
+        } => {
             let target = column_point(grid, target, scale);
             for (_, transform, mut sphere) in &mut actors.bodies {
                 lift_sphere(transform, &mut sphere, target, tick_seconds);
@@ -653,6 +664,13 @@ fn execute(
         // The frozen scenarios issue no queries or measurements, and the baseline has neither
         // path: its tools read the CPU grid directly. The GPU runtime answers both.
         Command::QueryColumn { .. } | Command::MeasureTotals => {}
+        // Not issued by the frozen scenarios: rays, removals and elevation-scale changes are
+        // GPU-runtime operations.
+        Command::AttractBodies { .. }
+        | Command::LiftBodies { .. }
+        | Command::QueryRay { .. }
+        | Command::RemoveBody { .. }
+        | Command::SetElevationScale(_) => {}
     }
 }
 
@@ -815,13 +833,18 @@ fn record_frame(world: &mut World) {
     driver.pending = Some(sample);
     driver.ticks_at_end = Some(timeline_tick);
     if measured && let Some((body, position, sphere)) = driven_state {
-        driver.observations.push(BodyObservation {
+        driver.observations.push(BodySample {
             body,
             tick: timeline_tick,
-            position: position.to_array(),
-            velocity: sphere.velocity.to_array(),
+            position: position.as_dvec3(),
+            velocity: sphere.velocity,
+            ground_normal: sphere.ground_normal,
             grounded: sphere.is_grounded,
+            suspended: false,
             submerged_fraction: sphere.submerged_fraction,
+            liquid: None,
+            touching: 0,
+            counters: BodyCounters::default(),
         });
     }
 
@@ -925,7 +948,7 @@ fn write_outputs(driver: &Driver, status: &str) {
 }
 
 /// What the measured window observed of the driven body, or null when nothing was driven.
-fn driven_body_summary(observations: &[BodyObservation]) -> serde_json::Value {
+fn driven_body_summary(observations: &[BodySample]) -> serde_json::Value {
     let Some(last) = observations.last() else {
         return serde_json::Value::Null;
     };
@@ -939,8 +962,8 @@ fn driven_body_summary(observations: &[BodyObservation]) -> serde_json::Value {
         "speed": distribution(observations.iter().map(|o| f64::from(o.speed()))),
         "last": {
             "tick": last.tick,
-            "position": last.position,
-            "velocity": last.velocity,
+            "position": last.position.to_array(),
+            "velocity": last.velocity.to_array(),
             "grounded": last.grounded,
             "submerged_fraction": last.submerged_fraction,
         },

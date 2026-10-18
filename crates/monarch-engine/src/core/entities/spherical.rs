@@ -15,95 +15,15 @@ use crate::core::{
     physics::grid_physics::{DisplacementSlot, GridPhysicsApi},
     world::grid::ActiveWorldGrid,
 };
+pub use world_model::body::submerged_volume_fraction;
 use world_model::{
-    body::BODY_RELATIVE_DENSITY,
+    body::{BODY_RELATIVE_DENSITY, tuning::*},
     material::{FluidMat, GranularMat, fluid_properties},
     spatial::nearest_cell,
 };
 
 /// Lower bound on a body's relative density; keeps the buoyancy ratio finite.
 const MIN_BODY_RELATIVE_DENSITY: f32 = *BODY_RELATIVE_DENSITY.start();
-
-/// Position passes per substep. Each pass pushes the sphere out of its deepest overlap; a few
-/// passes settle creases where several triangles overlap it at once.
-const CONTACT_ITERATIONS: usize = 4;
-/// Sweeps over the contact normals when removing velocity that points into the ground.
-const VELOCITY_ITERATIONS: usize = 2;
-/// Gap beyond the radius that still counts as touching, so resting contact survives the sag
-/// gravity adds between substeps.
-const CONTACT_SLOP: f32 = 0.05;
-/// Contacts whose normal rises at least this steeply (60 degrees from vertical) are ground;
-/// anything steeper is a wall that blocks but neither supports nor gets cratered.
-const GROUND_NORMAL_MIN_Y: f32 = 0.5;
-/// Distinct normals kept per contact manifold; near-coplanar triangles share an entry.
-const MAX_MANIFOLD_CONTACTS: usize = 16;
-const DUPLICATE_NORMAL_COSINE: f32 = 0.999;
-/// A contact whose direction lies within about ten degrees of its triangle's face normal takes
-/// the face normal. Neighbouring triangles of a smooth surface otherwise report contacts on
-/// their shared edges with slightly tilted normals ("internal edge" ghosts), and at speed each
-/// of those turns horizontal velocity into a hop.
-const INTERNAL_EDGE_COSINE: f32 = 0.985;
-/// Contacts within this distance of touching constrain velocity; looser ones only count
-/// towards being grounded.
-const CONSTRAINT_TOLERANCE: f32 = 0.002;
-/// Contacts this close to the deepest one share in the ground normal, so a crease between two
-/// faces averages them while distant near-misses are ignored.
-const GROUND_NORMAL_BAND: f32 = 0.01;
-/// Below this separation the closest-point direction is unreliable; use the face normal.
-const DEGENERATE_DISTANCE: f32 = 1e-5;
-
-/// Sampling pattern for the confinement that makes deeper craters progressively harder.
-const RESISTANCE_SAMPLE_RINGS: usize = 2;
-const RESISTANCE_SAMPLE_STRIDE: i32 = 10;
-const RESISTANCE_CLIFF_THRESHOLD: f32 = 16.0;
-const RESISTANCE_MULTIPLIER: f32 = 1.0;
-
-/// Slowest downward speed at water entry that throws a splash.
-const SPLASH_MIN_SPEED: f32 = 4.0;
-/// Liquid units thrown per unit of entry energy, and the energy each displaced unit costs.
-const SPLASH_UNITS_PER_ENERGY: f32 = 0.3;
-const SPLASH_ENERGY_PER_UNIT: f32 = 1.0;
-/// The cavity is emptied out to this many radii; the crown lands between the ring radii.
-const SPLASH_CAVITY_RATIO: f32 = 1.25;
-const SPLASH_RING_OUTER_RATIO: f32 = 2.75;
-const SPLASH_MAX_PER_CELL: u16 = 12;
-/// Slowest horizontal speed at which a sphere breaking the surface pushes a bow wave.
-const WAKE_MIN_SPEED: f32 = 4.0;
-/// Depth of the surface layer (elevation units) a waterline sweeps aside per world unit
-/// travelled; see `displace_liquids` for how the waterline scales it.
-const WAKE_LAYER_UNITS: f32 = 1.0;
-const WAKE_MAX_PER_CELL: u16 = 1;
-/// Width of the ring beside the waterline that receives the bow wave, in cells.
-const WAKE_RING_WIDTH: f32 = 3.0;
-const WAKE_MAX_RING_PER_CELL: u16 = 2;
-/// Fractional wake volume carried between substeps is capped so a blocked wake cannot bank
-/// a surge for later.
-const WAKE_MAX_PENDING: f32 = 4.0;
-
-/// Trail depth is measured below a plane fitted to the ground on a ring this many radii out,
-/// which lies on undisturbed ground around the sphere and follows slopes.
-const RUT_REFERENCE_RING_RATIO: f32 = 1.75;
-const RUT_REFERENCE_SAMPLES: usize = 12;
-/// Fewest ring samples a plane may be fitted to.
-const RUT_MIN_REFERENCE_SAMPLES: usize = 6;
-/// Ring samples further than this (world units) from the first fit lie in a trail or on a
-/// berm, not on undisturbed ground, and are dropped before refitting.
-const RUT_TRIM_DEPTH: f32 = 0.5;
-/// Time constant over which the reference follows newly fitted ground. Filtering keeps the
-/// yield floor from twitching as the sample ring sweeps over small features.
-const RUT_REFERENCE_SMOOTHING_SECONDS: f32 = 0.1;
-/// Sinkage never exceeds this share of the radius, keeping the centre above the true floor.
-const MAX_SINKAGE_RATIO: f32 = 0.5;
-const PLANE_SINGULARITY: f32 = 1e-6;
-/// Berms of shoved loose material form in a band just outside the sphere's footprint (in
-/// radii), up to a height above the undisturbed ground (in radii), and only beside the trail
-/// while the sphere is moving. Inside the footprint the sphere would ride up its own berm.
-const RUT_BERM_INNER_RATIO: f32 = 1.0;
-const RUT_BERM_OUTER_RATIO: f32 = 1.5;
-const RUT_BERM_HEIGHT_RATIO: f32 = 0.3;
-const RUT_BERM_SIDE_COSINE: f32 = 0.5;
-/// Below this speed a sphere has no heading and its berm forms all around it.
-const RUT_HEADING_MIN_SPEED: f32 = 1.0;
 
 #[derive(Component, Debug, Clone)]
 pub struct DynamicRigidSphere {
@@ -152,28 +72,15 @@ impl DynamicRigidSphere {
             previous_submerged_fraction: 0.0,
             pending_wake_volume: 0.0,
             ground_reference: None,
-            rim_inner_radius_ratio: 0.9,
-            rim_expansion_factor: 1.5,
-            blade_ceiling_ratio: 0.10,
-            max_rim_deposit_per_cell: 3,
-            max_deformation_size_ratio: 1.0,
-            grounding_drift_buffer: 0.01,
-            minimum_bounce_speed: 6.0,
+            rim_inner_radius_ratio: CRATER.rim_inner_radius_ratio,
+            rim_expansion_factor: CRATER.rim_expansion_factor,
+            blade_ceiling_ratio: CRATER.blade_ceiling_ratio,
+            max_rim_deposit_per_cell: CRATER.max_rim_deposit_per_cell,
+            max_deformation_size_ratio: CRATER.max_deformation_size_ratio,
+            grounding_drift_buffer: CRATER.grounding_drift_buffer,
+            minimum_bounce_speed: CRATER.minimum_bounce_speed,
         }
     }
-}
-
-/// Fraction of a sphere's volume below a plane `depth` units above its lowest point.
-///
-/// Uses the spherical cap volume `pi * h^2 * (3r - h) / 3` divided by `4/3 * pi * r^3`, so the
-/// buoyant force grows smoothly from zero at first contact to full displacement.
-#[inline(always)]
-pub fn submerged_volume_fraction(depth: f32, radius: f32) -> f32 {
-    if radius <= 0.0 {
-        return 0.0;
-    }
-    let cap_height = depth.clamp(0.0, 2.0 * radius);
-    cap_height * cap_height * (3.0 * radius - cap_height) / (4.0 * radius * radius * radius)
 }
 
 /// Closest point to `p` on triangle `abc`, by Voronoi region classification
