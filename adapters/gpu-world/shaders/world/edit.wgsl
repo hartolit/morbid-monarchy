@@ -46,6 +46,7 @@ fn apply_edit(@builtin(global_invocation_id) id: vec3<u32>) {
     let after = apply_tool(before, command.tool, command.strength);
     if (any(after != before)) {
         cells[at] = after;
+        mark_slot_changed(slot);
         atomicAdd(&results[index].changed, 1u);
         mark_edited(local);
         account_tool(before, after);

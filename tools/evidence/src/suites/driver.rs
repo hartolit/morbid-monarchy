@@ -234,6 +234,81 @@ impl Driver {
     }
 }
 
+/// What a snapshot reported for its chunk, and the cells of a changed one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshotted {
+    pub key: ChunkKey,
+    pub tick: Option<Tick>,
+    pub changed: bool,
+    pub cells: Option<Vec<WorldCell>>,
+}
+
+impl Driver {
+    /// Polls until the snapshot `ticket` reports, and takes a changed one's cells.
+    pub fn await_snapshot(
+        &mut self,
+        ticket: world_runtime::port::SnapshotTicket,
+    ) -> Result<Snapshotted, String> {
+        let mut found = None;
+        let started = Instant::now();
+        loop {
+            self.poll();
+            for outcome in &self.outcomes {
+                match *outcome {
+                    Outcome::Snapshot {
+                        ticket: reported,
+                        key,
+                        tick,
+                        changed,
+                        ..
+                    } if reported == ticket => found = Some((key, tick, changed)),
+                    Outcome::Abandoned {
+                        obligation: world_runtime::port::Obligation::Snapshot(abandoned),
+                        reason,
+                    } if abandoned == ticket => {
+                        return Err(format!("snapshot abandoned: {reason:?}"));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((key, tick, changed)) = found {
+                let cells = if changed {
+                    let mut cells = vec![WorldCell::default(); CHUNK_CELL_COUNT];
+                    self.world
+                        .take_snapshot(ticket, &mut cells)
+                        .map_err(|refusal| format!("take snapshot: {refusal:?}"))?;
+                    Some(cells)
+                } else {
+                    None
+                };
+                return Ok(Snapshotted {
+                    key,
+                    tick,
+                    changed,
+                    cells,
+                });
+            }
+            if started.elapsed() > DEVICE_PATIENCE {
+                return Err(format!("snapshot {ticket:?} never reported"));
+            }
+            // A changed snapshot streams out in a later submission.
+            let _ = self.world.submit_transfers(self.session());
+            std::thread::sleep(Duration::from_micros(200));
+        }
+    }
+
+    /// Snapshots `slot` at the end of the next tick and returns what it reported.
+    pub fn snapshot(&mut self, slot: SlotRef) -> Result<Snapshotted, String> {
+        let ticket = self
+            .world
+            .snapshot_chunk(slot)
+            .map_err(|refusal| format!("snapshot: {refusal:?}"))?;
+        self.submit(&[])
+            .map_err(|refusal| format!("snapshot tick: {refusal:?}"))?;
+        self.await_snapshot(ticket)
+    }
+}
+
 /// A deterministic chunk of arbitrary words (SplitMix64), covering every bit pattern of both
 /// words; layout tests need values a generator would never produce.
 pub fn pattern(seed: u64) -> Vec<WorldCell> {

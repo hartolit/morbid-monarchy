@@ -16,6 +16,7 @@
 //! - [`resources`]: device buffers, compiled pipelines and the shared bind group;
 //! - [`staging`]: pooled upload and readback buffers with generation-checked map delivery;
 //! - [`slots`]: chunk slots and the window map, as metadata;
+//! - [`snapshots`]: chunk and world snapshots copied on the device and streamed out;
 //! - [`bodies`]: body slots and their generations, as metadata;
 //! - [`commands`], [`readback`]: command records in, identity-checked outcomes out;
 //! - [`world`]: [`world::GpuWorld`], which ties them together tick by tick;
@@ -35,5 +36,6 @@ pub mod readback;
 pub mod resources;
 pub mod shader;
 pub mod slots;
+pub mod snapshots;
 pub mod staging;
 pub mod world;

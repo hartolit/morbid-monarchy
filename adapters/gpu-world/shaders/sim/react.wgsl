@@ -440,6 +440,10 @@ fn react(
             atomicStore(&activity[tile_word(tile, TILE_EDITED + w)], 0u);
         }
         mark_candidates(tile, atomicLoad(&marks));
+        // `commit` writes exactly the cells whose value changed here.
+        if (atomicLoad(&sums[SUM_CHANGED]) > 0u) {
+            mark_slot_changed(resident_slot(tile_cell(tile, vec2<u32>(0u))));
+        }
     }
 }
 

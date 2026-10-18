@@ -1,0 +1,15 @@
+[package]
+name = "world-store"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The saved-world format and its redb store: versioned rows, immutable chunk and body revisions, atomically published checkpoints, fault injection at the storage boundary and the legacy import."
+
+[dependencies]
+bitcode.workspace = true
+redb.workspace = true
+world-model.workspace = true
+world-runtime.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

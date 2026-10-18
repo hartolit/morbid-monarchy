@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "adapters/gpu-world",
+    "adapters/world-store",
     "crates/morbid-app",
     "crates/monarch-engine",
     "crates/spatial-lib",
@@ -40,3 +41,4 @@ spatial-lib = { path = "crates/spatial-lib" }
 world-model = { path = "crates/world-model" }
 world-runtime = { path = "crates/world-runtime" }
 gpu-world = { path = "adapters/gpu-world" }
+world-store = { path = "adapters/world-store" }

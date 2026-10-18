@@ -118,6 +118,7 @@ impl GpuWorld {
                 reason,
             });
         }
+        self.abandon_snapshots(reason, keep_ready, outcomes);
     }
 
     /// Whether anything submitted still owes an outcome.
@@ -127,6 +128,7 @@ impl GpuWorld {
                 .captures
                 .iter()
                 .any(|capture| matches!(capture.state, CaptureState::Submitted { .. }))
+            || self.snapshots.in_flight()
             || self.context.in_flight() > 0
     }
 
@@ -188,7 +190,11 @@ impl GpuWorld {
                     {
                         self.decode_tick(reservation, outcomes);
                     }
-                    Completion::Ready(reservation) => self.capture_ready(reservation, outcomes),
+                    Completion::Ready(reservation) => {
+                        if !self.snapshot_ready(reservation, outcomes) {
+                            self.capture_ready(reservation, outcomes);
+                        }
+                    }
                     Completion::Remapped(_) => {}
                     Completion::Failed(_) => self.lose(outcomes),
                 }
@@ -299,6 +305,9 @@ impl GpuWorld {
                 self.abandon_all(AbandonReason::StopTimedOut, outcomes);
                 abandoned += (outcomes.len() - before) as u32;
             }
+            // No submission follows a stop: snapshots that still needed one cannot finish.
+            // Ready ones stay takeable.
+            abandoned += self.abandon_unsubmitted_snapshots(outcomes);
             self.lifecycle = Lifecycle::Stopped;
         }
         DrainReport {

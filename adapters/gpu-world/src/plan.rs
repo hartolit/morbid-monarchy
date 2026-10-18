@@ -12,9 +12,17 @@
 //!
 //! Terrain-related state per window of `N` cells, `C` chunks and `T = 64 C` tiles, in bytes:
 //! cells `8N`, flow words `8N`, scratch cells `8N`, the activity buffer
-//! `4·(16 + C + 2T + 16T)`, body claim words `4N`, the window map `4C` and slot records `32C`:
-//! `29.125 N + 40 C + 64`, inside the `48 N + 64 C` envelope. Every list and scratch region is
-//! sized for every tile being active, so none can overflow.
+//! `4·(16 + 2C + 2T + 16T)` (since 05 with one change word per slot), body claim words `4N`, the
+//! window map `4C` and slot records `32C`: `29.125 N + 44 C + 64`, inside the `48 N + 64 C`
+//! envelope. Every list and scratch region is sized for every tile being active, so none can
+//! overflow.
+//!
+//! Snapshots (05) are not live terrain and are planned beside it: a fixed image of
+//! `snapshot_entries` chunks for chunk snapshots, `32 KiB` each, and the world image a world
+//! snapshot allocates while it drains, `8N + 144 B` bytes (every slot's cells and every body's
+//! state and configuration). The fixed image is allocated with the plan; the world image is
+//! reserved in it ([`ResourcePlan::reserved_bytes`]), so the device budget holds with a world
+//! snapshot draining, and a world snapshot is always within the plan it was requested under.
 //!
 //! Body state is sized by the body capacity `B` and the samples per tick `S`, not by the window
 //! ([`BodyLayout`]): `4·(92 B + 26 S)` bytes of bodies buffer and `4·(3 H + B + 4)` of bins, with
@@ -98,6 +106,9 @@ pub struct TransferConfig {
     pub events_per_tick: u32,
     pub chunk_upload_slots: u32,
     pub capture_slots: u32,
+    /// Chunks the chunk snapshot image holds: snapshots of outgoing chunks copied on the device
+    /// and waiting to report whether they changed or to stream out.
+    pub snapshot_entries: u32,
     /// Slot-record and window-entry changes one tick can carry (activations and retirements).
     pub metadata_patches_per_tick: u32,
     /// Bodies the world holds at once (at most `world_model::body::MAX_BODIES`).
@@ -115,6 +126,7 @@ impl Default for TransferConfig {
             events_per_tick: 64,
             chunk_upload_slots: 32,
             capture_slots: 32,
+            snapshot_entries: 32,
             metadata_patches_per_tick: 96,
             bodies: MAX_BODIES,
             body_samples_per_tick: 64,
@@ -125,7 +137,7 @@ impl Default for TransferConfig {
 impl TransferConfig {
     /// Checks every size against its supported range.
     pub fn validate(&self) -> Result<(), PlanError> {
-        let ranges: [(&'static str, u32, u32, u32); 8] = [
+        let ranges: [(&'static str, u32, u32, u32); 9] = [
             (
                 "max_in_flight",
                 self.max_in_flight,
@@ -135,7 +147,8 @@ impl TransferConfig {
             ("commands_per_tick", self.commands_per_tick, 1, 4096),
             ("events_per_tick", self.events_per_tick, 1, 65_536),
             ("chunk_upload_slots", self.chunk_upload_slots, 1, 1024),
-            ("capture_slots", self.capture_slots, 1, 1024),
+            ("capture_slots", self.capture_slots, 2, 1024),
+            ("snapshot_entries", self.snapshot_entries, 1, 1024),
             (
                 "metadata_patches_per_tick",
                 self.metadata_patches_per_tick,
@@ -280,10 +293,12 @@ pub enum BufferRole {
     TickReadbackStaging,
     ChunkUploadStaging,
     CaptureStaging,
+    /// Chunk snapshots copied on the device: `snapshot_entries` chunks (05).
+    SnapshotImage,
 }
 
 impl BufferRole {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Cells,
         Self::WindowMap,
         Self::SlotRecords,
@@ -307,6 +322,7 @@ impl BufferRole {
         Self::TickReadbackStaging,
         Self::ChunkUploadStaging,
         Self::CaptureStaging,
+        Self::SnapshotImage,
     ];
 
     /// Buffers whose size depends on the resident window; a resize replaces them.
@@ -409,6 +425,10 @@ pub struct ActivityLayout {
     pub process: u32,
     /// One record of `TILE_RECORD_WORDS` per window tile.
     pub records: u32,
+    /// One change word per slot (05): nonzero once any cell of the slot's chunk changed since
+    /// the slot was activated or last snapshotted. Every writer of cell values sets it; an
+    /// activation and a snapshot clear it, in timeline order.
+    pub changes: u32,
     pub words: u32,
 }
 
@@ -419,14 +439,21 @@ impl ActivityLayout {
         let candidates = requests.checked_add(chunks)?;
         let process = candidates.checked_add(tiles)?;
         let records = process.checked_add(tiles)?;
-        let words = records.checked_add(tiles.checked_mul(activity::TILE_RECORD_WORDS)?)?;
+        let changes = records.checked_add(tiles.checked_mul(activity::TILE_RECORD_WORDS)?)?;
+        let words = changes.checked_add(chunks)?;
         Some(Self {
             requests,
             candidates,
             process,
             records,
+            changes,
             words,
         })
+    }
+
+    /// Byte offset of a slot's change word.
+    pub fn change_word(&self, slot: u32) -> u64 {
+        (u64::from(self.changes) + u64::from(slot)) * 4
     }
 
     /// Byte offset and size of a window chunk's tile records.
@@ -529,6 +556,10 @@ pub struct ResourcePlan {
     pub device_bytes: u64,
     pub staging_bytes: u64,
     pub terrain_bytes: u64,
+    /// Bytes of the world image a world snapshot allocates for this window: every slot's
+    /// cells, then every body slot's state and configuration. Not in `device_bytes` (it is
+    /// allocated on demand) but in [`reserved_bytes`](Self::reserved_bytes).
+    pub world_image_bytes: u64,
     pub timestamps: bool,
 }
 
@@ -546,9 +577,18 @@ impl ResourcePlan {
             .sum()
     }
 
-    /// Device bytes requested while this plan's window buffers and `next`'s coexist.
+    /// Device bytes the plan allocates plus the world image it may allocate.
+    pub fn reserved_bytes(&self) -> u64 {
+        self.device_bytes.saturating_add(self.world_image_bytes)
+    }
+
+    /// Device bytes requested at most while this plan's buffers and `next`'s window buffers
+    /// coexist, with one world snapshot of either window allocated: an old one still draining,
+    /// or a new one requested before the old window buffers are released.
     pub fn overlap_with(&self, next: &ResourcePlan) -> u64 {
-        self.device_bytes.saturating_add(next.window_bytes())
+        self.device_bytes
+            .saturating_add(next.window_bytes())
+            .saturating_add(self.world_image_bytes.max(next.world_image_bytes))
     }
 }
 
@@ -883,6 +923,15 @@ pub fn plan(
             transfer.capture_slots,
             Usage::MAP_READ | Usage::COPY_DST,
         ),
+        unbound(
+            BufferRole::SnapshotImage,
+            checked(
+                BufferRole::SnapshotImage,
+                u64::from(transfer.snapshot_entries).checked_mul(CHUNK_BYTES),
+            )?,
+            1,
+            Usage::COPY_SRC | Usage::COPY_DST,
+        ),
     ];
     debug_assert!(
         buffers
@@ -932,6 +981,24 @@ pub fn plan(
         }
     }
 
+    // The world image a snapshot allocates on demand is part of the plan: it must fit one
+    // buffer and the device budget like the buffers allocated at once.
+    let world_image_bytes = checked(
+        BufferRole::SnapshotImage,
+        cell_bytes.checked_add(u64::from(transfer.bodies) * (BodyState::BYTES + BodyConfig::BYTES)),
+    )?;
+    if world_image_bytes > limits.max_buffer_size {
+        return Err(limit(
+            Some(BufferRole::SnapshotImage),
+            LimitedResource::BufferSize,
+            world_image_bytes,
+            limits.max_buffer_size,
+        ));
+    }
+    let reserved_bytes = checked(
+        BufferRole::SnapshotImage,
+        device_bytes.checked_add(world_image_bytes),
+    )?;
     if STORAGE_BUFFERS_PER_STAGE > limits.max_storage_buffers_per_stage {
         return Err(limit(
             None,
@@ -1004,12 +1071,12 @@ pub fn plan(
         ));
     }
     if let Some(budget) = budgets.device_bytes
-        && device_bytes > budget
+        && reserved_bytes > budget
     {
         return Err(limit(
             None,
             LimitedResource::DeviceBytes,
-            device_bytes,
+            reserved_bytes,
             budget,
         ));
     }
@@ -1030,6 +1097,7 @@ pub fn plan(
         device_bytes,
         staging_bytes,
         terrain_bytes,
+        world_image_bytes,
         timestamps,
     })
 }
@@ -1066,7 +1134,8 @@ pub fn largest_supported_needs(transfer: TransferConfig) -> Result<(u64, u64), P
         .iter()
         .map(|buffer| buffer.size)
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(plan.world_image_bytes);
     let largest_binding = plan
         .buffers
         .iter()
@@ -1226,9 +1295,65 @@ mod tests {
 
     #[test]
     fn the_device_is_asked_for_what_radius_32_needs() {
+        // The largest buffer is the world image: every slot's cells (138,444,800 bytes) and
+        // 4,096 bodies of 128 + 16 bytes. The largest binding is still the cell array.
         assert_eq!(
             largest_supported_needs(TransferConfig::default()),
-            Ok((138_444_800, 138_444_800))
+            Ok((138_444_800 + 4096 * 144, 138_444_800))
+        );
+    }
+
+    #[test]
+    fn snapshots_are_planned_with_the_window() {
+        let plan = plan(
+            window(6),
+            TransferConfig::default(),
+            false,
+            &webgpu_defaults(),
+            &Budgets::default(),
+        )
+        .expect("plan");
+        assert_eq!(
+            plan.buffer(BufferRole::SnapshotImage).size,
+            32 * CHUNK_BYTES
+        );
+        assert_eq!(
+            plan.world_image_bytes,
+            plan.buffer(BufferRole::Cells).size + 4096 * 144
+        );
+        let allocated: u64 = plan.buffers.iter().filter_map(BufferPlan::total).sum();
+        assert_eq!(plan.device_bytes, allocated);
+        assert_eq!(plan.reserved_bytes(), allocated + plan.world_image_bytes);
+        // One change word per slot, after the tile records.
+        let layout = plan.activity;
+        assert_eq!(
+            layout.changes,
+            layout.records + plan.tiles * activity::TILE_RECORD_WORDS
+        );
+        assert_eq!(layout.words, layout.changes + plan.slots);
+        assert_eq!(layout.change_word(2), u64::from(layout.changes + 2) * 4);
+        let budgets = Budgets {
+            device_bytes: Some(allocated),
+            ..Budgets::default()
+        };
+        assert!(
+            matches!(
+                super::plan(
+                    window(6),
+                    TransferConfig::default(),
+                    false,
+                    &webgpu_defaults(),
+                    &budgets
+                ),
+                Err(PlanError::Limit {
+                    limit: CapacityLimit {
+                        resource: LimitedResource::DeviceBytes,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "a budget without room for the world image refuses the plan"
         );
     }
 
@@ -1269,10 +1394,11 @@ mod tests {
             .sum();
         assert_eq!(plan.staging_bytes, staging);
         assert!(plan.terrain_bytes <= plan.cells * 48 + u64::from(plan.slots) * 64);
-        // The documented formula: 29.125 bytes per cell, 40 per chunk and the 64-byte header.
+        // The documented formula: 29.125 bytes per cell, 44 per chunk (since 05 with a change
+        // word per slot) and the 64-byte header.
         assert_eq!(
             plan.terrain_bytes,
-            plan.cells * 29 + plan.cells / 8 + u64::from(plan.slots) * 40 + 64
+            plan.cells * 29 + plan.cells / 8 + u64::from(plan.slots) * 44 + 64
         );
         // Body state: 92 words per body and 26 per sample; bins 3 H + B + 4 words.
         let bodies = plan.bodies;
@@ -1287,7 +1413,7 @@ mod tests {
         assert_eq!(plan.tiles, plan.slots * 64);
         assert_eq!(
             plan.activity.words,
-            16 + plan.slots + 2 * plan.tiles + 16 * plan.tiles
+            16 + 2 * plan.slots + 2 * plan.tiles + 16 * plan.tiles
         );
         assert_eq!(plan.buffer(BufferRole::TimestampResolve).count, 1);
         let bigger = super::plan(
@@ -1298,9 +1424,14 @@ mod tests {
             &Budgets::default(),
         )
         .expect("plan");
+        // The old allocations, the new window buffers, and the larger window's world image.
         assert_eq!(
             plan.overlap_with(&bigger),
-            plan.device_bytes + bigger.window_bytes()
+            plan.device_bytes + bigger.window_bytes() + bigger.world_image_bytes
+        );
+        assert_eq!(
+            bigger.overlap_with(&plan),
+            bigger.device_bytes + plan.window_bytes() + bigger.world_image_bytes
         );
     }
 }

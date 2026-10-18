@@ -20,7 +20,9 @@ use bevy_ecs::{
     prelude::*,
     schedule::{ScheduleLabel, SingleThreadedExecutor},
 };
-use world_model::{body::BodyHandle, cell::WorldCell, command::Command, spatial::ChunkKey};
+use world_model::{
+    body::BodyHandle, cell::WorldCell, command::Command, resume::BodySet, spatial::ChunkKey,
+};
 
 use crate::{
     bodies::BodyMonitor,
@@ -30,7 +32,8 @@ use crate::{
     port::{
         AbandonReason, AdmittedCommand, CaptureTicket, CapturedChunk, DrainReport, Obligation,
         Outcome, PhysicalWorld, PortCapabilities, PortHealth, Pressure, Refusal, ResidentWindow,
-        ResizeReport, ResizeRequest, SlotRef, TickBatch, TransferCounters, UploadTicket,
+        ResizeReport, ResizeRequest, SlotRef, SnapshotTicket, TickBatch, TransferCounters,
+        UploadTicket, WorldSnapshotTicket,
     },
     receipts::{AcknowledgeError, Admission, AdmissionError, Receipt, Receipts},
 };
@@ -156,7 +159,14 @@ impl Runtime {
             .map_err(RuntimeError::Clock)?;
         let capabilities = port.capabilities();
         let next_tick = port.next_tick();
-        let residency = (capabilities.chunk_upload_slots + capabilities.capture_slots) as usize;
+        // Room for every upload and capture, every chunk snapshot, and a world snapshot of the
+        // largest supported window with its bodies.
+        let largest = *world_model::config::ACTIVE_RADIUS_CHUNKS.end() as usize * 2 + 1;
+        let residency = (capabilities.chunk_upload_slots
+            + capabilities.capture_slots
+            + capabilities.snapshot_entries) as usize
+            + largest * largest
+            + 1;
 
         let mut world = World::new();
         world.insert_resource(Port(port));
@@ -371,6 +381,67 @@ impl Runtime {
         self.port_mut().retire_slot(slot)
     }
 
+    /// Requests a chunk snapshot; its outcome arrives through
+    /// [`drain_residency`](Self::drain_residency).
+    pub fn snapshot_chunk(&mut self, slot: SlotRef) -> Result<SnapshotTicket, ResidencyError> {
+        self.with_residency_reservation(|port| port.snapshot_chunk(slot))
+    }
+
+    /// Requests a world snapshot, reserving an outcome for every window chunk and the bodies.
+    pub fn snapshot_world(&mut self) -> Result<WorldSnapshotTicket, ResidencyError> {
+        let chunks = self.capabilities().window.chunk_count() as usize;
+        if !self.ledger_mut().reserve_world_snapshot(chunks) {
+            return Err(ResidencyError::OutcomesFull);
+        }
+        let session = self.session();
+        let result = self.port_mut().snapshot_world(session);
+        self.ledger_mut()
+            .world_snapshot_requested(result.as_ref().ok().copied(), chunks);
+        result.map_err(ResidencyError::Refused)
+    }
+
+    pub fn take_snapshot(
+        &mut self,
+        ticket: SnapshotTicket,
+        into: &mut [WorldCell],
+    ) -> Result<(), Refusal> {
+        self.port_mut().take_snapshot(ticket, into)
+    }
+
+    pub fn take_body_snapshot(
+        &mut self,
+        ticket: WorldSnapshotTicket,
+        into: &mut BodySet,
+    ) -> Result<(), Refusal> {
+        self.port_mut().take_body_snapshot(ticket, into)
+    }
+
+    /// Submits pending snapshot and streaming copies without a tick (see
+    /// [`PhysicalWorld::submit_transfers`]).
+    pub fn submit_transfers(&mut self) -> Result<bool, Refusal> {
+        let session = self.session();
+        self.port_mut().submit_transfers(session)
+    }
+
+    /// Restores a checkpoint's bodies before the first tick, and tells the body monitor they
+    /// exist, with the counters they had, so it neither misses them nor reports their history
+    /// again.
+    pub fn restore_bodies(&mut self, bodies: &BodySet, at: Option<Tick>) -> Result<(), Refusal> {
+        let session = self.session();
+        self.port_mut().restore_bodies(session, bodies)?;
+        let monitor = self.bodies_mut();
+        for body in &bodies.bodies {
+            monitor.restored(body.handle, at, body.counters);
+        }
+        Ok(())
+    }
+
+    pub fn preflight_resize(&self, window: ResidentWindow) -> Result<(), Refusal> {
+        let session = self.session();
+        self.port()
+            .preflight_resize(&ResizeRequest { session, window })
+    }
+
     /// Moves residency outcomes into `into`, freeing room for further requests.
     pub fn drain_residency(&mut self, into: &mut Vec<ResidencyOutcome>) {
         into.extend(self.ledger_mut().drain_residency());
@@ -384,6 +455,20 @@ impl Runtime {
             .capabilities
             .window = window;
         Ok(report)
+    }
+
+    /// Closes command admission without stopping the live world: no new command is accepted
+    /// and none still queued will run (each is reported abandoned). Submitted ticks still
+    /// complete. Returns how many queued commands were abandoned.
+    pub fn close_admission(&mut self) -> u32 {
+        self.world
+            .resource_scope(|world, mut admission: Mut<CommandQueue>| {
+                let mut ledger = world.resource_mut::<Ledger>();
+                admission.closed = true;
+                let queued = admission.pending.len() as u32;
+                abandon_pending(&mut admission, &mut ledger.0, AbandonReason::Stopped);
+                queued
+            })
     }
 
     /// Closes admission and waits up to `timeout` for outstanding work, consuming every
@@ -632,6 +717,7 @@ mod tests {
                 outcomes_per_poll: 64,
                 chunk_upload_slots: 1,
                 capture_slots: 1,
+                snapshot_entries: 1,
                 window: ResidentWindow::new(ChunkKey::new(0, 0, 0), 1, 1).expect("window"),
                 supported: SupportedCommands::default()
                     .with(world_model::command::CommandKind::EditMaterial),
@@ -696,6 +782,38 @@ mod tests {
             _: &mut [WorldCell],
         ) -> Result<CapturedChunk, Refusal> {
             Err(Refusal::InvalidPayload(PayloadError::CaptureNotReady))
+        }
+
+        fn snapshot_chunk(&mut self, slot: SlotRef) -> Result<SnapshotTicket, Refusal> {
+            Err(Refusal::StaleSlot(slot))
+        }
+
+        fn snapshot_world(&mut self, _: SessionId) -> Result<WorldSnapshotTicket, Refusal> {
+            Err(Refusal::Pressure(Pressure::SnapshotImage))
+        }
+
+        fn take_snapshot(&mut self, _: SnapshotTicket, _: &mut [WorldCell]) -> Result<(), Refusal> {
+            Err(Refusal::InvalidPayload(PayloadError::SnapshotNotReady))
+        }
+
+        fn take_body_snapshot(
+            &mut self,
+            _: WorldSnapshotTicket,
+            _: &mut BodySet,
+        ) -> Result<(), Refusal> {
+            Err(Refusal::InvalidPayload(PayloadError::SnapshotNotReady))
+        }
+
+        fn submit_transfers(&mut self, _: SessionId) -> Result<bool, Refusal> {
+            Ok(false)
+        }
+
+        fn restore_bodies(&mut self, _: SessionId, _: &BodySet) -> Result<(), Refusal> {
+            Err(Refusal::InvalidPayload(PayloadError::RestoreAfterStart))
+        }
+
+        fn preflight_resize(&self, _: &ResizeRequest) -> Result<(), Refusal> {
+            Err(Refusal::Stopped)
         }
 
         fn resize(&mut self, _: &ResizeRequest) -> Result<ResizeReport, Refusal> {

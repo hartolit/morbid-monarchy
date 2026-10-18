@@ -20,6 +20,7 @@ use world_model::{
     config,
     glam::{DVec3, IVec2},
     observation::{BodyCounters, BodyHit, BodySample, SurfaceHit, WorldTotals},
+    resume::{BodySet, BodySetError},
     spatial::{CHUNK_CELL_COUNT, ChunkKey, ChunkView},
 };
 
@@ -212,6 +213,82 @@ impl CaptureTicket {
     }
 }
 
+/// An accepted snapshot of one chunk, or of one chunk of a world snapshot.
+///
+/// A snapshot is copied on the device at the end of the next submission, with the chunk's
+/// change flag, which the copy clears. The CPU then learns whether the chunk changed since it
+/// was activated or last snapshotted; only a changed chunk's cells stream out. Unlike an
+/// inspection capture, a snapshot is an obligation: whoever requested it keeps what it holds
+/// until that is durable, because the flag that said it changed is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapshotTicket {
+    session: SessionId,
+    /// 0 for the chunk snapshot image; otherwise the world snapshot's identity.
+    image: u32,
+    entry: u32,
+    generation: u32,
+}
+
+impl SnapshotTicket {
+    pub const fn new(session: SessionId, image: u32, entry: u32, generation: u32) -> Self {
+        Self {
+            session,
+            image,
+            entry,
+            generation,
+        }
+    }
+
+    pub const fn session(&self) -> SessionId {
+        self.session
+    }
+
+    pub const fn image(&self) -> u32 {
+        self.image
+    }
+
+    pub const fn entry(&self) -> u32 {
+        self.entry
+    }
+
+    pub const fn generation(&self) -> u32 {
+        self.generation
+    }
+
+    /// The world snapshot this chunk belongs to, if any.
+    pub const fn world(&self) -> Option<WorldSnapshotTicket> {
+        match self.image {
+            0 => None,
+            id => Some(WorldSnapshotTicket {
+                session: self.session,
+                id,
+            }),
+        }
+    }
+}
+
+/// An accepted world snapshot: every chunk resident during the next submission and every
+/// body, all at that submission's boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorldSnapshotTicket {
+    session: SessionId,
+    id: u32,
+}
+
+impl WorldSnapshotTicket {
+    pub const fn new(session: SessionId, id: u32) -> Self {
+        Self { session, id }
+    }
+
+    pub const fn session(&self) -> SessionId {
+        self.session
+    }
+
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+}
+
 /// What a collected capture holds: the chunk's cells after `tick`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapturedChunk {
@@ -296,10 +373,12 @@ pub enum Pressure {
     PendingCommands,
     /// Every receipt is held by an unacknowledged command.
     Receipts,
+    /// Every entry of the chunk snapshot image is in use, or a world snapshot is draining.
+    SnapshotImage,
 }
 
 impl Pressure {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::InFlightSubmissions,
         Self::TickUploadStaging,
         Self::TickReadbackStaging,
@@ -309,6 +388,7 @@ impl Pressure {
         Self::SlotChanges,
         Self::PendingCommands,
         Self::Receipts,
+        Self::SnapshotImage,
     ];
 
     pub const fn index(self) -> usize {
@@ -353,6 +433,12 @@ pub enum PayloadError {
     },
     /// The batch's tick rate is outside the supported range.
     TickRate,
+    /// The snapshot has not streamed out yet, or reported its chunk unchanged (no payload).
+    SnapshotNotReady,
+    /// A body set to restore does not agree with itself or does not fit the world.
+    BodySet(BodySetError),
+    /// Bodies are restored before the session's first submission, never into a running world.
+    RestoreAfterStart,
 }
 
 /// A request beyond what the device or a budget supports.
@@ -407,6 +493,27 @@ pub enum Outcome {
     CaptureReady {
         ticket: CaptureTicket,
         tick: Tick,
+    },
+    /// A snapshot's chunk at the submission boundary `tick` (`None`: before the session's first
+    /// tick). `changed: false` means it still holds what was uploaded or last snapshotted, as
+    /// `revision` says, and carries no payload; `true` means its cells are ready to take.
+    Snapshot {
+        ticket: SnapshotTicket,
+        key: ChunkKey,
+        /// The revision the slot was uploaded with.
+        revision: ChunkRevision,
+        tick: Option<Tick>,
+        changed: bool,
+    },
+    /// A world snapshot's bodies are ready to take. `chunks` is how many chunk snapshots
+    /// the world snapshot holds (one [`Outcome::Snapshot`] each), and `config` the physical
+    /// configuration its tick ran with.
+    BodySnapshot {
+        ticket: WorldSnapshotTicket,
+        tick: Option<Tick>,
+        bodies: u32,
+        chunks: u32,
+        config: crate::store::PhysicalConfig,
     },
     /// A selected body's state at the end of a tick.
     Body(BodySample),
@@ -705,6 +812,13 @@ pub enum Obligation {
     Tick(Tick),
     Upload(UploadTicket),
     Capture(CaptureTicket),
+    Snapshot(SnapshotTicket),
+    /// A world snapshot's bodies; `chunks` as in [`Outcome::BodySnapshot`] (0 when the world
+    /// snapshot was abandoned before it was copied).
+    WorldSnapshot {
+        ticket: WorldSnapshotTicket,
+        chunks: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -726,6 +840,8 @@ pub struct PortCapabilities {
     pub outcomes_per_poll: u32,
     pub chunk_upload_slots: u32,
     pub capture_slots: u32,
+    /// Chunk snapshots the device holds at once.
+    pub snapshot_entries: u32,
     pub window: ResidentWindow,
     pub supported: SupportedCommands,
     /// Bodies the world holds at once.
@@ -804,7 +920,10 @@ pub struct ReadbackBytes {
     /// The per-tick accounting record and the totals of totals commands.
     pub diagnostics: u64,
     pub timestamps: u64,
+    /// Inspection captures.
     pub captures: u64,
+    /// Snapshot change flags, and the cells and bodies of changed snapshots.
+    pub snapshots: u64,
 }
 
 impl ReadbackBytes {
@@ -815,6 +934,7 @@ impl ReadbackBytes {
             + self.diagnostics
             + self.timestamps
             + self.captures
+            + self.snapshots
     }
 }
 
@@ -826,6 +946,10 @@ pub struct TransferCounters {
     pub readback: ReadbackBytes,
     /// Device-to-device copies (resize migration).
     pub device_copy_bytes: u64,
+    /// Device-to-device copies into snapshot images.
+    pub snapshot_copy_bytes: u64,
+    /// Submissions that carried only snapshot and streaming copies, not a tick.
+    pub transfer_submissions: u64,
     /// Device-side clears of per-tick counters and of activated chunks' activity records.
     pub device_clear_bytes: u64,
     pub ticks_submitted: u64,
@@ -894,6 +1018,42 @@ pub trait PhysicalWorld: Send + Sync {
         ticket: CaptureTicket,
         into: &mut [WorldCell],
     ) -> Result<CapturedChunk, Refusal>;
+
+    /// Requests a snapshot of a resident chunk at the end of the next submission. Its outcome
+    /// says whether the chunk changed since it was activated or last snapshotted, and a changed
+    /// chunk's cells then stream out for [`take_snapshot`](Self::take_snapshot).
+    fn snapshot_chunk(&mut self, slot: SlotRef) -> Result<SnapshotTicket, Refusal>;
+
+    /// Requests a snapshot of the whole world at the end of the next submission: one
+    /// [`Outcome::Snapshot`] per chunk resident during it, and one [`Outcome::BodySnapshot`].
+    fn snapshot_world(&mut self, session: SessionId) -> Result<WorldSnapshotTicket, Refusal>;
+
+    /// Copies a changed snapshot's cells into `into` ([`CHUNK_CELL_COUNT`] cells) and frees it.
+    fn take_snapshot(
+        &mut self,
+        ticket: SnapshotTicket,
+        into: &mut [WorldCell],
+    ) -> Result<(), Refusal>;
+
+    /// Moves a world snapshot's bodies into `into` and frees them.
+    fn take_body_snapshot(
+        &mut self,
+        ticket: WorldSnapshotTicket,
+        into: &mut BodySet,
+    ) -> Result<(), Refusal>;
+
+    /// Submits the pending snapshot and streaming copies on their own, without a tick, when
+    /// no tick will carry them (the world is paused or closing). `Ok(false)` when nothing was
+    /// pending. Never blocks; refused as pressure when the timeline is full.
+    fn submit_transfers(&mut self, session: SessionId) -> Result<bool, Refusal>;
+
+    /// Restores a checkpoint's bodies into a session that has not submitted anything: the
+    /// body slots, their generations and every live body's state, with the first submission.
+    fn restore_bodies(&mut self, session: SessionId, bodies: &BodySet) -> Result<(), Refusal>;
+
+    /// Checks a resize against every limit and budget without changing anything, so a
+    /// caller can learn it would be refused before evicting chunks for it.
+    fn preflight_resize(&self, request: &ResizeRequest) -> Result<(), Refusal>;
 
     /// Changes the resident window. Refused, with the current world intact, when the new
     /// allocation exceeds a limit or budget or would drop a resident chunk.

@@ -245,7 +245,8 @@ gpu_record! {
         candidates_base: u32,
         process_base: u32,
         records_base: u32,
-        reserved0: u32,
+        /// Word offset of the per-slot change words in the activity buffer (05).
+        changes_base: u32,
         reserved1: u32,
         reserved2: u32,
         reserved3: u32,

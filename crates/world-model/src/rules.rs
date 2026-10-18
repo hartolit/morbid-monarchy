@@ -77,6 +77,26 @@ impl SimulationRules {
         }
         bits
     }
+
+    /// The rules `bits` names, or `None` when it sets a bit no rule has (a saved value from
+    /// another revision, or corrupt).
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        let known = Self::LIQUID_BIT
+            | Self::GRANULAR_BIT
+            | Self::THERMAL_BIT
+            | Self::FIRE_BIT
+            | Self::BIOLOGY_BIT;
+        if bits & !known != 0 {
+            return None;
+        }
+        Some(Self {
+            liquid: bits & Self::LIQUID_BIT != 0,
+            granular: bits & Self::GRANULAR_BIT != 0,
+            thermal: bits & Self::THERMAL_BIT != 0,
+            fire: bits & Self::FIRE_BIT != 0,
+            biology: bits & Self::BIOLOGY_BIT != 0,
+        })
+    }
 }
 
 impl Default for SimulationRules {
@@ -585,6 +605,14 @@ mod tests {
         assert_eq!(SimulationRules::ALL.bits(), 0b11111);
         assert_eq!(SimulationRules::NONE.bits(), 0);
         assert_eq!(SimulationRules::DETERMINISTIC.bits(), 0b00111);
+        for rules in [
+            SimulationRules::ALL,
+            SimulationRules::NONE,
+            SimulationRules::DETERMINISTIC,
+        ] {
+            assert_eq!(SimulationRules::from_bits(rules.bits()), Some(rules));
+        }
+        assert_eq!(SimulationRules::from_bits(0b100000), None);
         assert!(ratio(10, 1, 10) && !ratio(9, 1, 10));
     }
 }

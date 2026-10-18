@@ -284,6 +284,18 @@ impl BodyMonitor {
         }
     }
 
+    /// A body a checkpoint restored. Its counters are what it had already reported before
+    /// the checkpoint, so they become its watermark: resuming it repeats no event, and its
+    /// spawn is not reported again. `_at` is the checkpoint's tick (`None` for one that never ran).
+    pub fn restored(&mut self, body: BodyHandle, _at: Option<Tick>, counters: BodyCounters) {
+        if let Some(tracked) = self.track(body) {
+            tracked.counters = counters;
+            tracked.spawned = None;
+            tracked.spawn_pending = false;
+            tracked.last = None;
+        }
+    }
+
     /// A removal outcome with the counters the body ended with.
     pub fn removed(&mut self, body: BodyHandle, tick: Tick, counters: BodyCounters) {
         let index = body.index() as usize;

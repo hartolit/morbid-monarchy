@@ -4,8 +4,8 @@
 CPU-authoritative Bevy baseline described under [current baseline](#current-baseline), and
 [status](product/status.md) owns what is implemented and verified. Everything else on this page
 is the target. Package names are the proposed implementation map. 01 created `world-model` and
-`tools/evidence`; 02 created `world-runtime` and `gpu-world`, each with its consumers. The others
-do not exist yet and are created by the stage that first uses them. Where no consumer justifies a
+`tools/evidence`; 02 created `world-runtime` and `gpu-world`, and 05 `world-store`, each with its
+consumers. The others do not exist yet and are created by the stage that first uses them. Where no consumer justifies a
 crate, a module is used instead and recorded here and in
 [ADR 0002](decisions/0002-native-composition.md).
 
@@ -45,8 +45,8 @@ bodies (04) headlessly, and the baseline application does not use it.
 | Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update`, reading its constants and hashes from `world_model::rules` since 03. The GPU owner runs the same rules since 03, unused by the application | `gpu-world` |
 | Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid; its constants come from `world_model::body::tuning` since 04. The GPU owner runs bodies since 04 (state, substeps, bins, solver, terrain and liquid coupling), unused by the application | `gpu-world`; ECS keeps identity and a `BodyHandle` |
 | Observer, brushes, picking, statistics | `core/entities/observer.rs` and `morbid-app` `runtime/{input,dev_tools}` read and write the CPU grid directly | Intent in `world-runtime`; queries, edits and reductions in `gpu-world`; UI in `morbid-app` |
-| Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs` over `world_model::spatial` keys; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
-| Persistence | `morbid-app` `runtime/persistence.rs` and `legacy_format.rs` (the old writer's bitcode bytes) over `spatial-lib` `chunk/storage.rs` (redb) | `world-store` |
+| Residency | Baseline: `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs` over `world_model::spatial` keys; payloads kept in an active map and an LRU cache. Since 05 the target owners exist, unused by the baseline: `world_runtime::residency` (metadata only: phases, request generations, newest revisions, byte budgets) over `gpu-world` slots and snapshots | `world-runtime` policy; GPU slots in `gpu-world` |
+| Persistence | Baseline: `morbid-app` `runtime/persistence.rs` over `world_store::legacy` (since 05 the one owner of the old writer's bitcode rows and table; an unreadable row is no longer generated over). Since 05 the target: `world-store` (versioned rows, immutable revisions, atomic checkpoints, the legacy import) behind `world_runtime::store`, with `world_runtime::{checkpoint, session}`; the baseline does not use it | `world-store` |
 | Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
 | Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
 | Runtime orchestration | `world-runtime` since 02: identities, the `PhysicalWorld` port, bounded receipts, the outcome ledger, the fixed clock and a standalone `bevy_ecs` runtime; since 04 the body monitor (sample selection and lossless body events). Its consumers are the GPU suites and `resident-world` now and the native client from 06; the baseline keeps its own Bevy schedule | `world-runtime` |

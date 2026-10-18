@@ -247,6 +247,38 @@ impl SlotTable {
         }
     }
 
+    /// The source a snapshot of `slot` copies: a chunk whose cells are in the cell buffer by
+    /// the end of the next submission, activating (its upload is in a submitted tick) or
+    /// resident. A staged upload is copied only by a tick, so it cannot be snapshotted yet.
+    pub fn resident_source(&self, slot: SlotRef) -> Result<(ChunkKey, ChunkRevision), Refusal> {
+        let index = self.check(slot)?;
+        match self.slots[index].state {
+            State::Activating { key, revision, .. } | State::Resident { key, revision } => {
+                Ok((key, revision))
+            }
+            _ => Err(Refusal::InvalidPayload(PayloadError::SlotState(slot))),
+        }
+    }
+
+    /// Every chunk in the cell buffer at the end of the submission being encoded (activating
+    /// or resident), for a world snapshot. Call after [`encode`](Self::encode) for a tick.
+    pub fn snapshot_sources(&self) -> Vec<crate::snapshots::Source> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| match slot.state {
+                State::Activating { key, revision, .. } | State::Resident { key, revision } => {
+                    Some(crate::snapshots::Source {
+                        slot: index as u32,
+                        key,
+                        revision,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Takes the staged uploads and requested retirements for the tick being encoded, and
     /// writes their patches into `patches` (retirements first, so a key can move to another
     /// slot within one tick).
@@ -436,24 +468,7 @@ impl SlotTable {
     /// into the lowest slots, with generations beyond any `self` issued so no old reference
     /// names a new occupancy. Returns the table and the moves of the kept chunks.
     pub fn resized(&self, window: ResidentWindow) -> Result<(Self, Vec<Move>), Refusal> {
-        if self.has_pending_changes() {
-            return Err(Refusal::Pressure(Pressure::SlotChanges));
-        }
-        let reserved = self.reserved();
-        if reserved > 0 {
-            return Err(Refusal::InvalidPayload(
-                PayloadError::UnfilledReservations { count: reserved },
-            ));
-        }
-        let outside = self
-            .resident()
-            .filter(|(key, ..)| !window.contains(*key))
-            .count() as u32;
-        if outside > 0 {
-            return Err(Refusal::InvalidPayload(
-                PayloadError::ResidentOutsideNewWindow { count: outside },
-            ));
-        }
+        self.check_resize(window)?;
         let floor = self
             .slots
             .iter()
@@ -479,6 +494,30 @@ impl SlotTable {
             });
         }
         Ok((table, moves))
+    }
+
+    /// Whether the slots allow a resize to `window` now: no change in flight, no unfilled
+    /// reservation, no resident chunk outside it.
+    pub fn check_resize(&self, window: ResidentWindow) -> Result<(), Refusal> {
+        if self.has_pending_changes() {
+            return Err(Refusal::Pressure(Pressure::SlotChanges));
+        }
+        let reserved = self.reserved();
+        if reserved > 0 {
+            return Err(Refusal::InvalidPayload(
+                PayloadError::UnfilledReservations { count: reserved },
+            ));
+        }
+        let outside = self
+            .resident()
+            .filter(|(key, ..)| !window.contains(*key))
+            .count() as u32;
+        if outside > 0 {
+            return Err(Refusal::InvalidPayload(
+                PayloadError::ResidentOutsideNewWindow { count: outside },
+            ));
+        }
+        Ok(())
     }
 
     /// The window map and slot records `self` describes, for a freshly created buffer.

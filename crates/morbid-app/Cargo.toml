@@ -7,16 +7,12 @@ publish = false
 [dependencies]
 bevy.workspace = true
 monarch-engine.workspace = true
-bitcode.workspace = true
 bytemuck.workspace = true
-redb.workspace = true
 bevy_egui.workspace = true
 rustc-hash.workspace = true
-spatial-lib = { workspace = true, features = ["redb-storage"] }
+spatial-lib.workspace = true
 world-model.workspace = true
-
-[dev-dependencies]
-toml.workspace = true
+world-store.workspace = true
 
 [lib]
 name = "morbid_app"

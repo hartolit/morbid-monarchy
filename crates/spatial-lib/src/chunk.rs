@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 pub mod manager;
-pub mod storage;
 
 /// A rigid spatial container for dense voxel or cellular data.
 ///

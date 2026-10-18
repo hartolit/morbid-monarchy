@@ -4,8 +4,6 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, IoTaskPool, Task, block_on, futures_lite::future},
 };
 use monarch_engine::prelude::*;
-use redb::Database;
-use spatial_lib::prelude::storage::{ChunkStorage, redb_backend::RedbChunkStorage};
 use std::{
     path::Path,
     sync::{
@@ -14,6 +12,7 @@ use std::{
     },
 };
 use world_model::{generation::WorldGenerator, spatial::ChunkKey};
+use world_store::legacy::{LegacyError, LegacyStore};
 
 use crate::legacy_format;
 
@@ -25,7 +24,7 @@ const DB_FILE: &str = "save.redb";
 const SAVE_BATCH_SIZE_THRESHOLD: usize = 64;
 
 #[derive(Resource, Clone)]
-pub struct WorldDatabase(pub Arc<RedbChunkStorage>);
+pub struct WorldDatabase(pub Arc<LegacyStore>);
 
 #[derive(Resource, Default)]
 pub struct ChunkSaveQueue {
@@ -39,7 +38,7 @@ pub struct SaveTimer(pub Timer);
 pub struct WorldSeed(pub u32);
 
 #[derive(Component)]
-pub struct ChunkLoadTask(Task<ChunkLoadedEvent>);
+pub struct ChunkLoadTask(Task<Option<ChunkLoadedEvent>>);
 
 #[derive(Component)]
 pub struct ChunkSaveTask(Task<()>);
@@ -54,6 +53,8 @@ pub struct PersistenceCounters {
     pub save_batches: u64,
     pub save_tasks_completed: u64,
     pub exit_flush_chunks: u64,
+    /// Loads that ended without a chunk because the stored row could not be read.
+    pub loads_refused: u64,
     /// Outcomes recorded inside I/O and generation tasks.
     pub tasks: Arc<PersistenceTaskCounters>,
 }
@@ -77,10 +78,8 @@ pub fn initialize_database(dir: &Path) -> WorldDatabase {
         std::fs::create_dir_all(dir).expect("Failed to create world_data directory");
     }
 
-    let db_path = dir.join(DB_FILE);
-    let db = Arc::new(Database::create(db_path).expect("Failed to initialize redb database"));
-
-    let storage = RedbChunkStorage::new(db).expect("Failed to initialize chunk storage backend");
+    let storage = LegacyStore::open_or_create(&dir.join(DB_FILE))
+        .expect("Failed to initialize the chunk store");
 
     WorldDatabase(Arc::new(storage))
 }
@@ -103,26 +102,30 @@ pub fn handle_load_requests(
         counters.load_requests += 1;
 
         let task = io_pool.spawn(async move {
-            let cached_chunk = match storage_clone.read_chunk(key, legacy_format::decode) {
-                Ok(Some(Ok(data))) => Some(data),
-                Ok(Some(Err(e))) => {
+            // Only an absent row is generated. A row that cannot be read or decoded is left as
+            // it is and the chunk is not loaded: generated terrain must never replace it.
+            let stored = match storage_clone.read_chunk(key) {
+                Ok(stored) => stored,
+                Err(LegacyError::Corrupt { detail, .. }) => {
                     task_counters.decode_errors.fetch_add(1, Ordering::Relaxed);
-                    error!("Corruption decoding chunk {:?}: {}", key, e);
-                    None
+                    error!("Chunk {:?} is corrupt and stays unloaded: {}", key, detail);
+                    return None;
                 }
-                Ok(None) => None,
                 Err(e) => {
                     task_counters.read_errors.fetch_add(1, Ordering::Relaxed);
-                    error!("Storage read error for chunk {:?}: {}", key, e);
-                    None
+                    error!(
+                        "Chunk {:?} could not be read and stays unloaded: {}",
+                        key, e
+                    );
+                    return None;
                 }
             };
 
-            let data = if let Some(chunk_data) = cached_chunk {
+            let data = if let Some(chunk_data) = stored {
                 task_counters
                     .loads_from_store
                     .fetch_add(1, Ordering::Relaxed);
-                chunk_data
+                legacy_format::into_cell_chunk(chunk_data)
             } else {
                 task_counters
                     .loads_generated
@@ -134,7 +137,7 @@ pub fn handle_load_requests(
                 gen_task.await
             };
 
-            ChunkLoadedEvent { key, data }
+            Some(ChunkLoadedEvent { key, data })
         });
 
         commands.spawn(ChunkLoadTask(task));
@@ -249,9 +252,14 @@ pub fn poll_load_tasks(
     mut counters: ResMut<PersistenceCounters>,
 ) {
     for (entity, mut task) in &mut task_query {
-        if let Some(loaded_event) = block_on(future::poll_once(&mut task.0)) {
-            counters.loads_completed += 1;
-            writer.write(loaded_event);
+        if let Some(loaded) = block_on(future::poll_once(&mut task.0)) {
+            match loaded {
+                Some(loaded_event) => {
+                    counters.loads_completed += 1;
+                    writer.write(loaded_event);
+                }
+                None => counters.loads_refused += 1,
+            }
             commands.entity(entity).despawn();
         }
     }

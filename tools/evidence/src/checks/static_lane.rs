@@ -29,17 +29,6 @@ const COMPILE_COMBINATIONS: &[(&str, &[&str])] = &[
             "--locked",
         ],
     ),
-    (
-        "static.check.spatial-lib-minimal",
-        &[
-            "check",
-            "-p",
-            "spatial-lib",
-            "--all-targets",
-            "--no-default-features",
-            "--locked",
-        ],
-    ),
 ];
 
 /// A dependency checker the lane requires, at the version CI installs. A missing or different

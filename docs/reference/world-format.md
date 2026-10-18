@@ -2,7 +2,9 @@
 
 This document owns the physical value representation and snapshot/storage lifecycle. The current
 format is described separately from the target envelope. 01 captured legacy fixtures and moved the
-cell definition into `world-model`; 05 implements the new writer/import path.
+cell definition into `world-model`; 05 implemented the new format, its store and the import
+([version 1](#saved-world-format-version-1-05)), and the residency and checkpoint owners that use
+them. The baseline application still saves in the legacy format until 06.
 
 ## Existing packed cell
 
@@ -61,9 +63,11 @@ rejected at the owning input boundary.
 
 The baseline redb table is `spatial_chunks`, keyed by `[i32; 3]`. Its values are the derived
 bitcode encoding of `CellChunk { cells, metadata: { last_simulated: f64, theme: u8 } }`. Since 01
-the model types carry no codec; `morbid-app` `legacy_format` mirrors that shape and is tested to
-re-encode the [old-writer fixtures](../../crates/morbid-app/tests/fixtures/legacy-v0/README.md)
-byte for byte. There is no complete versioned world/checkpoint envelope. The application uses startup seed
+the model types carry no codec; since 05 `world_store::legacy` is the one owner of those bytes and
+the table (the baseline converts its `CellChunk` through `morbid-app` `legacy_format`), tested to
+re-encode the [old-writer fixtures](../../adapters/world-store/tests/fixtures/legacy-v0/README.md)
+byte for byte. Since 05 the baseline leaves a row it cannot read unloaded instead of generating
+over it; its other persistence failures below remain until 06 replaces it. There is no complete versioned world/checkpoint envelope. The application uses startup seed
 69 in code. Existing `last_simulated` metadata holds session-relative elapsed seconds at load time.
 It is not proof of a consistent world snapshot or a portable simulation-clock contract. Only
 chunks evicted from the LRU cache are ever written, either by the periodic save batch or by the
@@ -92,6 +96,66 @@ by this transition.
 Use typed counts and checksums/integrity metadata appropriate to detecting accidental corruption;
 no cryptographic security claim is required. Validate before large allocation. Unsupported future
 versions are refused without modifying the store.
+
+## Saved-world format, version 1 (05)
+
+One redb file holds one world. `world_store::format` owns the exact bytes; its module
+documentation lists every field's offset, and its tests check them against values placed by hand.
+Every row is an envelope of a four-byte magic, a `u16` format version (1), a reserved `u16`, the
+body, and a CRC-32C (Castagnoli) of everything before it, little-endian throughout. A reader checks
+the length against the envelope, then the checksum (a mismatch is corruption), then the magic,
+then the version (any other is unsupported, and the row is left as it is), then the exact length
+the version defines, and only then allocates or decodes. The envelope and the checksum are the
+same in every version, so an unsupported row is told apart from a damaged one.
+
+| Table | Key | Row | Bytes |
+| --- | --- | --- | ---: |
+| `world` | `"header"` | world identity, generator revision and seed, rule seed, cell format revision and layout fingerprint, physics revision and fingerprint, chunk edge 64, axis convention 1, origin (created, or legacy import with the supplied seed and scale and the rows imported and refused) | 92 |
+| `world` | `"latest"` | the latest published checkpoint | 20 |
+| `world` | `"session"` | whether the last writing session ended in order | 20 |
+| `chunks` | `(x, y, z, revision)` | one immutable chunk revision: its key and revision again, theme, 4,096 cells as the packed `u64` | 32,812 |
+| `heads` | `(x, y, z)` | the key's published revision and the checkpoint that published it | 20 |
+| `bodies` | checkpoint | the body slots (generation and state) and every live body's resume state (`world_model::resume`) | `28 + 8 S + 136 B` |
+| `checkpoints` | checkpoint | the manifest: completed tick, rules, ambient temperature, elevation scale, window, saved keys, live bodies, the session epoch, keys moved, the body set's checksum | 92 |
+
+Nothing driver-specific is saved: no GPU record, padding, slot index, handle beyond a body's
+semantic slot and generation, or ECS identity. Floats are stored as their IEEE-754 bits and checked
+against the model's ranges when read; out of range is corruption, never a clamp. Revision 0 means
+"generated, never saved" and is never written. A row repeats its key, so a row under the wrong key
+is corrupt.
+
+*Compatibility policy.* A header whose cell format revision or layout fingerprint
+(`world_model::identity`), physics revision or fingerprint, or generator revision differs from this
+build's is refused as unsupported before anything else is read, and the file is not modified. No
+conversion exists yet: a different layout reads other fields out of the same bits, and other rules
+or body tuning make it a different physical world. The fingerprints are pinned by tests, so
+changing a listed rule or body constant fails until its revision is raised here and in
+`world_model::identity`. A row of another format version is refused the same way.
+
+*Publication.* Chunk revisions and a checkpoint's body set are written ahead in their own
+transactions (`Durability::Immediate`, redb's default: durable when the commit returns). One
+transaction then checks that the checkpoint follows the latest, that its body set exists, that
+every revision it names exists and is newer than its key's head (an older save finishing later is
+refused: `Conflict::HeadNotNewer`), moves those heads, and writes the manifest and the latest
+pointer. A crash leaves the previous complete checkpoint or the new one. A retry of an operation
+whose outcome was unknown (a failed sync may still have reached the file) succeeds when it is the
+same operation and is refused otherwise. A second transaction removes what the publication
+superseded; the session marker makes the next writing session remove whatever an interrupted one
+left unpublished before it writes anything (`WorldStore::begin_session`).
+
+*Failures.* Reads return found, absent (only then may terrain be generated), corrupt, unsupported
+or I/O failure. A redb handle refuses every transaction after an I/O error, so the store reopens
+the file (redb repairs it) before the next operation; a failed write changes nothing and can be
+retried. `world_store::faults` injects I/O errors under redb, failures and holds at defined points,
+and process interruption for the tests.
+
+*Import.* `world_store::legacy::import` opens the legacy file read-only (one the old application
+left unclean is copied, and the copy repaired and read), decodes and checks every row before
+writing, refuses a corrupt row (the import fails, nothing is published) and a row with `z ≠ 0`
+unless asked to leave such rows out, writes each row as revision 1 of a new store, reads every row
+back, and only then publishes the first checkpoint. The supplied seed and elevation scale are
+recorded as the import's interpretation in the header. An import that stops earlier leaves an
+incomplete store that opening refuses. The original is never written.
 
 ## Residency state machine
 

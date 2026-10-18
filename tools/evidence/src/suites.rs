@@ -12,6 +12,7 @@ pub mod cells;
 pub mod driver;
 pub mod probe;
 pub mod scenarios;
+pub mod streaming;
 pub mod transfers;
 
 use std::{
@@ -104,6 +105,7 @@ pub fn cases(suite: GpuSuite) -> Option<&'static [Case]> {
         GpuSuite::Transfers => Some(transfers::CASES),
         GpuSuite::Cells => Some(cells::CASES),
         GpuSuite::Bodies => Some(bodies::CASES),
+        GpuSuite::Streaming => Some(streaming::CASES),
         _ => None,
     }
 }

@@ -15,6 +15,8 @@ legacy-baseline = ["dep:bevy", "dep:monarch-engine", "dep:morbid-app", "dep:spat
 [dependencies]
 futures-lite.workspace = true
 gpu-world.workspace = true
+# Damages stored rows in place for the streaming suite's refusal cases.
+redb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,6 +24,7 @@ toml.workspace = true
 wgpu.workspace = true
 world-model.workspace = true
 world-runtime.workspace = true
+world-store.workspace = true
 
 bevy = { workspace = true, optional = true }
 monarch-engine = { workspace = true, optional = true }

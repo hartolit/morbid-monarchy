@@ -542,14 +542,22 @@ completed-tick report carries the tick's material accounting (`CellReport`: the 
 classified sinks, the tool counters, the tiles and cells visited, and the stale-read and mismatch
 counts that must be zero) and, with timestamps, the device time of each of its three passes.
 
+*Implemented (05).* The port gained the snapshot operations (`snapshot_chunk`, `snapshot_world`,
+`take_snapshot`, `take_body_snapshot`), `submit_transfers`, `restore_bodies` and
+`preflight_resize` ([snapshots](#snapshots-and-completed-ticks)), the outcomes `Snapshot` and
+`BodySnapshot`, the obligations `Snapshot` and `WorldSnapshot`, and `Pressure::SnapshotImage`.
+The storage port is `world_runtime::store::WorldStore` ([world format](world-format.md#saved-world-format-version-1-05));
+`world_runtime::{residency, checkpoint, session}` are its consumers, and
+`gpu_world::world::GpuWorldConfig::resume` opens the live world at a saved checkpoint.
+
 `world_runtime::runtime::Runtime` composes the runtime as a standalone `bevy_ecs` world whose
 schedule runs once per frame: `advance_clock -> submit_due_ticks -> poll_world -> consume_outcomes`.
 Issuers call `Runtime::submit(CommandId, Command)`, or `submit_at` with the earliest tick a
 command may apply in; residency requests go through the runtime too, which reserves room for their
 outcomes first. `Runtime::set_clock` changes the tick rate and catch-up cap within their ranges.
 The ledger counts every tick whose material accounting does not balance
-(`LedgerSummary::inconsistent_ticks`), so the error is visible in ordinary operation. The storage port (`ChunkStore`) is created by 05 with
-its first consumer.
+(`LedgerSummary::inconsistent_ticks`), so the error is visible in ordinary operation. Since 05 the storage port is
+`world_runtime::store::WorldStore`, with the residency and checkpoint owners as its consumers.
 
 ## GPU resource lifecycle
 
@@ -560,8 +568,9 @@ without requiring CPU completion first.
 
 *Implemented (02).* `gpu_world::context::GpuContext` opens only the adapter named by its stable
 identifier (a software adapter needs explicit consent) and requests WebGPU's default limits,
-raising only the largest buffer and storage binding to what the radius-32 plan needs (138,444,800
-bytes), capped by the adapter; `TIMESTAMP_QUERY` is requested only when timestamps are wanted and
+raising only the largest buffer and storage binding to what the radius-32 plan needs (a
+138,444,800-byte binding; since 05 a 139,034,624-byte buffer, the world snapshot image of 4,096
+bodies' records after the cells), capped by the adapter; `TIMESTAMP_QUERY` is requested only when timestamps are wanted and
 supported. Every session buffer is created through the context inside error scopes, so a refused
 allocation is a typed error and requested bytes and their peak are counted. Submissions go through
 its one timeline: at most `max_in_flight` (3) uncompleted submissions, each tracked by serial;
@@ -667,6 +676,44 @@ A snapshot identifies a completed logical boundary. Reserve independent snapshot
 capture after the requested physical work and before source reuse, then stream out bounded pieces.
 The runtime owns when enough payloads are durable to publish a checkpoint; the GPU owner only
 reports capture/readback completion. Details are in the world-format contract.
+
+*Implemented (05).* Every slot has a change word (`plan::ActivityLayout::changes`, addressed
+through `TickParams::changes_base`). Every kernel that writes a cell value sets its slot's word
+(`mark_slot_changed`): the brush edit, the material commit (through `react`, which knows the
+tile's changed cells) and the body passes' `commit_cell` (deformation and displacement). An
+activation clears the word with its copies at the start of the tick, a snapshot copies it and
+clears it at the end of the submission that takes it, and a resize carries it with the kept
+chunk. So "unchanged" means unchanged since the slot was activated or last snapshotted, and a
+retirement does not clear it: the eviction snapshot that is copied after the retirement still
+reads it.
+
+`PhysicalWorld::snapshot_chunk` (an outgoing chunk) copies the slot into an entry of a fixed chunk
+image (`TransferConfig::snapshot_entries`, 32) and its change word onto a flag sheet at the end of
+the next submission. `snapshot_world` copies the whole cell array, every change word and every
+body slot's state and configuration into a world image it allocates for itself, within the plan's
+reserved `world_image_bytes` (`8N + 144 B`), and records the table's slots and the tick's physical
+configuration. At most one world snapshot is in flight. Each submission that copies snapshots
+reserves one capture staging buffer as its sheet (the world's words, then one per chunk snapshot,
+at most 17 KiB). When the sheet maps, an unchanged chunk is reported (`Outcome::Snapshot {
+changed: false }`) and freed, with no payload; a changed one streams through capture staging in a
+later submission and is reported ready; a world snapshot's bodies stream in pieces of at most 32
+KiB and are decoded into `world_model::resume::BodySet` (`Outcome::BodySnapshot`, with the number
+of chunks it holds and its configuration). A spawn of the copied tick whose target missed is
+recorded as the release its outcome will make. The world image is freed when its last chunk and
+its bodies are taken. A snapshot is an obligation: lost or faulted, it is abandoned; stopped, a
+ready one stays takeable and one that still needed a submission is abandoned.
+
+Copies ride at the end of whichever submission comes next: a tick (the snapshot holds the end of
+that tick) or `submit_transfers` (no tick: it holds the end of the last submitted tick, or the
+opened checkpoint's before the first). `restore_bodies`, before a session's first submission,
+writes a checkpoint's body slots into the table and every live body's records through the chunk
+upload staging, copied first in that submission. A resize waits while a snapshot is requested
+(its slot indices would move) and proceeds while one drains (the images are independent); the
+budget is held against the old allocations, the new window and the larger of the two windows'
+world images together (`ResourcePlan::overlap_with`): a world snapshot may still drain the old
+window, or be requested for the new one before the old buffers are released, and the
+`snapshot-resize-overlap` case measures that peak at exactly this bound. `preflight_resize` checks a resize against the limits and
+the budget without allocating, so the residency owner learns of a refusal before it evicts.
 
 ## Minimum contract tests
 

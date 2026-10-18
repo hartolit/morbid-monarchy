@@ -4,13 +4,8 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[features]
-default = []
-redb-storage = ["dep:redb"]
-
 [dependencies]
 glam = { workspace = true }
 lru = { workspace = true }
 rustc-hash = { workspace = true }
 world-model = { workspace = true }
-redb = { workspace = true, optional = true }

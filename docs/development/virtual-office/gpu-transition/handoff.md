@@ -4,14 +4,24 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 04 boundary
+## 05 boundary (in progress)
+
+**State:** 05 assigned by the user on 2026-10-18 and in progress on `experimental`. The first
+commit holds checkpoints A–B: the GPU change words and snapshot images, `world-store` (format
+version 1, the redb store, fault injection, the legacy reader and import, the `world-store`
+command), and `world-runtime`'s storage port, workers, residency, checkpoint and session owners,
+with their CPU tests and the `streaming` suite's first 14 GPU cases. Checks for it are in the
+commit message.
+
+**Next action:** checkpoint C (orderly-close and loss/recovery GPU cases, process interruption
+of a live session, the headless session command), then D (the measurement cases, `resident-world`
+steps 4–6, and the maintained docs, status and this record).
+
+## 04 boundary (closed)
 
 **State:** 04 complete (2026-10-18), assigned by the user on 2026-10-17. Checkpoints A–D are
 committed on `experimental` and every lane passed on the nominated hardware; the checks row
-names the commit. 05 has not started and needs its own assignment.
-
-**Next action:** assign [05-streaming-checkpoints-and-recovery.md](05-streaming-checkpoints-and-recovery.md).
-Nothing in 04 is left to resume.
+names the commit.
 
 ## 04 record
 

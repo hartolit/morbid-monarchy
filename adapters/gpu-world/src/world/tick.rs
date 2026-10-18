@@ -15,8 +15,13 @@
 //!           -> claims_clear -> displace_prepare -> displace_apply -> body_end;
 //!           then body_observe
 //! copies:   results, events, diagnostics, totals records, the body record, samples,
-//!           timestamps -> tick readback; requested captures -> capture staging
+//!           timestamps -> tick readback; requested captures -> capture staging; requested
+//!           snapshots -> snapshot images and their change words -> a flag sheet, then the
+//!           words cleared; changed snapshots -> capture staging (`world/snapshot.rs`)
 //! ```
+//!
+//! An activation clears its slot's change word with the copies at the start; restored bodies
+//! (only in a session's first submission) are copied in there too.
 //!
 //! Every refusal happens before the tick reserves anything it keeps, and before any command
 //! takes or frees a body slot. Dispatches run in order:
@@ -205,6 +210,7 @@ impl GpuWorld {
             candidates_base: activity_layout.candidates,
             process_base: activity_layout.process,
             records_base: activity_layout.records,
+            changes_base: activity_layout.changes,
             ..TickParams::default()
         };
         let header = EventHeader {
@@ -393,7 +399,13 @@ impl GpuWorld {
             if patch.window_entry != codes::SLOT_NONE {
                 let (offset, size) = activity_layout.chunk_records(patch.window_index);
                 encoder.clear_buffer(activity_buffer, offset, Some(size));
-                cleared += size;
+                // The uploaded cells are the slot's known revision: nothing changed yet.
+                encoder.clear_buffer(
+                    activity_buffer,
+                    activity_layout.change_word(patch.slot),
+                    Some(4),
+                );
+                cleared += size + 4;
             }
             encoder.copy_buffer_to_buffer(
                 upload_buffer,
@@ -414,6 +426,8 @@ impl GpuWorld {
                 );
             }
         }
+        let mut restored = Vec::new();
+        self.encode_restore(&mut encoder, &mut restored);
         let timestamp_writes = |begin: u32| {
             self.fixed
                 .timestamps
@@ -630,6 +644,8 @@ impl GpuWorld {
                 captured += 1;
             }
         }
+        let mut snapshot_staging = Vec::new();
+        self.encode_snapshots(&mut encoder, Some(tick), &mut snapshot_staging);
 
         let submitted = self.context.submit([encoder.finish()]);
         debug_assert_eq!(submitted, serial);
@@ -644,6 +660,13 @@ impl GpuWorld {
                 self.capture_staging.submitted(capture.staging, serial);
             }
         }
+        for staging in restored {
+            self.chunk_uploads.submitted(staging, serial);
+        }
+        for staging in snapshot_staging {
+            self.capture_staging.submitted(staging, serial);
+        }
+        self.submitted_any = true;
 
         let request_bytes = patch_count * 4;
         let upload_bytes = TickParams::BYTES

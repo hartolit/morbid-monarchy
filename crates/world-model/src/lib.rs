@@ -10,7 +10,9 @@
 //! - [`body`]: sphere presets, control strengths and the supported body envelope;
 //! - [`command`] and [`observation`]: validated intent and observed results that cross between
 //!   the CPU and the physical simulation;
-//! - [`generation`]: deterministic terrain generation from a seed and an absolute key.
+//! - [`generation`]: deterministic terrain generation from a seed and an absolute key;
+//! - [`identity`]: the cell-format, physics and generator revisions a saved world records;
+//! - [`resume`]: the body state a checkpoint keeps to resume bodies where they were.
 //!
 //! Nothing here depends on Bevy, wgpu, a database or a thread pool. The CPU baseline, the GPU
 //! simulation, storage and the evidence runner all read these definitions; none of them keeps
@@ -21,8 +23,10 @@ pub mod cell;
 pub mod command;
 pub mod config;
 pub mod generation;
+pub mod identity;
 pub mod material;
 pub mod observation;
+pub mod resume;
 pub mod rules;
 pub mod spatial;
 pub mod units;

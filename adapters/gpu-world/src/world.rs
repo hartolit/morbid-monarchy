@@ -30,6 +30,7 @@ use world_model::{
     cell::WorldCell,
     command::{AmbientTemperature, CommandKind, ElevationScale},
     config::DEFAULT_AMBIENT_TEMPERATURE_C,
+    resume::BodySet,
     rules::SimulationRules,
     spatial::{CHUNK_CELL_COUNT, ChunkKey},
 };
@@ -38,8 +39,9 @@ use world_runtime::{
     port::{
         CapacityLimit, CaptureTicket, CapturedChunk, DrainReport, LimitedResource, Outcome,
         PayloadError, PhysicalWorld, PollReport, PortCapabilities, PortHealth, Pressure, Refusal,
-        ResidentWindow, ResizeReport, ResizeRequest, SlotRef, SubmissionTicket, SupportedCommands,
-        TickBatch, TransferCounters, UploadTicket, check_chunk_payload,
+        ResidentWindow, ResizeReport, ResizeRequest, SlotRef, SnapshotTicket, SubmissionTicket,
+        SupportedCommands, TickBatch, TransferCounters, UploadTicket, WorldSnapshotTicket,
+        check_chunk_payload,
     },
 };
 
@@ -57,6 +59,7 @@ use crate::{
     },
     resources::{BindGroups, FixedBuffers, PipelineError, Pipelines, Retired, WindowBuffers},
     slots::{Activated, Patch, SlotTable, StagedUpload},
+    snapshots::Snapshots,
     staging::{Completion, Direction, StagingPool, StagingRef},
 };
 
@@ -179,6 +182,27 @@ impl GpuWorldConfig {
             elevation_scale: ElevationScale::DEFAULT,
             first_tick: Tick::ZERO,
         }
+    }
+}
+
+impl GpuWorldConfig {
+    /// The configuration that resumes a saved world's latest checkpoint: its window, the tick
+    /// after the one it holds, its physical configuration and the world's rule seed, under
+    /// `epoch` (a recovery uses a later epoch than the session it replaces). `None` when the
+    /// checkpoint holds the last representable tick.
+    pub fn resume(
+        plan: &world_runtime::session::SessionPlan,
+        adapter: impl Into<String>,
+        epoch: SessionEpoch,
+    ) -> Option<Self> {
+        let mut config = Self::new(plan.header.world, adapter, plan.manifest.window);
+        config.epoch = epoch;
+        config.first_tick = plan.first_tick()?;
+        config.rules = plan.manifest.config.rules;
+        config.ambient_temperature = plan.manifest.config.ambient_temperature;
+        config.elevation_scale = plan.manifest.config.elevation_scale;
+        config.rule_seed = plan.header.rule_seed;
+        Some(config)
     }
 }
 
@@ -322,6 +346,13 @@ pub struct GpuWorld {
     bodies: BodyTable,
     /// The next tick wakes every resident cell (after a resize).
     wake_all_pending: bool,
+    snapshots: Snapshots,
+    /// Body restoration copies the first submission carries: upload staging, offset in the
+    /// bodies buffer and length.
+    body_restore: Vec<(StagingRef, u64, u64)>,
+    /// Whether the session has submitted anything (bodies are restored only before).
+    submitted_any: bool,
+    first_tick: Tick,
 }
 
 fn pressure(kind: Pressure) -> Refusal {
@@ -413,6 +444,10 @@ impl GpuWorld {
             Direction::Readback,
         )?;
         let bind_groups = pipelines.bind_groups(&context, &fixed, &window);
+        let image_plan = plan.buffer(BufferRole::SnapshotImage);
+        let image = context
+            .create_buffer("chunk snapshots", image_plan.size, image_plan.usage, false)
+            .map_err(OpenError::Allocation)?;
 
         let commands = config.transfer.commands_per_tick as usize;
         let ticks = (0..tick_readbacks.capacity())
@@ -490,9 +525,39 @@ impl GpuWorld {
             elevation_scale: config.elevation_scale,
             bodies: BodyTable::new(config.transfer.bodies),
             wake_all_pending: false,
+            snapshots: Snapshots::new(image, config.transfer.snapshot_entries),
+            body_restore: Vec::new(),
+            submitted_any: false,
+            first_tick: config.first_tick,
         };
         world.refresh_counters();
         Ok(world)
+    }
+
+    /// Plans `request` and checks the old and new allocations together against the budget.
+    /// The slots' readiness is the resize's own check: a preflight runs before the caller has
+    /// retired the chunks the new window drops.
+    fn plan_resize(&self, request: &ResizeRequest) -> Result<ResourcePlan, Refusal> {
+        let limits = PlanLimits::from_wgpu(self.context.limits());
+        let next = plan::plan(
+            request.window,
+            self.transfer,
+            self.plan.timestamps,
+            &limits,
+            &self.budgets,
+        )
+        .map_err(PlanError::refusal)?;
+        let overlap = self.plan.overlap_with(&next);
+        if let Some(budget) = self.budgets.device_bytes
+            && overlap > budget
+        {
+            return Err(Refusal::Unsupported(CapacityLimit {
+                resource: LimitedResource::DeviceBytes,
+                requested: overlap,
+                available: budget,
+            }));
+        }
+        Ok(next)
     }
 
     pub fn fault_controller(&self) -> Option<FaultController> {
@@ -678,6 +743,7 @@ impl GpuWorld {
 }
 
 mod poll;
+mod snapshot;
 mod tick;
 
 impl PhysicalWorld for GpuWorld {
@@ -696,9 +762,13 @@ impl PhysicalWorld for GpuWorld {
             max_in_flight: self.transfer.max_in_flight,
             outcomes_per_poll: ticks * per_tick
                 + self.transfer.chunk_upload_slots * 2
-                + self.transfer.capture_slots,
+                + self.transfer.capture_slots
+                + self.transfer.snapshot_entries
+                + self.slots.capacity()
+                + 1,
             chunk_upload_slots: self.transfer.chunk_upload_slots,
             capture_slots: self.transfer.capture_slots,
+            snapshot_entries: self.transfer.snapshot_entries,
             window: self.slots.window(),
             supported: [
                 CommandKind::EditMaterial,
@@ -839,32 +909,53 @@ impl PhysicalWorld for GpuWorld {
         }
     }
 
+    fn snapshot_chunk(&mut self, slot: SlotRef) -> Result<SnapshotTicket, Refusal> {
+        self.request_chunk_snapshot(slot)
+    }
+
+    fn snapshot_world(&mut self, session: SessionId) -> Result<WorldSnapshotTicket, Refusal> {
+        self.request_world_snapshot(session)
+    }
+
+    fn take_snapshot(
+        &mut self,
+        ticket: SnapshotTicket,
+        into: &mut [WorldCell],
+    ) -> Result<(), Refusal> {
+        self.take_snapshot_cells(ticket, into)
+    }
+
+    fn take_body_snapshot(
+        &mut self,
+        ticket: WorldSnapshotTicket,
+        into: &mut BodySet,
+    ) -> Result<(), Refusal> {
+        self.take_world_bodies(ticket, into)
+    }
+
+    fn submit_transfers(&mut self, session: SessionId) -> Result<bool, Refusal> {
+        self.submit_transfer(session)
+    }
+
+    fn restore_bodies(&mut self, session: SessionId, bodies: &BodySet) -> Result<(), Refusal> {
+        self.restore(session, bodies)
+    }
+
+    fn preflight_resize(&self, request: &ResizeRequest) -> Result<(), Refusal> {
+        self.admission()?;
+        self.check_session(request.session)?;
+        self.plan_resize(request).map(|_| ())
+    }
+
     fn resize(&mut self, request: &ResizeRequest) -> Result<ResizeReport, Refusal> {
         self.admission()?;
         self.check_session(request.session)?;
-        let limits = PlanLimits::from_wgpu(self.context.limits());
-        let next = plan::plan(
-            request.window,
-            self.transfer,
-            self.plan.timestamps,
-            &limits,
-            &self.budgets,
-        )
-        .map_err(PlanError::refusal)?;
-        let overlap = self.plan.overlap_with(&next);
-        if let Some(budget) = self.budgets.device_bytes
-            && overlap > budget
-        {
-            return Err(Refusal::Unsupported(CapacityLimit {
-                resource: LimitedResource::DeviceBytes,
-                requested: overlap,
-                available: budget,
-            }));
-        }
+        let next = self.plan_resize(request)?;
         if self
             .captures
             .iter()
             .any(|capture| capture.state == CaptureState::Requested)
+            || self.snapshots.has_requested()
         {
             return Err(self.refuse(Pressure::SlotChanges));
         }
@@ -895,6 +986,15 @@ impl PhysicalWorld for GpuWorld {
                 u64::from(kept.to) * CHUNK_BYTES,
                 CHUNK_BYTES,
             );
+            // A kept chunk keeps its change word: a snapshot after the resize still sees a
+            // change from before it.
+            encoder.copy_buffer_to_buffer(
+                &self.window.activity,
+                self.plan.activity.change_word(kept.from),
+                &window.activity,
+                next.activity.change_word(kept.to),
+                4,
+            );
         }
         let serial = self.context.submit([encoder.finish()]);
         self.note_submission();
@@ -912,7 +1012,8 @@ impl PhysicalWorld for GpuWorld {
         self.plan = next;
         self.slots = slots;
         let migrated_bytes = moves.len() as u64 * CHUNK_BYTES;
-        self.counters.device_copy_bytes += migrated_bytes;
+        // The kept chunks' change words move with them.
+        self.counters.device_copy_bytes += migrated_bytes + moves.len() as u64 * 4;
         self.counters.upload.metadata += metadata_bytes;
         self.refresh_counters();
         Ok(ResizeReport {

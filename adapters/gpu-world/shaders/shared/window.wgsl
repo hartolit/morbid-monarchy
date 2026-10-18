@@ -67,6 +67,17 @@ fn tile_word(tile: u32, field: u32) -> u32 {
     return tick.records_base + tile * TILE_RECORD_WORDS + field;
 }
 
+// Records that a cell of `slot`'s chunk took a new value: every writer of cell values calls
+// this, so a snapshot can tell a changed chunk from one that still holds what was uploaded or
+// last snapshotted. The word is only ever set here; the timeline clears it at an activation
+// and right after a snapshot copies it. The load avoids contending on a word already set.
+fn mark_slot_changed(slot: u32) {
+    let word = tick.changes_base + slot;
+    if (atomicLoad(&activity[word]) == 0u) {
+        atomicStore(&activity[word], 1u);
+    }
+}
+
 // Bit of in-tile cell `within` (x, y in 0..8) in a two-word tile bitmap: rows of eight bits.
 fn bitmap_word(within: vec2<u32>) -> u32 {
     return within.y / 4u;

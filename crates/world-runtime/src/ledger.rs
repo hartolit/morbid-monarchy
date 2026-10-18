@@ -15,18 +15,20 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use world_model::spatial::ChunkKey;
+
 use crate::{
     bodies::BodyMonitor,
-    ids::Tick,
+    ids::{ChunkRevision, Tick},
     port::{
         AbandonReason, CaptureTicket, CommandOutcome, CommandResult, CosmeticEvent, Obligation,
-        Outcome, TickReport, UploadTicket,
+        Outcome, SnapshotTicket, TickReport, UploadTicket, WorldSnapshotTicket,
     },
     receipts::Receipts,
 };
 
 /// A chunk residency result for the residency owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResidencyOutcome {
     UploadActivated {
         ticket: UploadTicket,
@@ -42,6 +44,30 @@ pub enum ResidencyOutcome {
     },
     CaptureAbandoned {
         ticket: CaptureTicket,
+        reason: AbandonReason,
+    },
+    /// A snapshot's chunk: unchanged since its revision, or changed and ready to take.
+    Snapshot {
+        ticket: SnapshotTicket,
+        key: ChunkKey,
+        revision: ChunkRevision,
+        tick: Option<Tick>,
+        changed: bool,
+    },
+    SnapshotAbandoned {
+        ticket: SnapshotTicket,
+        reason: AbandonReason,
+    },
+    BodySnapshot {
+        ticket: WorldSnapshotTicket,
+        tick: Option<Tick>,
+        bodies: u32,
+        /// Chunk snapshots the world snapshot holds.
+        chunks: u32,
+        config: crate::store::PhysicalConfig,
+    },
+    BodySnapshotAbandoned {
+        ticket: WorldSnapshotTicket,
         reason: AbandonReason,
     },
 }
@@ -109,6 +135,9 @@ pub struct OutcomeLedger {
     residency: VecDeque<ResidencyOutcome>,
     residency_capacity: usize,
     residency_reserved: usize,
+    /// The world snapshot in flight and the outcomes reserved for it: one per window chunk and
+    /// one for its bodies, until it says how many chunks it holds.
+    world_reserved: Option<(WorldSnapshotTicket, usize)>,
     summary: LedgerSummary,
     last_tick: Option<TickReport>,
     // The latest tick counted inconsistent: its body report follows its tick report, and the
@@ -129,6 +158,7 @@ impl OutcomeLedger {
             residency: VecDeque::with_capacity(residency_capacity),
             residency_capacity,
             residency_reserved: 0,
+            world_reserved: None,
             summary: LedgerSummary::default(),
             last_tick: None,
             counted_inconsistent: None,
@@ -165,6 +195,43 @@ impl OutcomeLedger {
     /// Returns a reservation whose request the live world refused.
     pub fn release_residency(&mut self) {
         self.residency_reserved = self.residency_reserved.saturating_sub(1);
+    }
+
+    /// Reserves room for a world snapshot's outcomes: at most `chunks` chunk outcomes and one
+    /// for its bodies. `false` when they do not fit or one is already in flight.
+    pub fn reserve_world_snapshot(&mut self, chunks: usize) -> bool {
+        let wanted = chunks + 1;
+        if self.world_reserved.is_some()
+            || self.residency_reserved + wanted > self.residency_capacity
+        {
+            return false;
+        }
+        self.residency_reserved += wanted;
+        true
+    }
+
+    /// Records the ticket of an accepted world snapshot, or returns the reservation of a
+    /// refused one.
+    pub fn world_snapshot_requested(&mut self, ticket: Option<WorldSnapshotTicket>, chunks: usize) {
+        match ticket {
+            Some(ticket) => self.world_reserved = Some((ticket, chunks + 1)),
+            None => {
+                self.residency_reserved = self.residency_reserved.saturating_sub(chunks + 1);
+            }
+        }
+    }
+
+    /// The world snapshot says how many chunks it holds: return the rest of its reservation.
+    fn world_snapshot_counted(&mut self, ticket: WorldSnapshotTicket, chunks: u32) {
+        if let Some((reserved_for, reserved)) = self.world_reserved
+            && reserved_for == ticket
+        {
+            let used = chunks as usize + 1;
+            self.residency_reserved = self
+                .residency_reserved
+                .saturating_sub(reserved.saturating_sub(used));
+            self.world_reserved = None;
+        }
     }
 
     /// Collects residency outcomes, releasing their reservations.
@@ -243,6 +310,35 @@ impl OutcomeLedger {
             Outcome::CaptureReady { ticket, tick } => {
                 self.push_residency(ResidencyOutcome::CaptureReady { ticket, tick });
             }
+            Outcome::Snapshot {
+                ticket,
+                key,
+                revision,
+                tick,
+                changed,
+            } => self.push_residency(ResidencyOutcome::Snapshot {
+                ticket,
+                key,
+                revision,
+                tick,
+                changed,
+            }),
+            Outcome::BodySnapshot {
+                ticket,
+                tick,
+                bodies,
+                chunks,
+                config,
+            } => {
+                self.world_snapshot_counted(ticket, chunks);
+                self.push_residency(ResidencyOutcome::BodySnapshot {
+                    ticket,
+                    tick,
+                    bodies,
+                    chunks,
+                    config,
+                });
+            }
             Outcome::Body(sample) => self.bodies.sample(sample, observed_at),
             Outcome::BodyGone { body, .. } => self.bodies.gone(body),
             Outcome::Cosmetic(event) => {
@@ -271,6 +367,13 @@ impl OutcomeLedger {
                 }
                 Obligation::Capture(ticket) => {
                     self.push_residency(ResidencyOutcome::CaptureAbandoned { ticket, reason });
+                }
+                Obligation::Snapshot(ticket) => {
+                    self.push_residency(ResidencyOutcome::SnapshotAbandoned { ticket, reason });
+                }
+                Obligation::WorldSnapshot { ticket, chunks } => {
+                    self.world_snapshot_counted(ticket, chunks);
+                    self.push_residency(ResidencyOutcome::BodySnapshotAbandoned { ticket, reason });
                 }
             },
         }

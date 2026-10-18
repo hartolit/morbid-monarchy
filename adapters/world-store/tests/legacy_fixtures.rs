@@ -1,4 +1,4 @@
-//! The legacy codec and store against rows the old writer produced (`fixtures/legacy-v0`).
+//! The legacy codec and table against rows the old writer produced (`fixtures/legacy-v0`).
 //!
 //! Expected values come from the fixture manifest, which the capture program computed from the
 //! in-memory chunks before encoding, so they do not depend on the decoder under test.
@@ -6,15 +6,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-use morbid_app::legacy_format;
-use redb::{Database, ReadableDatabase, ReadableTableMetadata, TableDefinition};
-use spatial_lib::chunk::storage::{ChunkStorage, redb_backend::RedbChunkStorage};
+use redb::{Database, ReadableDatabase, ReadableTableMetadata};
 use world_model::{generation::WorldGenerator, spatial::ChunkKey};
+use world_store::legacy::{self as legacy_format, LegacyStore, TABLE};
 
-const TABLE: TableDefinition<[i32; 3], &[u8]> = TableDefinition::new("spatial_chunks");
+/// The seed the capture program generated with: the baseline's `morbid_app::STARTUP_SEED`.
+const CAPTURE_SEED: u32 = 69;
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy-v0")
@@ -76,10 +75,10 @@ fn every_row_decodes_to_the_values_the_old_writer_recorded() {
         };
         assert_eq!(chunk.cells.len() as u64, integer("cells"), "{:?}", row.key);
         assert_eq!(
-            chunk.metadata.last_simulated,
+            chunk.last_simulated,
             m["last_simulated"].as_float().expect("float")
         );
-        assert_eq!(u64::from(chunk.metadata.theme.0), integer("theme"));
+        assert_eq!(u64::from(chunk.theme.0), integer("theme"));
         assert_eq!(sum(|c| c.elevation() as u64), integer("elevation_sum"));
         assert_eq!(sum(|c| c.fluid_vol() as u64), integer("fluid_volume_sum"));
         assert_eq!(
@@ -113,34 +112,34 @@ fn truncated_and_foreign_bytes_are_errors_not_chunks() {
 
 #[test]
 fn the_store_holds_exactly_the_recorded_rows() {
-    // Work on a copy: opening the store takes a write transaction.
+    // Work on a copy: opening the store for writing takes a write transaction.
     let dir = std::env::temp_dir().join(format!("legacy-fixture-store-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("scratch");
     let copy = dir.join("legacy-chunks.redb");
     fs::copy(fixtures().join("legacy-chunks.redb"), &copy).expect("copy store");
 
-    let database = Arc::new(Database::open(&copy).expect("opens"));
-    let count = database
+    let count = Database::open(&copy)
+        .expect("opens")
         .begin_read()
         .expect("read")
         .open_table(TABLE)
         .expect("table")
         .len()
         .expect("length");
-    let storage = RedbChunkStorage::new(database).expect("storage");
+    let storage = LegacyStore::open_or_create(&copy).expect("storage");
     let rows = rows();
     assert_eq!(count, rows.len() as u64);
     for row in rows {
         let stored = storage
-            .read_chunk(row.key, |bytes| bytes.to_vec())
+            .read_chunk(row.key)
             .expect("readable")
             .expect("present");
-        assert_eq!(stored, row.bytes, "{:?}", row.key);
+        assert_eq!(legacy_format::encode(&stored), row.bytes, "{:?}", row.key);
     }
     assert!(
         storage
-            .read_chunk(ChunkKey::new(9, 9, 0), |_| ())
+            .read_chunk(ChunkKey::new(9, 9, 0))
             .expect("readable")
             .is_none()
     );
@@ -157,7 +156,7 @@ fn generated_rows_match_the_extracted_generator() {
         ChunkKey::new(-1, -2, 0),
         ChunkKey::new(0, 0, 1),
     ];
-    let generator = WorldGenerator::new(morbid_app::STARTUP_SEED);
+    let generator = WorldGenerator::new(CAPTURE_SEED);
     let rows = rows();
     for key in generated {
         let row = rows.iter().find(|row| row.key == key).expect("fixture row");

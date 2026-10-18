@@ -287,6 +287,7 @@ fn lane_prefix(li: u32) -> vec2<u32> {
 fn commit_cell(cell: vec2<i32>, before: vec2<u32>, after: vec2<u32>) {
     let slot = resident_slot(cell);
     cells[cell_index(slot, cell)] = after;
+    mark_slot_changed(slot);
     let tile = tile_id(tile_of_cell(cell));
     let within = vec2<u32>(cell) % TILE_EDGE;
     atomicOr(&activity[tile_word(tile, TILE_EDITED + bitmap_word(within))], bitmap_bit(within));

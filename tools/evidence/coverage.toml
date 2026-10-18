@@ -460,51 +460,51 @@ expectation = "Generation depends only on seed and key: repeated calls agree and
 destination = "world-model; streaming generation (05)"
 determinism = "exact"
 
-# --- Legacy saved rows: morbid-app tests/legacy_fixtures.rs (added in 01) ---
+# --- Legacy saved rows: world-store tests/legacy_fixtures.rs (added in 01 in morbid-app; moved in 05) ---
 
 [[behavior]]
 id = "format.legacy.decode-matches-manifest"
-package = "morbid-app"
+package = "world-store"
 target = "test:legacy_fixtures"
 test = "every_row_decodes_to_the_values_the_old_writer_recorded"
 origin = "transition"
 expectation = "Every old-writer row decodes to the cell count, metadata, field sums and boundary words recorded before encoding."
-destination = "legacy codec (01); importer from these rows (05)"
+destination = "world-store legacy codec, the one owner of the old row bytes (moved in 05); the import reads these rows (05)"
 determinism = "exact"
 
 [[behavior]]
 id = "format.legacy.reencode-identical"
-package = "morbid-app"
+package = "world-store"
 target = "test:legacy_fixtures"
 test = "re_encoding_reproduces_the_old_writer_bytes"
 origin = "transition"
 expectation = "Re-encoding a decoded row reproduces the old writer's bytes exactly."
-destination = "legacy codec until the versioned format (05)"
+destination = "world-store legacy codec, kept for the baseline writer until 06 and for import"
 determinism = "exact"
 
 [[behavior]]
 id = "format.legacy.corrupt-is-error"
-package = "morbid-app"
+package = "world-store"
 target = "test:legacy_fixtures"
 test = "truncated_and_foreign_bytes_are_errors_not_chunks"
 origin = "transition"
 expectation = "Truncated or foreign bytes are decoding errors, never chunks."
-destination = "store read failures stay distinct from absence (05)"
+destination = "world-store legacy reader: corrupt rows fail reads and imports, never generation (05)"
 determinism = "exact"
 
 [[behavior]]
 id = "format.legacy.store-rows"
-package = "morbid-app"
+package = "world-store"
 target = "test:legacy_fixtures"
 test = "the_store_holds_exactly_the_recorded_rows"
 origin = "transition"
 expectation = "A copy of the fixture store holds exactly the five recorded rows with their bytes, and an unrecorded key is absent."
-destination = "saved-world store (05)"
+destination = "world-store LegacyStore, which the baseline and the import open (05)"
 determinism = "exact"
 
 [[behavior]]
 id = "format.legacy.generated-rows"
-package = "morbid-app"
+package = "world-store"
 target = "test:legacy_fixtures"
 test = "generated_rows_match_the_extracted_generator"
 origin = "transition"
@@ -2282,3 +2282,607 @@ origin = "transition"
 expectation = "The runtime presenting 60 Hz frames of wall time at 256 distributed and 4096 dense bodies: no frame waits, at most three ticks in flight, every tick balanced; reports ticks kept and discarded, frames under pressure, frame CPU time, tick latency and body sample age."
 destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
 determinism = "float-tolerance"
+
+# --- Streaming, checkpoints and recovery: world-model, gpu-world, world-runtime, world-store (05) ---
+
+[[behavior]]
+id = "model.identity.pinned"
+package = "world-model"
+target = "lib"
+test = "identity::tests::identities_are_pinned_to_the_current_layout_and_physics"
+origin = "transition"
+expectation = "The cell-layout and physics fingerprints equal their pinned values, so a changed layout field or rule/body constant fails until its revision is raised and saved worlds of the old revision are refused."
+destination = "world-model identity, recorded and checked in every saved world's header (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.identity.sensitive"
+package = "world-model"
+target = "lib"
+test = "identity::tests::a_changed_value_changes_the_fingerprint"
+origin = "transition"
+expectation = "A one-ulp change of a value or a different name changes the fingerprint."
+destination = "world-model identity (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "model.resume.body-set-consistency"
+package = "world-model"
+target = "lib"
+test = "resume::tests::a_body_set_resumes_only_when_slots_and_bodies_agree"
+origin = "transition"
+expectation = "A body set resumes only when every live slot has exactly one body under its generation, it fits the capacity, and every value is finite and inside the envelope."
+destination = "world-model resume, the semantic body state of checkpoints (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.table-export-restore"
+package = "gpu-world"
+target = "lib"
+test = "bodies::tests::a_table_exports_the_slots_it_used_and_restores_them_exactly"
+origin = "transition"
+expectation = "The body table exports every slot it used with its generation and state and restores them exactly; freed slots are reused under their advanced generation, never an old handle."
+destination = "gpu-world body table, checkpointed and restored (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.record-conversion"
+package = "gpu-world"
+target = "lib"
+test = "bodies::tests::device_records_round_trip_through_the_semantic_body"
+origin = "transition"
+expectation = "Device body records convert to the semantic resume state and back exactly; a dead record or another generation is not that body."
+destination = "gpu-world body snapshots and restoration (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.plan.snapshots"
+package = "gpu-world"
+target = "lib"
+test = "plan::tests::snapshots_are_planned_with_the_window"
+origin = "transition"
+expectation = "The chunk snapshot image and the change words are planned with the window, the world image is reserved beside the allocations, and a budget without room for it refuses the plan."
+destination = "gpu-world plan (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.store.payloads-and-ticks"
+package = "world-runtime"
+target = "lib"
+test = "store::tests::payloads_hold_whole_chunks_and_checkpoints_resume_after_their_tick"
+origin = "transition"
+expectation = "Chunk payloads hold exactly one chunk; a checkpoint resumes at the tick after its own (tick 0 for one that never ran) and refuses to wrap."
+destination = "world-runtime storage port (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.only-absent-keys-are-generated-and-unreadable-ones-stay-out"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::only_absent_keys_are_generated_and_unreadable_ones_stay_out"
+origin = "transition"
+expectation = "A saved key loads its published revision, an absent one is generated, and a corrupt one stays out and is reported, never generated over; nothing is written for unchanged chunks."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-chunk-that-returns-before-its-save-finishes-comes-back-fro"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_chunk_that_returns_before_its_save_finishes_comes_back_from_the_retained_payload"
+origin = "transition"
+expectation = "A changed chunk evicted while its write is held comes back from the retained payload, not the store, and is written once the hold ends; unchanged chunks are not written."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.loads-answered-after-the-key-left-are-discarded"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::loads_answered_after_the_key_left_are_discarded"
+origin = "transition"
+expectation = "Load results that arrive after their key left and came back are discarded as stale; the chunk ends up with its own content."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.failed-writes-keep-their-payloads-and-full-retention-stops-t"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::failed_writes_keep_their_payloads_and_full_retention_stops_the_window"
+origin = "transition"
+expectation = "Failing writes keep every captured payload; when retention is full, eviction stops and the window waits with the pressure reported; after the failures every payload is written."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-refused-retirement-keeps-the-chunk-resident-and-records-it"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_refused_retirement_keeps_the_chunk_resident_and_records_its_snapshot"
+origin = "transition"
+expectation = "A refused retirement leaves the chunk resident; its snapshot is still a revision, and a later change becomes the next one."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-checkpoint-holds-resident-evicted-body-and-configuration-s"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_checkpoint_holds_resident_evicted_body_and_configuration_state_at_one_tick"
+origin = "transition"
+expectation = "A checkpoint names the changed resident and evicted chunks at their revisions, the bodies and the configuration of its tick, and moves no head for unchanged generated chunks; the next one moves only what changed."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.publication-waits-for-every-payload-and-retries-failed-store"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::publication_waits_for_every_payload_and_retries_failed_store_operations"
+origin = "transition"
+expectation = "A checkpoint is published only after its payloads are durable, and failed publications are retried with the receipt showing the failure until it commits."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.an-orderly-close-saves-the-last-completed-tick"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::an_orderly_close_saves_the_last_completed_tick"
+origin = "transition"
+expectation = "An orderly close saves the last completed tick and reports it saved."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-lost-device-reports-what-the-latest-checkpoint-does-not-ho"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_lost_device_reports_what_the_latest_checkpoint_does_not_hold"
+origin = "transition"
+expectation = "A device loss reports the latest complete checkpoint, the ticks since it and the resident chunks at risk, and no checkpoint is invented."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-save-captured-before-a-loss-is-still-published"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_save_captured_before_a_loss_is_still_published"
+origin = "transition"
+expectation = "A save whose payloads were all on the CPU before a device loss is still published."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.crc32c-matches-the-published-check-value"
+package = "world-store"
+target = "lib"
+test = "format::tests::crc32c_matches_the_published_check_value"
+origin = "transition"
+expectation = "CRC-32C equals the published check value."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.header-bytes-sit-where-the-format-says"
+package = "world-store"
+target = "lib"
+test = "format::tests::header_bytes_sit_where_the_format_says"
+origin = "transition"
+expectation = "Every header field is at the offset the format states and decodes back."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.a-header-of-another-layout-physics-or-version-is-refused-unc"
+package = "world-store"
+target = "lib"
+test = "format::tests::a_header_of_another_layout_physics_or_version_is_refused_unchanged"
+origin = "transition"
+expectation = "A header of another cell layout, physics or format version is unsupported, and a flipped bit is corruption."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.chunk-bytes-sit-where-the-format-says"
+package = "world-store"
+target = "lib"
+test = "format::tests::chunk_bytes_sit_where_the_format_says"
+origin = "transition"
+expectation = "Chunk row fields and cells are at the stated offsets and decode back."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.damaged-chunk-rows-are-corrupt-and-never-partially-read"
+package = "world-store"
+target = "lib"
+test = "format::tests::damaged_chunk_rows_are_corrupt_and_never_partially_read"
+origin = "transition"
+expectation = "Truncated, flipped, misplaced, miscounted and longer chunk rows are corrupt, a future version is unsupported, and no cell is written by a refused row."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.body-sets-keep-every-field-and-their-lengths-are-checked-bef"
+package = "world-store"
+target = "lib"
+test = "format::tests::body_sets_keep_every_field_and_their_lengths_are_checked_before_allocation"
+origin = "transition"
+expectation = "Body sets keep every field at its offset, and declared counts that disagree with the length are refused before allocation."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.manifests-round-trip-and-refuse-values-outside-the-model"
+package = "world-store"
+target = "lib"
+test = "format::tests::manifests_round_trip_and_refuse_values_outside_the_model"
+origin = "transition"
+expectation = "Manifests round-trip, and temperatures, rule bits or windows outside the model are corruption."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.format.heads-pointers-and-markers-are-checked"
+package = "world-store"
+target = "lib"
+test = "format::tests::heads_pointers_and_markers_are_checked"
+origin = "transition"
+expectation = "Heads, the latest pointer and the session marker are checked."
+destination = "world-store format, version 1 (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.a-created-world-is-complete-and-reopens-identically"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "a_created_world_is_complete_and_reopens_identically"
+origin = "transition"
+expectation = "A created world is complete and reopens with the same header and checkpoint; creating over a file is refused."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.absent-found-corrupt-and-unsupported-rows-read-differently"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "absent_found_corrupt_and_unsupported_rows_read_differently"
+origin = "transition"
+expectation = "Absent, published, unpublished, damaged and future-version rows read differently on a real file, and refused reads change nothing."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.publication-refusals"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "publication_refuses_missing_older_and_out_of_order_data_and_changes_nothing"
+origin = "transition"
+expectation = "Publication refuses missing revisions, an older revision over a newer head (the stale-save specimen), out-of-order ids and missing body sets, and changes nothing; same-byte retries are idempotent."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.injected-io-errors-fail-writes-cleanly-and-a-retry-reaches-t"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "injected_io_errors_fail_writes_cleanly_and_a_retry_reaches_the_file"
+origin = "transition"
+expectation = "I/O errors injected under redb fail writes and publications without effect; a failed sync is ambiguous and the retry is idempotent; a returned barrier failure reaches no file write."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.a-held-write-delays-only-itself"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "a_held_write_delays_only_itself"
+origin = "transition"
+expectation = "A write held at its barrier does not block reads, which do not see it until it commits."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.reclamation-keeps-published-and-named-live-revisions-only"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "reclamation_keeps_published_and_named_live_revisions_only"
+origin = "transition"
+expectation = "Publications reclaim superseded revisions and manifests; reclamation keeps published and named live revisions only."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.read-only-stores-never-write"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "read_only_stores_never_write"
+origin = "transition"
+expectation = "A read-only store refuses writes and sessions and leaves the file byte for byte."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.a-store-without-a-published-checkpoint-is-incomplete"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "a_store_without_a_published_checkpoint_is_incomplete"
+origin = "transition"
+expectation = "A store with a header and no published checkpoint is refused as incomplete unless inspection allows it."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.interruption-child"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "interruption_child"
+origin = "transition"
+expectation = "The interruption tests' child: inert unless its parent sets the variables."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.interruption-before-the-publication-commits-keeps-the-previo"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "interruption_before_the_publication_commits_keeps_the_previous_checkpoint"
+origin = "transition"
+expectation = "A process aborted at every point before the publication commits leaves the previous complete checkpoint, and the next session reclaims what it left."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.interruption-after-the-publication-commits-keeps-the-new-che"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "interruption_after_the_publication_commits_keeps_the_new_checkpoint"
+origin = "transition"
+expectation = "A process aborted right after the publication commits leaves the new complete checkpoint."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.lifecycle.interruption-inside-commits-never-exposes-a-partial-checkpoi"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "interruption_inside_commits_never_exposes_a_partial_checkpoint"
+origin = "transition"
+expectation = "A process aborted at each file write of a session, inside redb's commits, leaves the previous or the new checkpoint, whole, never a partial one."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.the-old-writer-s-rows-become-a-complete-world-and-the-origin"
+package = "world-store"
+target = "test:import"
+test = "the_old_writer_s_rows_become_a_complete_world_and_the_original_is_unchanged"
+origin = "transition"
+expectation = "The old writer's rows import into a complete world with the supplied seed and scale recorded, the nonzero-z row refused, absent keys left to generation, and the original byte for byte."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.rows-the-planar-world-cannot-hold-refuse-the-import-unless-s"
+package = "world-store"
+target = "test:import"
+test = "rows_the_planar_world_cannot_hold_refuse_the_import_unless_skipped"
+origin = "transition"
+expectation = "Nonzero-z rows refuse the import unless skipped, and an existing destination is refused."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.a-corrupt-row-fails-the-import-and-stays-as-it-was"
+package = "world-store"
+target = "test:import"
+test = "a_corrupt_row_fails_the_import_and_stays_as_it_was"
+origin = "transition"
+expectation = "A corrupt legacy row fails the import, nothing is written, and the row stays as it was."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.a-destination-failure-leaves-an-incomplete-store-that-openin"
+package = "world-store"
+target = "test:import"
+test = "a_destination_failure_leaves_an_incomplete_store_that_opening_refuses"
+origin = "transition"
+expectation = "A destination write failure leaves an incomplete store that opening refuses, and the original imports again."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.import-interruption-child"
+package = "world-store"
+target = "test:import"
+test = "import_interruption_child"
+origin = "transition"
+expectation = "The import interruption tests' child: inert unless its parent sets the variables."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.an-interrupted-import-is-incomplete-and-the-original-imports"
+package = "world-store"
+target = "test:import"
+test = "an_interrupted_import_is_incomplete_and_the_original_imports_again"
+origin = "transition"
+expectation = "An import interrupted before its publication is incomplete, the original is unchanged and imports again."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.import.an-unclean-original-is-read-through-a-repaired-copy"
+package = "world-store"
+target = "test:import"
+test = "an_unclean_original_is_read_through_a_repaired_copy"
+origin = "transition"
+expectation = "An original the old application left unclean is read through a repaired copy and stays byte for byte."
+destination = "world-store legacy import (05)"
+determinism = "exact"
+
+# --- The streaming GPU suite (05) ---
+
+[[behavior]]
+id = "gpu.streaming.change-flags"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "snapshot-change-flags"
+origin = "transition"
+expectation = "Edits, material flow and body deformation mark exactly the chunks they change; a chunk snapshot clears the mark, an activation starts without one, a world snapshot streams exactly the changed chunks, and a transfer submission holds the last submitted tick."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.restore-bodies"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "snapshot-restore-bodies"
+origin = "transition"
+expectation = "A world snapshot's bodies restored with its chunks into a later-epoch session continue bit for bit, keep their handles, keep the removed one stale and are not duplicated."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.newest-retained-wins"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "newest-retained-wins"
+origin = "transition"
+expectation = "A chunk that returns while its save is held is the retained newest state; a newer save finishing after the older one wins; an older publication is refused; a new store object and session reopen it."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.reordered-stale-loads"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "reordered-and-stale-loads"
+origin = "transition"
+expectation = "Out-of-order and stale load answers are counted and never applied: every resident chunk holds its key's saved or generated columns."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.missing-neighbours"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "missing-neighbours-closed"
+origin = "transition"
+expectation = "An unreadable chunk at a negative-key corner stays out and is a closed boundary: the stroke across the corner paints only resident chunks, flowing water is conserved and never enters it, and its row stays byte for byte."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.refused-rows"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "refused-rows-stay-out"
+origin = "transition"
+expectation = "Bit-flipped, truncated and future-version rows keep their chunks out as corrupt or unsupported, nothing is generated over them, a later checkpoint leaves them alone, and the rows survive byte for byte."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.resident-autosave"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "resident-only-autosave"
+origin = "transition"
+expectation = "Changes to chunks that never leave the window are saved by autosave alone, with no eviction; a session ended without its closing save is recorded unclean and the reopened world holds the changes."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.periodic-saves"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "periodic-saves"
+origin = "transition"
+expectation = "Periodic saves follow one another with increasing identities and ticks, each with its body set, and the world reopens at the latest."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.snapshot-resize-overlap"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "snapshot-resize-overlap"
+origin = "transition"
+expectation = "A world snapshot drains while the window grows; the measured device peak stays within the overlap bound (old allocations, new window, the larger world image); a growth beyond the budget is refused before any eviction and the world stays intact and reopens."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.failed-commits"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "failed-commits-retained"
+origin = "transition"
+expectation = "Write and sync errors injected under redb fail eviction writes and a publication; payloads stay retained, the receipt reports the store failure, retries commit, and the reopened world holds the evicted and resident changes."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.retention-budget"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "retention-budget"
+origin = "transition"
+expectation = "With writes failing at their barrier and room for two payloads, retention never exceeds the budget, the window waits with the pressure reported, and once writes succeed it moves and every change is saved and reopens."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.delayed-mapping"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "delayed-mapping"
+origin = "transition"
+expectation = "With map deliveries held, eviction and world snapshots stay in their device images, the save stays capturing, outgoing chunks are not reloaded before their snapshots resolve, and everything completes with the right content afterwards."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.body-suspension"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "body-suspension-resume"
+origin = "transition"
+expectation = "A body whose region leaves the window is suspended in place, saved suspended under its handle, restored once on reopening, resumed when its terrain returns, and answers its handle."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "store.cli.create-inspect-verify"
+package = "world-store"
+target = "test:cli"
+test = "a_created_world_inspects_and_verifies_without_being_changed"
+origin = "transition"
+expectation = "`world-store create` writes a complete world with the given seed, scale and window; inspect and verify read it without changing it; an existing store is never overwritten."
+destination = "world-store command line (05); the native client's world options (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.cli.import-interpretation"
+package = "world-store"
+target = "test:cli"
+test = "a_legacy_import_needs_its_interpretation_and_reports_it"
+origin = "transition"
+expectation = "`world-store import-legacy` requires the seed and elevation scale, refuses non-planar rows unless skipped, reports the supplied interpretation and leaves the original unchanged."
+destination = "world-store command line (05); the native client's world options (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.cli.usage-errors"
+package = "world-store"
+target = "test:cli"
+test = "usage_errors_are_refused_before_anything_is_opened"
+origin = "transition"
+expectation = "Missing, unknown, repeated, unparsable and out-of-range options exit 2 with the usage before any store is opened; a missing store exits 1."
+destination = "world-store command line (05); the native client's world options (06)"
+determinism = "exact"

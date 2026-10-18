@@ -3835,6 +3835,7 @@ dependencies = [
  "gpu-world",
  "monarch-engine",
  "morbid-app",
+ "redb",
  "serde",
  "serde_json",
  "sha2",
@@ -3843,6 +3844,7 @@ dependencies = [
  "wgpu",
  "world-model",
  "world-runtime",
+ "world-store",
 ]
 
 [[package]]
@@ -3851,14 +3853,12 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "bitcode",
  "bytemuck",
  "monarch-engine",
- "redb",
  "rustc-hash 2.1.3",
  "spatial-lib",
- "toml",
  "world-model",
+ "world-store",
 ]
 
 [[package]]
@@ -5310,7 +5310,6 @@ version = "0.1.0"
 dependencies = [
  "glam 0.32.1",
  "lru",
- "redb",
  "rustc-hash 2.1.3",
  "world-model",
 ]
@@ -6752,6 +6751,17 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "world-model",
+]
+
+[[package]]
+name = "world-store"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+ "redb",
+ "toml",
+ "world-model",
+ "world-runtime",
 ]
 
 [[package]]

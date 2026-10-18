@@ -28,10 +28,12 @@ cell payloads. Only the evidence runner's `legacy-baseline` driver uses that mod
 ## Saved data
 
 Chunks are rows of the redb table `spatial_chunks`, written only when the LRU cache evicts them or
-at exit. [`legacy_format`](src/legacy_format.rs) owns their bytes: it encodes and decodes exactly
-what the old writer produced by deriving bitcode on `CellChunk`, which the model types no longer
-carry. A row that does not decode is a corrupt row, not an absent chunk. See
+at exit. Since 05 `world_store::legacy` owns their bytes and the table (`LegacyStore`), tested
+against the rows the old writer wrote
+([`legacy-v0`](../../adapters/world-store/tests/fixtures/legacy-v0/README.md));
+[`legacy_format`](src/legacy_format.rs) only converts between them and `CellChunk`. A row that
+cannot be read or decoded is left unloaded and reported, never replaced by generated terrain. The
+baseline's other persistence failures (saving on eviction only, stale reads while a save is
+pending, an exit flush of the save queue alone) remain until prompt 06 replaces it with the
+runtime's residency and checkpoints over `world-store`. See
 [world format](../../docs/reference/world-format.md).
-[`tests/fixtures/legacy-v0`](tests/fixtures/legacy-v0/README.md) holds rows the old writer wrote
-before the extraction, and [`tests/legacy_fixtures.rs`](tests/legacy_fixtures.rs) decodes them and
-re-encodes them byte for byte.

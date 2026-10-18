@@ -15,9 +15,10 @@ runtime decides what to ask and when, and this crate decides how the device does
 | `resources` | Device buffers, pipelines (compiled once per session) and the bind group. |
 | `staging` | Upload and readback pools: reservation generations, map delivery mailbox, reuse. |
 | `slots` | Chunk slots, the window map and slot records (metadata only). |
+| `snapshots` | Chunk and world snapshots (05): copied on the device at a submission boundary with each slot's change word, which every cell writer sets and the copy clears; only changed chunks, and a world snapshot's bodies, stream out through the capture staging pool. |
 | `bodies` | The body slot table: generation-bearing handles, lowest-free allocation, retirement of an exhausted generation, the live extent. |
 | `commands`, `readback` | Command records in window-local coordinates (rays included) and the body table's part in encoding them; identity-checked decoding of results, ray answers, body samples and diagnostics, events and timestamps. |
-| `world` | `GpuWorld`: tick encoding (`world/tick.rs`), nonblocking polling, loss and the orderly stop (`world/poll.rs`), residency operations and resize. |
+| `world` | `GpuWorld`: tick encoding (`world/tick.rs`), nonblocking polling, loss and the orderly stop (`world/poll.rs`), snapshots, body restoration and transfer-only submissions (`world/snapshot.rs`), residency operations and resize; `GpuWorldConfig::resume` opens a session at a saved checkpoint. |
 | `faults` | Fault injection for conformance runs only: device loss, held or reordered deliveries, held completions, event floods. |
 
 Shaders live in `shaders/`: `shared/` the cell accessors, the rules' hashes and shuffles

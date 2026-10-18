@@ -2,6 +2,8 @@
 
 These bytes were produced by the baseline save path, not by a reimplementation of it. Treat them
 as immutable. A capture made with changed code is a new fixture set, not an update to this one.
+They lived under `crates/morbid-app/tests/` until prompt 05 moved them, unchanged (same SHA-256),
+to `world-store`, which now owns the legacy row bytes and their import.
 
 ## Provenance
 
