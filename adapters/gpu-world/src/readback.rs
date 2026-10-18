@@ -64,6 +64,11 @@ pub enum DecodeError {
     Sample {
         position: u32,
     },
+    /// Record `position`'s ray result names no surface outcome, or a body slot beyond the
+    /// capacity.
+    RayResult {
+        position: u32,
+    },
 }
 
 /// Decodes `results` (one record per expected command) into command outcomes. `totals` holds
@@ -286,14 +291,27 @@ fn check(
         CommandKind::AttractBodies => targeted(codes::RESULT_ATTRACTED),
         CommandKind::LiftBodies => targeted(codes::RESULT_LIFTED),
     };
-    if valid {
-        Ok(())
-    } else {
-        Err(DecodeError::Status {
+    if !valid {
+        return Err(DecodeError::Status {
             position,
             status: record.status,
-        })
+        });
     }
+    // A resolved ray (answered, or used by a command that was not refused on the CPU) names
+    // one surface outcome and at most a body inside the table.
+    let resolved = record.status == codes::RESULT_RAY
+        || (ray
+            && record.status != codes::RESULT_STALE_BODY
+            && record.status != codes::RESULT_BODY_CAPACITY);
+    let surface = matches!(
+        record.v0,
+        codes::SURFACE_MISS | codes::SURFACE_HIT | codes::SURFACE_NOT_RESIDENT
+    );
+    let body = record.v4 == codes::BODY_NONE || record.v4 < expected.body_capacity;
+    if resolved && !(surface && body) {
+        return Err(DecodeError::RayResult { position });
+    }
+    Ok(())
 }
 
 /// Checks that an event header accounts for every append: a full buffer counts each dropped
@@ -719,6 +737,7 @@ mod tests {
         let base = |id: u64, kind: CommandKind| Expected {
             body: Some(body),
             origin: (-128, 64),
+            body_capacity: 8,
             ..expected(id, kind)
         };
         let ray = Ray::new(DVec3::new(-100.0, 50.0, -70.0), Vec3::NEG_Y, 200.0).expect("ray");
@@ -750,6 +769,25 @@ mod tests {
             ray: Some(ray),
             ..base(2, CommandKind::QueryRay)
         };
+        // A body slot beyond the table (an f32-rounded "none", say) is a decode error.
+        let mut phantom = hit;
+        phantom.v4 = 0xFFFF_FF00;
+        let mut phantom_bytes = vec![0u8; ResultRecord::BYTES as usize];
+        ResultRecord {
+            sequence: 0,
+            ..phantom
+        }
+        .write_bytes(&mut phantom_bytes);
+        assert_eq!(
+            decode_results(
+                &phantom_bytes,
+                &totals[..TotalsRecord::BYTES as usize],
+                &[ray_query],
+                Tick::new(9),
+                &mut out,
+            ),
+            Err(DecodeError::RayResult { position: 0 })
+        );
         decode_results(
             &bytes,
             &totals,

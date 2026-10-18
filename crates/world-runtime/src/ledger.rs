@@ -439,7 +439,8 @@ mod tests {
                 None,
             );
         }
-        let events: Vec<_> = ledger.bodies_mut().drain_events().collect();
+        let mut events = Vec::new();
+        ledger.bodies_mut().drain_events(&mut events);
         assert_eq!(events.len(), 3, "{events:?}");
         assert!(ledger.bodies().body(body).is_none());
     }

@@ -8,10 +8,12 @@
 //! observations.
 
 pub mod adversarial;
+pub mod consumer;
 pub mod identity;
 pub mod intentions;
 pub mod oracle;
 pub mod probes;
+pub mod rays;
 pub mod scene;
 
 use super::Case;
@@ -136,5 +138,25 @@ pub const CASES: &[Case] = &[
         name: "residency-edge",
         summary: "bodies suspend with their state at missing terrain, block others, resume, and survive the window moving",
         run: adversarial::residency_edge,
+    },
+    Case {
+        name: "ray-queries",
+        summary: "rays meet the collision surface where an f64 reference does, miss, leave residency at its edge, and report bodies",
+        run: rays::ray_queries,
+    },
+    Case {
+        name: "ray-targeted-commands",
+        summary: "edits, spawns, attraction and lift act at a ray's GPU-resolved hit; acknowledged edits are observed; misses change nothing",
+        run: rays::ray_targeted_commands,
+    },
+    Case {
+        name: "controls",
+        summary: "drive, jump, remove and spawn through runtime receipts: retries apply once, stale handles and a full table are refused",
+        run: consumer::controls,
+    },
+    Case {
+        name: "observation-delivery",
+        summary: "a consumer drains body events late from a saturated ring and still sees every counter once; replays in hostile orders agree",
+        run: consumer::observation_delivery,
     },
 ];

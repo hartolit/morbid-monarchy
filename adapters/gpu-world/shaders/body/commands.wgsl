@@ -16,7 +16,10 @@
 
 var<workgroup> ray_lane_event: array<vec2<f32>, 64>;
 var<workgroup> ray_lane_cell: array<vec2<i32>, 64>;
-var<workgroup> ray_lane_body: array<vec2<f32>, 64>;
+// Each lane's nearest body: its distance and its slot (BODY_NONE for none). Slots stay u32:
+// BODY_NONE has no exact f32.
+var<workgroup> ray_lane_body_distance: array<f32, 64>;
+var<workgroup> ray_lane_body_slot: array<u32, 64>;
 
 struct Ray {
     origin: vec3<f32>,
@@ -102,7 +105,8 @@ fn resolve_target(@builtin(local_invocation_index) li: u32) {
     ray_lane_event[li] = march(ray, segment * f32(li), segment * f32(li + 1u), &cell);
     ray_lane_cell[li] = cell;
     // The nearest body this invocation's share of the slots crosses.
-    var nearest = vec2<f32>(3.0e38, f32(BODY_NONE));
+    var nearest_distance = 3.0e38;
+    var nearest_slot = BODY_NONE;
     for (var b = li; b < body_params.body_count; b += 64u) {
         let s = load_body_state(state_base(b));
         if ((s.flags & BODY_ALIVE) == 0u) {
@@ -113,11 +117,13 @@ fn resolve_target(@builtin(local_invocation_index) li: u32) {
             continue;
         }
         let t = ray_sphere(ray.origin, ray.direction, placed.position, load_body_config(config_base(b)).radius);
-        if (t >= 0.0 && t <= ray.length && t < nearest.x) {
-            nearest = vec2<f32>(t, f32(b));
+        if (t >= 0.0 && t <= ray.length && t < nearest_distance) {
+            nearest_distance = t;
+            nearest_slot = b;
         }
     }
-    ray_lane_body[li] = nearest;
+    ray_lane_body_distance[li] = nearest_distance;
+    ray_lane_body_slot[li] = nearest_slot;
     workgroupBarrier();
     if (li != 0u) {
         return;
@@ -131,11 +137,15 @@ fn resolve_target(@builtin(local_invocation_index) li: u32) {
             break;
         }
     }
-    var body = vec2<f32>(3.0e38, f32(BODY_NONE));
+    // The nearest over the lanes; equal distances go to the lower slot.
+    var body_distance = 3.0e38;
+    var body_slot = BODY_NONE;
     for (var lane = 0u; lane < 64u; lane++) {
-        let candidate = ray_lane_body[lane];
-        if (candidate.x < body.x || (candidate.x == body.x && candidate.y < body.y)) {
-            body = candidate;
+        let distance = ray_lane_body_distance[lane];
+        let slot = ray_lane_body_slot[lane];
+        if (slot != BODY_NONE && (distance < body_distance || (distance == body_distance && slot < body_slot))) {
+            body_distance = distance;
+            body_slot = slot;
         }
     }
     let kind = u32(surface.y);
@@ -144,11 +154,10 @@ fn resolve_target(@builtin(local_invocation_index) li: u32) {
     results[index].v2 = bitcast<u32>(hit_cell.y);
     results[index].v3 = bitcast<u32>(surface.x);
     results[index].v4 = BODY_NONE;
-    if (u32(body.y) != BODY_NONE && (kind != SURFACE_HIT || body.x < surface.x)) {
-        let b = u32(body.y);
-        results[index].v4 = b;
-        results[index].v5 = load_body_state(state_base(b)).generation;
-        results[index].v6 = bitcast<u32>(body.x);
+    if (body_slot != BODY_NONE && (kind != SURFACE_HIT || body_distance < surface.x)) {
+        results[index].v4 = body_slot;
+        results[index].v5 = load_body_state(state_base(body_slot)).generation;
+        results[index].v6 = bitcast<u32>(body_distance);
     }
     if (command.kind == COMMAND_QUERY_RAY) {
         results[index].status = RESULT_RAY;
