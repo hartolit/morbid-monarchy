@@ -269,14 +269,14 @@ event and sample buffers are bounded with their overflow counted.
 **Per-tick traffic.** On top of 03's, each tick uploads the 128-byte body parameters and 8 B per
 sampled body (handle) and reads back the 128-byte body diagnostics, 96 B per sample and, with
 timestamps, 64 B for eight stamps: with 64 samples and no command, 788 B up and 7,520 B down;
-each command adds 112 B up and 96 B down. Sixty-four samples a tick are 0.43 MiB/s at 60 ticks/s,
-inside the 16 MiB/s observation budget.
+each command adds 112 B up and 96 B down. At 60 ticks/s the samples are 0.35 MiB/s and the whole
+readback 0.43 MiB/s, inside the 16 MiB/s observation budget.
 
 **Measured on the nominated hardware.** Run on 2026-10-18 at 12:48 local time, at `e8ee688`
 with a clean tree, with `cargo evidence test gpu --suite bodies --adapter vulkan-10de-2c05`
 (RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux 7.2.10, Ryzen 9 5950X; release build;
-timestamps period 1 ns). Device times are the body pass's timestamps (every substep, from bin
-clear to the end of the last displacement, and the observation); "encode" is the CPU time of
+timestamps period 1 ns). Device times are the body pass's timestamps (every substep, from the bin
+clear to the re-anchoring, and the observation); "encode" is the CPU time of
 the `submit_tick` call. Each tick is submitted alone and waited for, 64 bodies are sampled a
 tick, and the default solver runs 16 position and 16 velocity passes, two substeps a tick at
 60 Hz.
