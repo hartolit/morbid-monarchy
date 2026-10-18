@@ -11,6 +11,7 @@ pub mod bodies;
 pub mod cells;
 pub mod driver;
 pub mod probe;
+pub mod scenarios;
 pub mod transfers;
 
 use std::{
@@ -74,6 +75,11 @@ impl Check {
 
     pub fn metric(&mut self, key: &str, value: impl Into<Value>) {
         self.metrics.insert(key.to_owned(), value.into());
+    }
+
+    /// The findings, for a result that is not a case's.
+    pub fn into_parts(self) -> (Vec<String>, Vec<String>, Map<String, Value>) {
+        (self.failures, self.notes, self.metrics)
     }
 
     pub fn failures(&self) -> usize {

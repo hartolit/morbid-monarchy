@@ -2,7 +2,8 @@
 //!
 //! The production kernels (`bins_clear`, `bins_count`, `bins_scan`, `bins_scatter`) bin
 //! crafted bodies, and a probe kernel walks each body's candidates with the production
-//! traversal (`traversal`, `group_range`, `candidate`), keeps the generated pairs
+//! enumeration (`pair_prepare`, `pair_candidate`, one workgroup per body), keeps the generated
+//! pairs
 //! (`generated`) and classifies them with the production narrowphase (`pair_contact`). On the
 //! CPU, every pair closer than the generation bound — the radii, the slop, both bodies' travel
 //! and the solver margin, beyond which no contact kind is possible — must have been visited, no
@@ -44,35 +45,35 @@ fn probe_bounds(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // Per body: visited count, contact count, then each visited body with its contact kind in the
-// high half.
+// high half (in whatever order the lanes reach them).
 @compute @workgroup_size(64, 1, 1)
-fn probe_candidates(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
+fn probe_candidates(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
     let n = body_params.body_count;
-    if (i >= n) {
+    let frame = pair_prepare(i, li, true);
+    if (frame.gather == 0u) {
         return;
     }
     let stride = n + 2u;
-    var visited = 0u;
-    var contacts = 0u;
-    let t = traversal(i);
-    for (var g = 0u; g < t.groups; g++) {
-        let range = group_range(t, g);
-        for (var k = 0u; k < range.y; k++) {
-            let j = candidate(t, range.x, k);
-            if (j == i || j == BODY_NONE || !generated(i, j)) {
-                continue;
-            }
-            let pair = pair_contact(i, j, 0u, true);
-            if (visited < n) {
-                atomicStore(&claims[i * stride + 2u + visited], j | (pair.kind << 16u));
-            }
-            visited += 1u;
-            contacts += select(0u, 1u, pair.kind != 0u);
+    for (var k = li; k < frame.total; k += 64u) {
+        let j = pair_candidate(frame, k);
+        if (j == i || j == BODY_NONE || !generated(i, j)) {
+            continue;
+        }
+        let pair = pair_contact(i, j, 0u, true);
+        let visited = atomicAdd(&pair_tally[0], 1u);
+        if (visited < n) {
+            atomicStore(&claims[i * stride + 2u + visited], j | (pair.kind << 16u));
+        }
+        if (pair.kind != 0u) {
+            atomicAdd(&pair_tally[1], 1u);
         }
     }
-    atomicStore(&claims[i * stride], visited);
-    atomicStore(&claims[i * stride + 1u], contacts);
+    workgroupBarrier();
+    if (li == 0u) {
+        atomicStore(&claims[i * stride], atomicLoad(&pair_tally[0]));
+        atomicStore(&claims[i * stride + 1u], atomicLoad(&pair_tally[1]));
+    }
 }
 "#;
 
@@ -283,7 +284,7 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
         (pipeline("bins_count"), n.div_ceil(64)),
         (pipeline("bins_scan"), 1),
         (pipeline("bins_scatter"), n.div_ceil(64)),
-        (pipeline("probe_candidates"), n.div_ceil(64)),
+        (pipeline("probe_candidates"), n),
     ];
     let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
         .iter()

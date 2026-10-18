@@ -613,6 +613,9 @@ pub struct BodyReport {
     /// Candidate pairs the broadphase handed to the narrowphase (each pair counted by both
     /// bodies, summed over substeps and solver passes), and pairs found in contact.
     pub candidate_pairs: u64,
+    /// Candidate slots the pair passes examined to find them (every body slot per body with
+    /// the all-pairs broadphase).
+    pub pair_visits: u64,
     pub contact_pairs: u32,
     /// Contacts found only along the swept segments: pairs that would otherwise tunnel.
     pub swept_contacts: u32,
@@ -653,6 +656,35 @@ impl BodyReport {
 
     pub fn consistent(&self) -> bool {
         self.imbalance() == (0, 0)
+    }
+
+    /// Adds a later tick's report: sums of the counts and quantities (32-bit counts saturate),
+    /// maxima of the residuals, and the later tick's live and suspended bodies.
+    pub fn add(&mut self, tick: &BodyReport) {
+        self.substeps = self.substeps.saturating_add(tick.substeps);
+        self.live = tick.live;
+        self.suspended = tick.suspended;
+        self.candidate_pairs += tick.candidate_pairs;
+        self.pair_visits += tick.pair_visits;
+        self.contact_pairs = self.contact_pairs.saturating_add(tick.contact_pairs);
+        self.swept_contacts = self.swept_contacts.saturating_add(tick.swept_contacts);
+        self.terrain_contacts = self.terrain_contacts.saturating_add(tick.terrain_contacts);
+        self.residual_overlap = self.residual_overlap.max(tick.residual_overlap);
+        self.residual_approach = self.residual_approach.max(tick.residual_approach);
+        self.speed_limited = self.speed_limited.saturating_add(tick.speed_limited);
+        self.swept_bodies = self.swept_bodies.saturating_add(tick.swept_bodies);
+        self.fluid_in += tick.fluid_in;
+        self.fluid_out += tick.fluid_out;
+        self.solid_in += tick.solid_in;
+        self.solid_out += tick.solid_out;
+        self.compaction += tick.compaction;
+        self.ice_broken = self.ice_broken.saturating_add(tick.ice_broken);
+        self.organics_cleared = self.organics_cleared.saturating_add(tick.organics_cleared);
+        self.craters = self.craters.saturating_add(tick.craters);
+        self.ruts = self.ruts.saturating_add(tick.ruts);
+        self.splashes = self.splashes.saturating_add(tick.splashes);
+        self.wakes = self.wakes.saturating_add(tick.wakes);
+        self.claims_lost = self.claims_lost.saturating_add(tick.claims_lost);
     }
 }
 

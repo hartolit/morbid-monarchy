@@ -15,7 +15,8 @@
 // generation test rejects. The all-pairs broadphase applies the same generation test to every
 // body, so both solve exactly the same pairs.
 // pairs_count  the contacts each active body has (overlapping or within the slop, or swept):
-//              the solver's scaling.
+//              the solver's scaling. This and the passes below run one workgroup per body,
+//              whose lanes share its candidates (see "One workgroup per body").
 // pairs_position, pairs_velocity   the session's position and velocity iterations
 //              (`GpuWorldConfig::pair_iterations`), Jacobi passes each. A pass reads every
 //              body from one half of the ping-pong buffers and writes the other, so no body
@@ -239,32 +240,6 @@ fn pair_scale(i: u32, j: u32) -> f32 {
     return 1.0 / f32(max(max(bodies[work_word(i, WORK_PAIRS)], bodies[work_word(j, WORK_PAIRS)]), 1u));
 }
 
-// The candidates of body `b`: every body in the 27 bins around it (each hash slot once), or
-// every body with the all-pairs broadphase. `visit` handles one candidate.
-struct Candidates {
-    slots: array<u32, 27>,
-    count: u32,
-}
-
-fn candidate_slots(p: vec3<f32>) -> Candidates {
-    var out: Candidates;
-    out.count = 0u;
-    let edge = bin_edge();
-    let center = bin_of(p, edge);
-    for (var k = 0; k < 27; k++) {
-        let slot = bin_slot(center + vec3<i32>(k % 3 - 1, (k / 3) % 3 - 1, k / 9 - 1));
-        var seen = false;
-        for (var m = 0u; m < out.count; m++) {
-            seen = seen || out.slots[m] == slot;
-        }
-        if (!seen) {
-            out.slots[out.count] = slot;
-            out.count += 1u;
-        }
-    }
-    return out;
-}
-
 struct Gathered {
     sum: vec3<i32>,
     candidates: u32,
@@ -278,20 +253,6 @@ struct Gathered {
     fastest: f32,
 }
 
-// Where body `i`'s candidates are: the deduplicated hash slots of the 27 bins around it, or,
-// with the all-pairs broadphase, one group holding every body slot.
-struct Traversal {
-    found: Candidates,
-    all_pairs: bool,
-    groups: u32,
-}
-
-fn traversal(i: u32) -> Traversal {
-    let all_pairs = body_params.broadphase == BROADPHASE_ALL_PAIRS;
-    let found = candidate_slots(work_vec3(i, WORK_BINNED));
-    return Traversal(found, all_pairs, select(found.count, 1u, all_pairs));
-}
-
 // Whether `i` and `j` are a candidate pair this substep (see the top of this module).
 fn generated(i: u32, j: u32) -> bool {
     let bi = work_vec3(i, WORK_BINNED);
@@ -299,26 +260,6 @@ fn generated(i: u32, j: u32) -> bool {
     let travel = distance(bi, work_vec3(i, WORK_PREV)) + distance(bj, work_vec3(j, WORK_PREV));
     let reach = load_body_config(config_base(i)).radius + load_body_config(config_base(j)).radius;
     return distance(bi, bj) < reach + CONTACT_SLOP + travel + PAIR_MARGIN;
-}
-
-// (first entry, count) of group `g`.
-fn group_range(t: Traversal, g: u32) -> vec2<u32> {
-    if (t.all_pairs) {
-        return vec2<u32>(0u, body_params.body_count);
-    }
-    return vec2<u32>(
-        atomicLoad(&bins[body_params.starts_base + t.found.slots[g]]),
-        atomicLoad(&bins[body_params.counts_base + t.found.slots[g]]),
-    );
-}
-
-// Candidate `k` of a group starting at `first`, or BODY_NONE for an all-pairs slot that holds
-// no binned body.
-fn candidate(t: Traversal, first: u32, k: u32) -> u32 {
-    if (t.all_pairs) {
-        return select(BODY_NONE, first + k, binned(first + k));
-    }
-    return atomicLoad(&bins[body_params.entries_base + first + k]);
 }
 
 // The speed a contact is to part at: the baseline's restitution of the approach the solve
@@ -332,87 +273,230 @@ fn separation_target(i: u32, j: u32, normal: vec3<f32>) -> f32 {
     return select(0.0, IMPACT_RESTITUTION * approach, approach > settle);
 }
 
-// mode 0: count contacts; 1: position correction; 2: velocity impulses; 3: residuals.
-fn gather(i: u32, half: u32, mode: u32) -> Gathered {
-    var out = Gathered(vec3<i32>(0), 0u, 0u, 0u, 0u, 0u, 0.0, 0.0);
-    let t = traversal(i);
-    for (var g = 0u; g < t.groups; g++) {
-        let range = group_range(t, g);
-        for (var k = 0u; k < range.y; k++) {
-            let j = candidate(t, range.x, k);
-            if (j == i || j == BODY_NONE || !generated(i, j)) {
-                continue;
-            }
-            out.candidates += 1u;
-            let pair = pair_contact(i, j, half, mode >= 2u || mode == 0u);
-            if (pair.kind == 0u) {
-                continue;
-            }
-            out.contacts += 1u;
-            out.swept += select(0u, 1u, pair.kind == 2u);
-            out.touching += select(0u, 1u, pair.kind == 1u);
-            let weighted = mode != 1u;
-            let move_i = mobility(i, pair.normal, weighted);
-            let weight = move_i.weight + mobility(j, -pair.normal, weighted).weight;
-            if (weight <= 1e-6) {
-                continue;
-            }
-            if (mode == 1u) {
-                if (pair.depth <= 0.0) {
-                    continue;
+// ---- One workgroup per body ------------------------------------------------------------
+//
+// The pair kernels run one 64-lane workgroup per body. Lane 0 finds the body's candidate groups
+// (`pair_prepare`), the lanes share its candidates (`gather_lanes`), and each pair's
+// contribution meets the others in workgroup atomics. Every contribution is an integer (the
+// fixed-point sums and the counts) or a non-negative float compared as its bits (the maxima),
+// so the result does not depend on which lane handled which pair, and the solve stays
+// deterministic.
+
+// The body a pair workgroup serves. `integrated`: active this substep. `gather`: it has
+// candidates to visit in this pass. `groups` candidate groups hold `total` candidates.
+struct PairFrame {
+    integrated: u32,
+    gather: u32,
+    groups: u32,
+    total: u32,
+}
+
+var<workgroup> pair_frame: PairFrame;
+// Each group's first bin entry, and the running candidate count at its end. With the all-pairs
+// broadphase there is one group: every body slot.
+var<workgroup> pair_first: array<u32, 27>;
+var<workgroup> pair_end: array<u32, 27>;
+var<workgroup> pair_sum: array<atomic<i32>, 3>;
+// Candidates, contacts, swept, touching, correcting.
+var<workgroup> pair_tally: array<atomic<u32>, 5>;
+// Deepest overlap and fastest approach, as non-negative f32 bits.
+var<workgroup> pair_extreme: array<atomic<u32>, 2>;
+
+// The workgroup describes body `i`'s pass: whether it takes part and where its candidates
+// are, the hash slots of the 27 bins around it (a slot two bins share is counted once) or every
+// slot, and every lane gets the description. Lane 0 decides and the 27 bins are found by one
+// lane each. `counting` visits every active body's candidates (the count pass); the others
+// visit only a body that has contacts.
+var<workgroup> pair_slot: array<u32, 27>;
+var<workgroup> pair_count: array<u32, 27>;
+
+fn pair_prepare(i: u32, li: u32, counting: bool) -> PairFrame {
+    if (li == 0u) {
+        var frame = PairFrame(0u, 0u, 0u, 0u);
+        if (i < body_params.body_count && is_active(i)) {
+            frame.integrated = 1u;
+            if (counting || bodies[work_word(i, WORK_PAIRS)] > 0u) {
+                frame.gather = 1u;
+                if (body_params.broadphase == BROADPHASE_ALL_PAIRS) {
+                    pair_first[0] = 0u;
+                    pair_end[0] = body_params.body_count;
+                    frame.groups = 1u;
+                    frame.total = body_params.body_count;
                 }
-                let correction = move_i.motion * (pair.depth / weight);
-                out.sum += vec3<i32>(round(correction * POSITION_QUANTUM));
-                out.correcting += 1u;
-            } else if (mode >= 2u) {
-                let vi = work_vec3(i, WORK_VEL_A + half * 4u);
-                let vj = work_vec3(j, WORK_VEL_A + half * 4u);
-                // Positive apart, negative closing.
-                let normal_speed = dot(vi - vj, pair.normal);
-                if (pair.kind == 1u && pair.depth > -CONTACT_SLOP) {
-                    out.deepest = max(out.deepest, pair.depth);
-                }
-                if (mode == 3u) {
-                    out.fastest = max(out.fastest, -normal_speed);
-                    continue;
-                }
-                let parting = separation_target(i, j, pair.normal);
-                if (normal_speed >= parting) {
-                    continue;
-                }
-                let impulse = (parting - normal_speed) / weight;
-                let change = move_i.motion * (impulse * pair_scale(i, j));
-                out.sum += vec3<i32>(round(change * VELOCITY_QUANTUM));
             }
         }
+        for (var k = 0u; k < 3u; k++) {
+            atomicStore(&pair_sum[k], 0);
+        }
+        for (var k = 0u; k < 5u; k++) {
+            atomicStore(&pair_tally[k], 0u);
+        }
+        atomicStore(&pair_extreme[0], 0u);
+        atomicStore(&pair_extreme[1], 0u);
+        pair_frame = frame;
     }
-    return out;
+    let head = workgroupUniformLoad(&pair_frame);
+    if (head.gather == 0u || head.groups != 0u) {
+        return head;
+    }
+    if (li < 27u) {
+        let k = i32(li);
+        let center = bin_of(work_vec3(i, WORK_BINNED), bin_edge());
+        pair_slot[li] = bin_slot(center + vec3<i32>(k % 3 - 1, (k / 3) % 3 - 1, k / 9 - 1));
+    }
+    workgroupBarrier();
+    if (li < 27u) {
+        let slot = pair_slot[li];
+        var repeated = false;
+        for (var m = 0u; m < li; m++) {
+            repeated = repeated || pair_slot[m] == slot;
+        }
+        pair_first[li] = atomicLoad(&bins[body_params.starts_base + slot]);
+        pair_count[li] = select(atomicLoad(&bins[body_params.counts_base + slot]), 0u, repeated);
+    }
+    workgroupBarrier();
+    if (li == 0u) {
+        var total = 0u;
+        for (var g = 0u; g < 27u; g++) {
+            total += pair_count[g];
+            pair_end[g] = total;
+        }
+        pair_frame.groups = 27u;
+        pair_frame.total = total;
+    }
+    return workgroupUniformLoad(&pair_frame);
+}
+
+// Candidate `k` of the workgroup's body: a body slot, or BODY_NONE for an all-pairs slot that
+// holds no binned body.
+fn pair_candidate(frame: PairFrame, k: u32) -> u32 {
+    if (body_params.broadphase == BROADPHASE_ALL_PAIRS) {
+        return select(BODY_NONE, k, binned(k));
+    }
+    var g = 0u;
+    var begin = 0u;
+    while (g + 1u < frame.groups && pair_end[g] <= k) {
+        begin = pair_end[g];
+        g++;
+    }
+    return atomicLoad(&bins[body_params.entries_base + pair_first[g] + k - begin]);
+}
+
+// Every lane adds its share of body `i`'s pairs to the workgroup's sums. mode 0: count
+// contacts; 1: position correction; 2: velocity impulses; 3: residuals. Positions and
+// velocities are read from half `half`.
+fn gather_lanes(i: u32, half: u32, mode: u32, frame: PairFrame, li: u32) {
+    for (var k = li; k < frame.total; k += 64u) {
+        let j = pair_candidate(frame, k);
+        if (j == i || j == BODY_NONE || !generated(i, j)) {
+            continue;
+        }
+        atomicAdd(&pair_tally[0], 1u);
+        let pair = pair_contact(i, j, half, mode != 1u);
+        if (pair.kind == 0u) {
+            continue;
+        }
+        atomicAdd(&pair_tally[1], 1u);
+        atomicAdd(&pair_tally[select(3u, 2u, pair.kind == 2u)], 1u);
+        if (mode == 0u) {
+            continue;
+        }
+        let weighted = mode != 1u;
+        let move_i = mobility(i, pair.normal, weighted);
+        let weight = move_i.weight + mobility(j, -pair.normal, weighted).weight;
+        if (weight <= 1e-6) {
+            continue;
+        }
+        var change = vec3<f32>(0.0);
+        var quantum = POSITION_QUANTUM;
+        if (mode == 1u) {
+            if (pair.depth <= 0.0) {
+                continue;
+            }
+            change = move_i.motion * (pair.depth / weight);
+            atomicAdd(&pair_tally[4], 1u);
+        } else {
+            let vi = work_vec3(i, WORK_VEL_A + half * 4u);
+            let vj = work_vec3(j, WORK_VEL_A + half * 4u);
+            // Positive apart, negative closing.
+            let normal_speed = dot(vi - vj, pair.normal);
+            if (pair.kind == 1u && pair.depth > 0.0) {
+                atomicMax(&pair_extreme[0], bitcast<u32>(pair.depth));
+            }
+            if (mode == 3u) {
+                if (normal_speed < 0.0) {
+                    atomicMax(&pair_extreme[1], bitcast<u32>(-normal_speed));
+                }
+                continue;
+            }
+            let parting = separation_target(i, j, pair.normal);
+            if (normal_speed >= parting) {
+                continue;
+            }
+            let impulse = (parting - normal_speed) / weight;
+            change = move_i.motion * (impulse * pair_scale(i, j));
+            quantum = VELOCITY_QUANTUM;
+        }
+        let fixed = vec3<i32>(round(change * quantum));
+        atomicAdd(&pair_sum[0], fixed.x);
+        atomicAdd(&pair_sum[1], fixed.y);
+        atomicAdd(&pair_sum[2], fixed.z);
+    }
+}
+
+// The workgroup's sums, once every lane has added its share.
+fn gathered() -> Gathered {
+    return Gathered(
+        vec3<i32>(atomicLoad(&pair_sum[0]), atomicLoad(&pair_sum[1]), atomicLoad(&pair_sum[2])),
+        atomicLoad(&pair_tally[0]),
+        atomicLoad(&pair_tally[1]),
+        atomicLoad(&pair_tally[2]),
+        atomicLoad(&pair_tally[3]),
+        atomicLoad(&pair_tally[4]),
+        bitcast<f32>(atomicLoad(&pair_extreme[0])),
+        bitcast<f32>(atomicLoad(&pair_extreme[1])),
+    );
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn pairs_count(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if (i >= body_params.body_count || !is_active(i)) {
+fn pairs_count(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
+    let frame = pair_prepare(i, li, true);
+    if (frame.gather == 0u) {
         return;
     }
-    let found = gather(i, 0u, 0u);
-    bodies[work_word(i, WORK_PAIRS)] = found.contacts;
-    add64_body(BDIAG_CANDIDATE_PAIRS_LO, found.candidates);
-    count_body(BDIAG_CONTACT_PAIRS, found.contacts);
-    count_body(BDIAG_SWEPT_CONTACTS, found.swept);
+    gather_lanes(i, 0u, 0u, frame, li);
+    workgroupBarrier();
+    if (li == 0u) {
+        let found = gathered();
+        add64_body(BDIAG_PAIR_VISITS_LO, frame.total);
+        bodies[work_word(i, WORK_PAIRS)] = found.contacts;
+        add64_body(BDIAG_CANDIDATE_PAIRS_LO, found.candidates);
+        count_body(BDIAG_CONTACT_PAIRS, found.contacts);
+        count_body(BDIAG_SWEPT_CONTACTS, found.swept);
+    }
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn pairs_position(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if (i >= body_params.body_count || !is_active(i)) {
+fn pairs_position(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
+    let frame = pair_prepare(i, li, false);
+    if (frame.integrated == 0u) {
         return;
     }
     let read = pass_params.parity;
     let write = 1u - read;
+    if (frame.gather != 0u) {
+        gather_lanes(i, read, 1u, frame, li);
+    }
+    workgroupBarrier();
+    if (li != 0u) {
+        return;
+    }
     var position = work_vec3(i, WORK_POS_A + read * 4u);
-    if (bodies[work_word(i, WORK_PAIRS)] > 0u) {
-        let found = gather(i, read, 1u);
+    if (frame.gather != 0u) {
+        let found = gathered();
+        add64_body(BDIAG_PAIR_VISITS_LO, frame.total);
         add64_body(BDIAG_CANDIDATE_PAIRS_LO, found.candidates);
         // Jacobi averaging: the mean of the corrections still needed this pass, within the
         // substep's correction bound around the binned position.
@@ -430,16 +514,25 @@ fn pairs_position(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn pairs_velocity(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if (i >= body_params.body_count || !is_active(i)) {
+fn pairs_velocity(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
+    let frame = pair_prepare(i, li, false);
+    if (frame.integrated == 0u) {
         return;
     }
     let read = pass_params.parity;
     let write = 1u - read;
+    if (frame.gather != 0u) {
+        gather_lanes(i, read, 2u, frame, li);
+    }
+    workgroupBarrier();
+    if (li != 0u) {
+        return;
+    }
     var velocity = work_vec3(i, WORK_VEL_A + read * 4u);
-    if (bodies[work_word(i, WORK_PAIRS)] > 0u) {
-        let found = gather(i, read, 2u);
+    if (frame.gather != 0u) {
+        let found = gathered();
+        add64_body(BDIAG_PAIR_VISITS_LO, frame.total);
         add64_body(BDIAG_CANDIDATE_PAIRS_LO, found.candidates);
         velocity += vec3<f32>(found.sum) / VELOCITY_QUANTUM;
     }
@@ -448,16 +541,18 @@ fn pairs_velocity(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn pairs_residual(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if (i >= body_params.body_count || !is_active(i)) {
+fn pairs_residual(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
+    let frame = pair_prepare(i, li, false);
+    if (frame.gather == 0u) {
         return;
     }
-    if (bodies[work_word(i, WORK_PAIRS)] == 0u) {
-        return;
+    gather_lanes(i, 0u, 3u, frame, li);
+    workgroupBarrier();
+    if (li == 0u) {
+        let found = gathered();
+        max_body(BDIAG_RESIDUAL_OVERLAP, found.deepest);
+        max_body(BDIAG_RESIDUAL_APPROACH, found.fastest);
+        bodies[work_word(i, WORK_TOUCHING)] = found.touching;
     }
-    let found = gather(i, 0u, 3u);
-    max_body(BDIAG_RESIDUAL_OVERLAP, found.deepest);
-    max_body(BDIAG_RESIDUAL_APPROACH, found.fastest);
-    bodies[work_word(i, WORK_TOUCHING)] = found.touching;
 }

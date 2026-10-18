@@ -841,14 +841,15 @@ impl GpuWorld {
             run(&kernels.bins_count, substep, 0, linear);
             run(&kernels.bins_scan, substep, 0, 1);
             run(&kernels.bins_scatter, substep, 0, linear);
-            run(&kernels.pairs_count, substep, 0, linear);
+            // The pair kernels and the contact kernels run one workgroup per body.
+            run(&kernels.pairs_count, substep, 0, extent);
             for iteration in 0..self.pair_iterations.position {
-                run(&kernels.pairs_position, substep, iteration, linear);
+                run(&kernels.pairs_position, substep, iteration, extent);
             }
             for iteration in 0..self.pair_iterations.velocity {
-                run(&kernels.pairs_velocity, substep, iteration, linear);
+                run(&kernels.pairs_velocity, substep, iteration, extent);
             }
-            run(&kernels.pairs_residual, substep, 0, linear);
+            run(&kernels.pairs_residual, substep, 0, extent);
             run(&kernels.claims_clear, substep, 0, extent);
             run(&kernels.contact_prepare, substep, 0, extent);
             run(&kernels.contact_apply, substep, 0, extent);

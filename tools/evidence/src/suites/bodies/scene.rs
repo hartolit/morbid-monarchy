@@ -250,7 +250,7 @@ impl Scene {
             });
         }
         self.prior = self.body_totals;
-        accumulate(&mut self.body_totals, &bodies);
+        self.body_totals.add(&bodies);
         self.tool_fluid_in += report.cells.tool_fluid_in;
         self.tool_solid_in += report.cells.tool_solid_in;
         self.tool_solid_out += report.cells.tool_solid_out;
@@ -380,33 +380,6 @@ impl Scene {
         self.slots.push((key, slot));
         Ok(())
     }
-}
-
-/// Adds one tick's body report to running sums (maxima for the residuals).
-pub fn accumulate(sum: &mut BodyReport, tick: &BodyReport) {
-    sum.substeps += tick.substeps;
-    sum.live = tick.live;
-    sum.suspended = tick.suspended;
-    sum.candidate_pairs += tick.candidate_pairs;
-    sum.contact_pairs += tick.contact_pairs;
-    sum.swept_contacts += tick.swept_contacts;
-    sum.terrain_contacts += tick.terrain_contacts;
-    sum.residual_overlap = sum.residual_overlap.max(tick.residual_overlap);
-    sum.residual_approach = sum.residual_approach.max(tick.residual_approach);
-    sum.speed_limited += tick.speed_limited;
-    sum.swept_bodies += tick.swept_bodies;
-    sum.fluid_in += tick.fluid_in;
-    sum.fluid_out += tick.fluid_out;
-    sum.solid_in += tick.solid_in;
-    sum.solid_out += tick.solid_out;
-    sum.compaction += tick.compaction;
-    sum.ice_broken += tick.ice_broken;
-    sum.organics_cleared += tick.organics_cleared;
-    sum.craters += tick.craters;
-    sum.ruts += tick.ruts;
-    sum.splashes += tick.splashes;
-    sum.wakes += tick.wakes;
-    sum.claims_lost += tick.claims_lost;
 }
 
 /// One chunk of `shape` applied to dirt columns.

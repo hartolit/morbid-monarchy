@@ -89,6 +89,8 @@ pub struct LedgerSummary {
     pub inconsistent_ticks: u64,
     pub last_inconsistent_tick: Option<Tick>,
     pub body_inconsistent_ticks: u64,
+    /// Every body report so far, added up: what the bodies did and moved (`BodyReport::add`).
+    pub bodies: crate::port::BodyReport,
     /// Device time of the body substeps, in milliseconds, when timestamps are available.
     pub body_time_ms: Series,
     pub cosmetic_received: u64,
@@ -229,6 +231,7 @@ impl OutcomeLedger {
                 }
             }
             Outcome::BodiesCompleted { tick, report } => {
+                self.summary.bodies.add(&report);
                 if !report.consistent() {
                     self.summary.body_inconsistent_ticks += 1;
                     self.inconsistent(tick);

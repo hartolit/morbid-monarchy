@@ -11,6 +11,7 @@ pub mod adversarial;
 pub mod consumer;
 pub mod identity;
 pub mod intentions;
+pub mod measure;
 pub mod oracle;
 pub mod probes;
 pub mod rays;
@@ -158,5 +159,25 @@ pub const CASES: &[Case] = &[
         name: "observation-delivery",
         summary: "a consumer drains body events late from a saturated ring and still sees every counter once; replays in hostile orders agree",
         run: consumer::observation_delivery,
+    },
+    Case {
+        name: "body-scaling-bins",
+        summary: "64 to 4096 bodies, distributed and in a dense attracted pile, with the bins: body pass time, pairs, residuals, bytes, CPU work",
+        run: measure::scaling_bins,
+    },
+    Case {
+        name: "body-scaling-all-pairs",
+        summary: "the same workloads with the all-pairs broadphase, for comparison",
+        run: measure::scaling_all_pairs,
+    },
+    Case {
+        name: "body-legacy-workloads",
+        summary: "the legacy baseline's frozen body-contact scenarios (64 and 256 spheres) replayed tick for tick on the GPU",
+        run: measure::legacy_workloads,
+    },
+    Case {
+        name: "body-pacing",
+        summary: "the runtime at 60 Hz of wall time with 256 and 4096 bodies: ticks kept and discarded, pressure, latency, sample age",
+        run: measure::pacing,
     },
 ];

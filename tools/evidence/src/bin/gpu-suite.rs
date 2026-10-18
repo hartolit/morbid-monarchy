@@ -6,10 +6,11 @@
 //! gpu-suite --suite transfers --list
 //! gpu-suite --suite transfers --adapter vulkan-10de-2c05 --case empty-batches --result out.json
 //!           [--allow-software]
+//! gpu-suite --scenario resident-world --adapter vulkan-10de-2c05 --result out.json
 //! ```
 //!
-//! The process exits 0 only when the case passed; its result, with failures, notes and
-//! metrics, is written as JSON to `--result`.
+//! The process exits 0 only when the case (or every step of the scenario) passed; its result,
+//! with failures, notes and metrics, is written as JSON to `--result`.
 
 use std::process::ExitCode;
 
@@ -30,6 +31,9 @@ fn main() -> ExitCode {
             .and_then(|index| args.get(index + 1))
             .cloned()
     };
+    if let Some(scenario) = value("--scenario") {
+        return run_scenario(&scenario, value("--adapter"), value("--result"), &args);
+    }
     let Some(suite) = value("--suite").as_deref().and_then(GpuSuite::parse) else {
         eprintln!("gpu-suite: --suite NAME is required");
         return ExitCode::from(2);
@@ -68,6 +72,38 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     if result.passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn run_scenario(
+    scenario: &str,
+    adapter: Option<String>,
+    result_path: Option<String>,
+    args: &[String],
+) -> ExitCode {
+    let (Some(adapter), Some(result_path)) = (adapter, result_path) else {
+        eprintln!("gpu-suite: --adapter and --result are required");
+        return ExitCode::from(2);
+    };
+    suites::set_allow_software(args.iter().any(|arg| arg == "--allow-software"));
+    let Some(result) = suites::scenarios::run(scenario, &adapter) else {
+        eprintln!("gpu-suite: unknown scenario `{scenario}`");
+        return ExitCode::from(2);
+    };
+    for step in &result.steps {
+        for failure in &step.failures {
+            println!("FAILED {}: {failure}", step.name);
+        }
+    }
+    let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+    if let Err(error) = std::fs::write(&result_path, json) {
+        eprintln!("gpu-suite: write {result_path}: {error}");
+        return ExitCode::from(1);
+    }
+    if result.passed() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

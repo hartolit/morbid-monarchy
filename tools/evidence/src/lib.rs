@@ -169,7 +169,13 @@ fn run_command(command: &Command, root: &Path, run_dir: &Path) -> (Vec<Item>, se
         Command::Run { scenario, adapter } => {
             let records = gpu::enumerate();
             match gpu::resolve(&records, adapter) {
-                Ok(record) => (gpu::scenario_items(scenario, record), adapter_data(record)),
+                Ok(record) => {
+                    let lane = gpu::LaneContext { root, run_dir };
+                    (
+                        gpu::scenario_items(scenario, record, &lane),
+                        adapter_data(record),
+                    )
+                }
                 Err(item) => (vec![item], serde_json::Value::Null),
             }
         }
@@ -184,7 +190,7 @@ fn run_command(command: &Command, root: &Path, run_dir: &Path) -> (Vec<Item>, se
                     let (suite_items, results) =
                         gpu::suite_items(cli::GpuSuite::All, record, &lane);
                     items.extend(suite_items);
-                    items.extend(gpu::scenario_items("resident-world", record));
+                    items.extend(gpu::scenario_items("resident-world", record, &lane));
                     (
                         items,
                         serde_json::json!({ "adapter": record, "suites": results }),

@@ -669,10 +669,12 @@ gpu_record! {
         claims_lost: atomic_u32,
         live: atomic_u32,
         suspended: atomic_u32,
+        /// Candidate slots the pair passes examined, before the generation test: the
+        /// broadphase's work.
+        pair_visits_lo: atomic_u32,
+        pair_visits_hi: atomic_u32,
         reserved0: u32,
         reserved1: u32,
-        reserved2: u32,
-        reserved3: u32,
     }
 }
 

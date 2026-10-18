@@ -1,10 +1,10 @@
 # CPU–GPU execution contract
 
-**Implemented in 02 for the command, query and transfer path and in 03 for the material
-phases; bodies follow in 04.** This document owns the semantic obligations. Since 02 the
-interfaces exist: the port is `world_runtime::port`, its GPU implementation
-`gpu_world::world::GpuWorld`, and the `transfers` (02) and `cells` (03) GPU suites execute this
-contract on a device. Change this account with the implementation; do not
+**Implemented in 02 for the command, query and transfer path, in 03 for the material phases and
+in 04 for bodies, rays and the body observations.** This document owns the semantic
+obligations. Since 02 the interfaces exist: the port is `world_runtime::port`, its GPU
+implementation `gpu_world::world::GpuWorld`, and the `transfers` (02), `cells` (03) and
+`bodies` (04) GPU suites execute this contract on a device. Change this account with the implementation; do not
 maintain a parallel prose-only protocol.
 
 ## Identity and time
@@ -78,10 +78,27 @@ compaction into sandstone, raise and lower within the elevation range).
 answered `Configured`) and `MeasureTotals` (a reduction over every resident cell in command
 order, answered with `WorldTotals`). The edit kernel marks every cell it changes as edited, so
 the stroke wakes its reach for the same tick's material phases, and adds what it painted, raised
-or removed to the tick's tool counters. Body, drive, jump, attract and lift commands are still
-refused as `NotSupported` until 04. The runtime can hold a command until a named tick
+or removed to the tick's tool counters. The runtime can hold a command until a named tick
 (`Runtime::submit_at`), which keeps scripted inputs on their logical tick whatever the frame
 pacing.
+
+*Implemented (04).* Every command kind is executed: `SpawnBody`, `RemoveBody`, `DriveBody`,
+`JumpBody`, `AttractBodies`, `LiftBodies`, `SetElevationScale` and `QueryRay` join the edits,
+queries and configuration. A command acts at a `Target`: a column (its cell vertex) or a
+`Ray` (an `f64` origin, a unit direction and a length of at most `RAY_MAX_DISTANCE`, 1000
+units). The device resolves a ray (`resolve_target`) against the same triangulated heightfield
+bodies collide with, and the nearest live body it crosses; the CPU never reads terrain to place
+an edit. A ray-targeted command reads its hit from its own result record; a ray that misses or
+reaches a column that is not resident below the highest possible surface is answered
+`TargetMissed(SurfaceHit::Miss | NotResident { distance })` and changes nothing. A spawn takes a
+slot on the CPU only once the tick is accepted (`BodyCapacity` when the table is full); a body
+command naming a removed, never-issued or older-generation handle is answered `StaleBody` (on
+the CPU when the table already knows, and checked again on the device), and a spawn whose ray
+missed frees its slot when its outcome arrives. Drive accelerates along the drive direction up
+to its speed, jump adds the jump impulse along the ground normal only when grounded
+(`Jumped { jumped: false }` otherwise), attraction accelerates every live body toward the point
+for one tick, and lift raises and centres the bodies within its influence; a suspended body
+ignores them.
 
 ## Cell layout and authority
 
@@ -101,13 +118,18 @@ little-endian 32-bit word, so field `n` is at byte `4n` in both languages:
 | --- | ---: | --- |
 | `TickParams` | 128 | Uniform: tick, epoch, command count, window size in chunks, capacities, injected events; since 03 the window's lowest key, the rules running this tick, activity and phase flags, phase thresholds, rule tick and key, parity, tile count and the activity buffer's region offsets. |
 | `DispatchParams` | 16 | Uniform, one entry per command position at the uniform offset alignment; entry `i` names command `i`. |
-| `CommandRecord` | 48 | Kind, identity, sequence; edit tool, window-local centre, radius, strength; query cell. |
-| `ResultRecord` | 48 | Identity echo, status, tick, atomic changed / not-resident counts, column words, slot. |
+| `CommandRecord` | 112 | Kind, identity, sequence; edit tool, window-local centre, radius, strength; query cell; target kind; body slot and generation; four command parameters; window-local ray origin, direction and length (04). |
+| `ResultRecord` | 96 | Identity echo, status, tick, atomic changed / not-resident counts, column words, slot; ten payload words (ray hit, body, target point; 04). |
 | `EventHeader`, `EventRecord` | 16, 16 | Cosmetic event buffer: atomic attempt and drop counts, capacity; kind and three words. |
 | `ChunkSlotRecord` | 32 | Absolute key, generation, revision, state of each slot. |
 | `DiagnosticsRecord` | 144 | Per tick (03): the material phases' 64-bit accounting, tool counters, tiles and cells visited, rejected transfers, stale transfer reads and receive mismatches. |
 | `TotalsRecord` | 96 | Per totals command (03): 64-bit fluid volume per fluid material, elevation, loose volume and cells. |
-| `BodyRecord` | 64 | Handle, flags, position, radius, velocity, mass, relative density, submerged fraction; executed by the layout probe, used from 04. |
+| `BodyState` | 128 | Per body (04): anchor chunk and in-chunk position, velocity, flags, generation, ground normal, submerged fractions, pending wake, the filtered ground plane, the six interaction counters, touching count, liquid, this tick's events and impact, the packed terrain-contact normal. |
+| `BodyConfig` | 16 | Per body: mass, radius, relative density, inverse mass. |
+| `BodySampleRecord` | 96 | Per selected body and tick: status, the echoed handle, flags, anchored position, velocity, ground normal, submerged fraction, liquid, touching, counters. |
+| `BodyParams` | 128 | Uniform per tick: body extent and capacity, substeps and their length, elevation scale, samples, broadphase, hash mask, the regions of the bodies and bins buffers. |
+| `BodyDispatch` | 16 | Uniform, one entry per (substep, pass) at the offset alignment: substep, pass, ping-pong parity. |
+| `BodyDiagnosticsRecord` | 128 | Per tick: candidate pairs and pair visits (64-bit), contacts, swept contacts, terrain contacts, residual overlap and approach, speed-limited substeps, the body accounting (64-bit), craters, ruts, splashes, wakes, lost claims, live and suspended bodies. |
 
 Kernels see window-local coordinates only: cell `(0, 0)` is the first cell of the window's lowest
 chunk. A window map holds one slot index per window chunk, or `SLOT_NONE`, which every kernel treats
@@ -175,8 +197,9 @@ wgpu orders dispatches that use the same read-write storage buffer with a barrie
 treats no `STORAGE_READ_WRITE` use as ordered), so each command reads the results of the commands
 before it, and each material pass reads the finished output of the one before; the copies after
 the pass read the finished results. Uploads therefore activate before the tick's commands, and a
-capture holds the cells at the end of the tick, after the material phases. 04 inserts the body
-substeps after `commit`.
+capture holds the cells at the end of the tick, after the material phases. Since 04 a fourth
+compute pass runs the body substeps after `commit` (below), and a capture holds the cells after
+them.
 
 ### Cell phases (03)
 
@@ -342,6 +365,109 @@ residency policy; it does not tunnel into an empty default grid.
 Persist/suspend nonresident bodies in 05. Generation-bearing handles remain valid across live
 state movement or are explicitly invalidated and replaced—not silently recycled.
 
+#### Bodies (04)
+
+*Identity.* A body is a slot of a bounded table (`transfer.bodies`, up to 4,096) and a 32-bit
+generation; `BodyHandle` carries both. The CPU table (`gpu_world::bodies::BodyTable`) allocates
+the lowest free slot, bumps the generation on release and retires a slot whose generation is
+exhausted instead of reusing it; the device keeps the generation in `BodyState` and checks it
+for every body command. The kernels run over the extent (highest live slot plus one).
+
+*State.* Body state lives on the device. A position is anchored: the chunk key of an anchor
+plus a position inside it, re-anchored at the end of every substep, so a body far from the world
+origin keeps its precision and a window move changes nothing. Kernels compute in window-local
+render coordinates (x the cell x, z minus the cell y). The CPU holds intent (commands) and
+observations (samples), never a pose to write back.
+
+*Clock.* Each `TickBatch` carries the tick rate; the tick is split into
+`substeps_per_tick(rate)` equal substeps of at most 1/120 s (2 at 60 Hz, 12 at 10 Hz, 1 at 144
+and 240 Hz). A body integrates in the tick of its spawn. The same scheduled commands give
+bit-identical bodies at one tick whatever the presentation rate (`body-presentation-rates`).
+Speed is capped at 600 units/s and every capped substep is counted; no substep travels more than
+5 units.
+
+*Order and read versions.* The body pass follows the tick's material commit. Per substep:
+
+```text
+bins_clear -> body_begin (suspend at the residency edge; gravity, buoyancy, drag; the speed cap)
+  -> bins_count -> bins_scan -> bins_scatter        (every binned body, at its integrated position)
+  -> pairs_count -> position passes -> velocity passes -> pairs_residual
+  -> claims_clear -> contact_prepare -> contact_apply -> contact_response   (terrain, round 1)
+  -> claims_clear -> displace_prepare -> displace_apply                     (liquid, round 2)
+  -> body_end (re-anchor, counters, the tick's cosmetic event)
+then once per tick: body_observe (the selected samples)
+```
+
+A substep reads the cells as the tick's material phases and the earlier substeps left them:
+deformation committed in one substep is the ground the next substep touches. Every cell a body
+changes is marked edited, so the next tick's material phases wake it (a crater's walls slump,
+displaced water flows back). Bodies read other bodies only through the solver's ping-pong
+halves, so no pass reads a value another invocation is writing.
+
+*Broadphase.* A counting sort of every binned body (active, and suspended bodies inside the
+window, which are obstacles) into a hash table of 3-D bins, a power of two at least twice the
+capacity. The bin edge is the farthest two bodies can be apart and still meet in the substep
+(twice the largest live radius and the farthest travel, the contact slop and the solver's
+margin), so the 27 bins around a body hold every possible partner; a bin has no capacity, so no
+pair is dropped, and hash collisions only add candidates the generation test rejects. Candidate
+pairs are generated once per substep from the integrated positions; the all-pairs broadphase (a
+`GpuWorldConfig::broadphase` mode kept for comparison) applies the same generation test to every
+slot, so both solve exactly the same pairs and give bit-identical bodies (`dense-cluster`).
+`broadphase-oracle` checks the bins against an exhaustive bound on crafted clusters, coincident
+centres, a lattice on the bin edges and fast bodies.
+
+*Solver.* A per-body Jacobi gather with explicit limits: `GpuWorldConfig::pair_iterations`
+position and velocity passes per substep (each even, 2–16, default 16 and 16). Each pass runs one
+64-lane workgroup per body; the lanes share its candidates and every contribution meets the
+others as an integer (fixed-point sums at 2⁻¹⁶ units and 2⁻¹² units/s, counts) or as the bits of
+a non-negative float (maxima), so the result is independent of order and deterministic. Position
+passes split an overlap equally between the pair, move a body by the mean of the corrections
+still needed, and never move it more than 0.5 units from where it was binned in one substep (a
+maximum depenetration speed, which also bounds the margin candidate generation allows). Velocity
+passes drive a touching pair toward its parting speed, the baseline restitution (0.2) of the
+approach the solve started from, or none below the baseline's settle speed, by impulses split by
+inverse mass and scaled by one over the larger contact count of the pair, so impulses stay equal
+and opposite. A pair that meets during the substep takes its normal at the time of impact, and
+centres that cross keep the side they started on, so fast bodies do not pass through each other
+(`fast-bodies`). A body that touched terrain in the last substep slides along it rather than
+being pushed into it. Convergence limit, measured: in a dense pile of 512 bodies of radius 2–8,
+settled, no pair overlaps by more than 0.4 of its smaller radius at the default passes, and
+fewer passes leave it more compressed (`dense-cluster`).
+
+*Terrain contact and deformation.* One workgroup per body. `contact_prepare` sweeps a fast body
+in steps of at most one unit against the unyielded surface, fits the ground plane and decides a
+crater or a rut; `contact_apply` crushes and shoves the material under its footprint;
+`contact_response` pushes the body out and applies the baseline's bounce, sweeps and rolling
+friction, and decides grounding; `displace_*` throws splashes and wakes. Several bodies may want
+the same cells: every footprint cell is claimed per round with an `atomicMin` of a key ranking
+the cell under a body before a deposit and the nearer body before the farther, and a body
+writes only cells it owns, treating the others as closed; a lost claim is displacement the body
+did not do (`claims_lost`), never lost material. Displaced units are apportioned over the
+receiving cells by cumulative rounding with an exact 32-bit multiply-divide, which never exceeds
+a cell's room. A brush stroke in the tick's command pass and the body substeps write the same
+cells at different points of the timeline, never concurrently (`shared-deformation`).
+
+*Accounting.* Each tick's `BodyReport` (outcome `BodiesCompleted`) carries the liquid and solid
+the bodies moved out of and into cells, and the bedrock compacted under craters and trails, the
+one declared sink: `fluid_in == fluid_out` and `solid_in == solid_out - compaction` on every
+tick, or the ledger counts it inconsistent. Restitution and crushing losses are counted as
+absorbed energy, a separate quantity.
+
+*Residency edge.* A body whose reach box (2.75 radii plus 2 plus its travel) touches a chunk
+that is not resident, or whose anchor is far outside the window, is suspended: frozen with its
+state and identity, binned as an immovable obstacle while inside the window, ignoring controls,
+and resumed when the terrain under it is resident again (`residency-edge`). Missing chunks are
+never empty space and wrapped slots are never neighbours. 05 persists suspended bodies and
+reloads them with their chunks.
+
+*Preflight and faults.* A tick's command, staging, sample and readback reservations are taken
+before any command is encoded, and the CPU body table changes only once the tick is accepted,
+so a refused tick changes nothing. Device work is bounded by construction: a footprint fits
+the workgroup's 27 × 27 cells, a ray marches at most 64 segments of 128 quads, a pass visits a
+body's candidates once. A readback whose results, samples or ray answers do not decode (another
+handle, an unknown surface outcome, a body slot beyond the table) faults the session; the tick
+is not reported completed.
+
 ### Supported physical envelope (fixed in 01)
 
 `world-model` owns these values in code (`config`, `body`, `units`). The GPU runtime handles every
@@ -358,8 +484,9 @@ visible, never a silent clamp. The baseline column shows where today's CPU appli
 | Body radius | 2–8 | world units | The presets use 4. Below 2, contact sampling sees too few cell vertices; above 8, the footprint (up to 2.75 radii, 22 cells) outgrows the bins. | Unchecked. |
 | Body relative density | 0.01–25 | × water | 0.01 is the solver's buoyancy floor; 25 exceeds the densest metals. | Floored at 0.01. |
 | Body mass | 0.01–1000 | solver mass unit | Only ratios and the rut depth's square-root scaling use mass; it is not a calibrated kilogram. | Unchecked. |
-| Body speed | up to 600 | world units/s | Attract's terminal speed against air drag is 350 / 0.6 ≈ 583. At 1/120 s a body at this speed moves 5 units per substep, more than the smallest radius, so 04 subdivides or sweeps fast bodies. | Unbounded. |
-| Bodies | up to 4,096 | count | The capacity profile. | Unbounded; all n(n−1)/2 pairs tested every substep. |
+| Body speed | up to 600 | world units/s | Attract's terminal speed against air drag is 350 / 0.6 ≈ 583. At 1/120 s a body at this speed moves 5 units per substep, more than the smallest radius; 04 sweeps fast bodies against terrain and each other and caps the speed, counting capped substeps. | Unbounded. |
+| Bodies | up to 4,096 | count | The capacity profile; a spawn into a full table is refused with the capacity. | Unbounded; all n(n−1)/2 pairs tested every substep. |
+| Ray | up to 1,000 | world units | Bounds the device's traversal: 64 segments, each marching at most 128 quads. | The pointer's ray, unbounded. |
 | Brush | radius 0–64, strength 1–255 | cells, units per cell | Radius 64 touches at most 12,853 cells per stroke. | Same. |
 | Active window | radius 1–32 | chunks per axis | At radius 32 one packed cell array is 132 MiB, beyond a default 128 MiB storage binding. 02 requests the larger binding; a device that cannot grant it refuses radius 32 ([below](#gpu-resource-lifecycle)). | Same range; CPU arrays. |
 
@@ -501,6 +628,22 @@ identity, position and tick. The summary reports the latest observed tick, input
 observation age in ticks, tick latency and pass time. In 02 the only cosmetic producer is the
 pressure-injection kernel; contacts and immersion (04) are the first real ones.
 
+*Implemented (04).* A `TickBatch` names up to `body_samples_per_tick` (64) bodies to sample;
+`body_observe` writes each one's `BodySample` (pose, velocity, ground normal, grounded and
+suspended, submerged fraction and liquid, touching count and counters) at the end of the tick,
+echoing the handle, or reports it `BodyGone`; the runtime's `BodyMonitor` chooses them (the
+controlled body every tick, the others in turn). Important body outcomes are the device's
+per-body counters (landings, liquid entries, body contacts, craters, splashes, absorbed energy),
+which only grow and wrap in 32 bits: the monitor delivers the difference against a per-body
+watermark, so a delayed, reordered, duplicated or skipped sample neither repeats nor drops one,
+and spawn and removal outcomes (with the final counters) arrive through command receipts. The
+monitor's event ring never overwrites: an event that does not fit is deferred (the watermark
+stays) and the next drain delivers it; removals that do not fit wait, one per slot, and only
+beyond that are counted unreported, their receipts still holding them. The cosmetic producer is
+one `EVENT_BODY` per body per tick, coalescing its craters, splashes, contacts and landings and
+its strongest impact; overflow is counted on the device and in the ledger. The ledger adds every
+`BodiesCompleted` report into `LedgerSummary::bodies`. Sixty-four samples are 6 KiB per tick.
+
 The rings are sized from the budgets: 256 commands and their results are 24 KiB per tick, at most
 96 KiB per presented frame at the default catch-up of four ticks, inside the 256 KiB budget; the
 measured steady payload is in the [performance budgets](performance-budgets.md#measured-transfer-lifecycle-02).
@@ -524,8 +667,13 @@ CPU emulation alone cannot satisfy this boundary.
 
 `cargo evidence test gpu --suite transfers --adapter ID` executes these on the named adapter, one
 process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 28 cases
-(`target = "gpu:transfers"`) and what each establishes. Stale body handles wait for bodies (04).
+(`target = "gpu:transfers"`) and what each establishes.
 `--suite cells` (03) executes the material phases: rule probes against world-model, the ten
 baseline simulation intentions, adversarial capacity, ceiling, seam, sleeping-receiver,
 reactivation, rebasing and rollover cases, dense/sparse agreement, the unmatched-transfer
-specimen and the activity measurement, 31 cases (`target = "gpu:cells"`).
+specimen and the activity measurement, 31 cases (`target = "gpu:cells"`). `--suite bodies` (04)
+executes bodies, rays and observations: the twelve baseline sphere tests and apportionment as
+GPU cases, geometry probes, the broadphase oracle, handles and stale generations, the fixed
+clock, clusters, fast bodies, shared deformation, edits under a resting body, the residency
+edge, rays against an independent reference, ray-targeted commands, controls through receipts,
+observation delivery under pressure and the measurements, 32 cases (`target = "gpu:bodies"`).

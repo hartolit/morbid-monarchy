@@ -18,7 +18,7 @@ use crate::{
     paths,
     process::{Step, run_logged},
     report::{Item, State},
-    suites::{self, CaseResult},
+    suites::{self, CaseResult, scenarios::ScenarioResult},
     tests_cpu::Registry,
 };
 
@@ -346,21 +346,111 @@ fn run_suite(
     (items, results)
 }
 
-/// Connected scenarios run through the production runtime. They are registered here by the
-/// stages that deliver them.
-pub fn scenario_items(scenario: &str, adapter: &AdapterRecord) -> Vec<Item> {
-    let summary = match scenario {
-        "resident-world" => format!(
-            "`resident-world` is not implemented; 04–05 build it and 07 completes it (adapter {})",
-            adapter.id
-        ),
-        other => format!("unknown scenario `{other}`; registered: resident-world"),
+/// The longest a connected scenario may run before it is killed and failed.
+const SCENARIO_TIME_LIMIT: Duration = Duration::from_secs(300);
+
+/// Connected scenarios run through the production runtime, in their own `gpu-suite` process.
+/// Each step is one item: a step its owner stage has not delivered fails, so the scenario fails
+/// until every step exists.
+pub fn scenario_items(
+    scenario: &str,
+    adapter: &AdapterRecord,
+    lane: &LaneContext<'_>,
+) -> Vec<Item> {
+    let id = format!("scenario.{scenario}");
+    if scenario != "resident-world" {
+        return vec![Item::new(
+            id,
+            State::Failed,
+            format!("unknown scenario `{scenario}`; registered: resident-world"),
+        )];
+    }
+    if !lane.root.join("Cargo.toml").is_file() {
+        return vec![Item::new(
+            format!("{id}.build"),
+            State::Failed,
+            format!("{} is not the workspace", lane.root.display()),
+        )];
+    }
+    let build = run_logged(
+        &Step::new("cargo", lane.root).args([
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "monarchy-evidence",
+            "--bin",
+            SUITE_BINARY,
+        ]),
+        lane.run_dir,
+        &format!("{scenario}-build"),
+    );
+    if build.state != State::Passed {
+        return vec![
+            Item::new(
+                format!("{id}.build"),
+                build.state,
+                format!("scenario build {}", build.reason.unwrap_or_default()),
+            )
+            .with_log(build.log),
+        ];
+    }
+    let result_path = lane.run_dir.join(format!("{scenario}.json"));
+    let _ = std::fs::remove_file(&result_path);
+    let mut step = Step::new(suite_binary(lane.root).as_os_str(), lane.root)
+        .args(["--scenario", scenario, "--adapter", &adapter.id, "--result"])
+        .arg(result_path.as_os_str())
+        .timeout(SCENARIO_TIME_LIMIT);
+    if adapter.software {
+        step = step.arg("--allow-software");
+    }
+    let outcome = run_logged(&step, lane.run_dir, scenario);
+    let parsed = std::fs::read_to_string(&result_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<ScenarioResult>(&text).ok());
+    let Some(result) = parsed else {
+        return vec![
+            Item::new(
+                id,
+                State::Failed,
+                format!(
+                    "no result ({})",
+                    outcome
+                        .reason
+                        .unwrap_or_else(|| "exited without writing one".to_owned())
+                ),
+            )
+            .with_log(outcome.log),
+        ];
     };
-    vec![Item::new(
-        format!("scenario.{scenario}"),
-        State::Failed,
-        summary,
-    )]
+    result
+        .steps
+        .iter()
+        .map(|step| {
+            let mut details: Vec<String> = step
+                .failures
+                .iter()
+                .map(|failure| format!("FAILED {failure}"))
+                .collect();
+            details.extend(step.notes.iter().map(|note| format!("note: {note}")));
+            details.extend(
+                step.metrics
+                    .iter()
+                    .map(|(key, value)| format!("{key}: {value}")),
+            );
+            Item::new(
+                format!("{id}.{}", step.name),
+                if step.passed {
+                    State::Passed
+                } else {
+                    State::Failed
+                },
+                format!("({}) {}", step.owner, step.summary),
+            )
+            .with_details(details)
+            .with_log(outcome.log.clone())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -404,7 +494,7 @@ mod tests {
             assert_eq!(items[0].state, State::Failed, "{}", items[0].id);
         }
         assert_eq!(
-            scenario_items("resident-world", &adapter)[0].state,
+            scenario_items("resident-world", &adapter, &lane)[0].state,
             State::Failed
         );
         let missing = resolve(&[adapter], "gl-0000-0000").expect_err("unknown adapter");

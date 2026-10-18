@@ -2242,3 +2242,43 @@ origin = "transition"
 expectation = "With a ring of eight events drained every 25 ticks, six samples a tick for 30 bodies and four cosmetic events a tick, every one of 36 bodies' delivered landings, liquid entries, contacts, craters and splashes equals its removal counters, each spawn and removal is delivered once, the ring deferred instead of dropping, cosmetic overflow is counted, samples apply within the frames in flight and the consumer's jumps answer the controlled body's landings; replays of a recorded stream with delayed, reversed and duplicated samples and late spawns deliver the same events."
 destination = "gpu-world bodies on the selected adapter (04); rerun with each later GPU stage"
 determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.measure.scaling-bins"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-scaling-bins"
+origin = "transition"
+expectation = "At 64, 256, 1024 and 4096 bodies, distributed and in a dense attracted pile, with the bins and the default 16 + 16 passes (and 4 + 4, 8 + 8 at the dense 4096): every body spawned and live, no buffer created, no frame wait, every tick balanced; reports body-pass device time, pair visits, candidates, contacts, residuals, encode time, round trip, bytes and allocations per tick."
+destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.measure.scaling-all-pairs"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-scaling-all-pairs"
+origin = "transition"
+expectation = "The same workloads with the all-pairs broadphase, the comparison baseline; the same structural checks and reports."
+destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.measure.legacy-workloads"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-legacy-workloads"
+origin = "transition"
+expectation = "The legacy baseline's frozen body-contact scenarios (qualification: 64 metal spheres at radius 6; scale: 256 at radius 16; seed-69 terrain, every rule family), whose files still hash to the SHA-256 the baseline recorded, replayed tick for tick: every sphere spawned, every tick balanced, nothing created while measuring; reports body-pass device time against the baseline's body CPU time and pair tests."
+destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.bodies.measure.pacing"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "body-pacing"
+origin = "transition"
+expectation = "The runtime presenting 60 Hz frames of wall time at 256 distributed and 4096 dense bodies: no frame waits, at most three ticks in flight, every tick balanced; reports ticks kept and discarded, frames under pressure, frame CPU time, tick latency and body sample age."
+destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
+determinism = "float-tolerance"
