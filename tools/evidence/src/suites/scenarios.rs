@@ -56,37 +56,38 @@ impl ScenarioResult {
     }
 }
 
-/// The steps of `resident-world`, in order, with the stage that delivers each.
+/// The steps of `resident-world`, in order, with the stage that delivers each: the six steps of
+/// the acceptance matrix's connected execution trace.
 pub const RESIDENT_WORLD_STEPS: [(&str, &str, &str); 6] = [
     (
         "known-terrain",
         "04",
-        "known chunks with a sand bank and a water basin become resident; columns at chunk corners, negative cells and the window edge read back as uploaded",
+        "known chunks with a sand bank on rock and a water basin become resident; columns at chunk corners, negative cells and the window edge read back as uploaded",
     ),
     (
         "sphere-into-water",
         "04",
-        "a controlled sphere driven across the sand bank into the water ruts the sand and displaces water, every tick balanced",
+        "a controlled sphere driven across the sand bank into the water ruts the sand and displaces water; every tick balances and the totals change by exactly the declared sinks",
     ),
     (
         "ray-edit-and-consumer",
         "04",
-        "a brush stroke at a GPU-resolved ray is acknowledged and observed; the CPU consumer reacts to the sphere's observed entry into water and the reaction applies",
+        "a brush stroke at a GPU-resolved ray is acknowledged and observed; the CPU consumer reacts to the sphere's observed immersion and its reaction applies",
     ),
     (
-        "focus-and-eviction",
+        "move-and-return",
         "05",
-        "focus moves across chunk boundaries, dirty outgoing chunks are captured and evicted, new chunks load",
-    ),
-    (
-        "return-and-reload",
-        "05",
-        "focus returns and the edited chunks reload with their changes",
+        "the window moves until the modified regions leave it, they are captured before reuse, and focus returns before a delayed save finishes: the newest state wins",
     ),
     (
         "checkpoint-and-reopen",
+        "05",
+        "a complete checkpoint at one completed tick, with bodies and configuration; the application, runtime and store are destroyed, reopened and compared",
+    ),
+    (
+        "adversarial-recovery",
         "05, 07",
-        "a complete checkpoint is saved, the application and store are destroyed and reopened, and the promised state compares equal",
+        "the trace again with delayed mapping and consumers, reordered loads, a failed write, an overlapping resize and an interruption, recovering from the last complete checkpoint",
     ),
 ];
 
@@ -116,12 +117,13 @@ fn step(name: &str, check: Check, implemented: bool) -> StepResult {
     }
 }
 
-/// The scenario's terrain, by absolute cell: a sand bank west of x = 40 (stone at 44 under six
-/// units of sand), a slope down to x = 64, and east of it a stone basin at 16 holding 24 units
-/// of water. Rows differ only by a one-unit ripple every 16 cells of y, so cells keep their
-/// identity in the checks.
+/// The scenario's terrain, by absolute cell: a sand bank west of x = 40 (rock at 44 under six
+/// units of sand), a slope down to x = 64, and east of it a rock basin at 16 holding 24 units of
+/// water. Rows differ only by a one-unit ripple every 16 cells of y, so cells keep their identity
+/// in the checks.
 pub fn known_terrain(cell: IVec2) -> WorldCell {
     let mut column = scene::dirt();
+    column.set_terrain_mat(TerrainMat::TERRAIN_STONE);
     let ripple = u16::from(cell.y.rem_euclid(16) == 0);
     if cell.x < 40 {
         column.set_elevation(44 + ripple);
@@ -132,7 +134,6 @@ pub fn known_terrain(cell: IVec2) -> WorldCell {
         column.set_granular_mat(GranularMat::GRANULAR_SAND);
         column.set_granular_vol(4);
     } else {
-        column.set_terrain_mat(TerrainMat::TERRAIN_STONE);
         column.set_elevation(16 + ripple);
         column.set_fluid_mat(FluidMat::FLUID_WATER);
         column.set_fluid_vol(24);
@@ -339,6 +340,7 @@ fn known_terrain_step(adapter: &str, check: &mut Check) -> Result<Story, String>
 /// basin.
 fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, String> {
     let at = story.next() + 1;
+    let before = story.submit(Command::MeasureTotals, at)?;
     story.submit(
         Command::SetSimulationRules(SimulationRules::DETERMINISTIC),
         at,
@@ -415,8 +417,26 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
     if let Some(tick) = entered {
         check.metric("entered_water_at_tick", tick.value() - started);
     }
+    // The expected material units: liquid is conserved (no rule here boils, burns or takes up
+    // water), and the solid column (rock and loose sand) loses exactly what the bodies compacted.
+    let after = story.submit(Command::MeasureTotals, 0)?;
+    let (before, after) = match (story.await_result(before)?.1, story.await_result(after)?.1) {
+        (CommandResult::Totals(before), CommandResult::Totals(after)) => (before, after),
+        other => return Err(format!("totals: {other:?}")),
+    };
     let ledger = *story.runtime.ledger().summary();
     check.equal("inconsistent ticks", ledger.inconsistent_ticks, 0);
+    check.equal(
+        "water",
+        after.fluid.iter().sum::<u64>(),
+        before.fluid.iter().sum::<u64>(),
+    );
+    check.equal(
+        "rock and sand, with the bodies' compaction",
+        after.elevation + after.granular + ledger.bodies.compaction,
+        before.elevation + before.granular,
+    );
+    check.metric("compacted_units", ledger.bodies.compaction);
     check.metric("ticks_observed", ledger.ticks_observed);
     check.metric(
         "sample_age_ticks_max",

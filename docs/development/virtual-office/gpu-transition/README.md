@@ -1,18 +1,20 @@
 # GPU transition sprint
 
-**00 executed on 2026-10-10; 01 on 2026-10-10 to 2026-10-12; 02 on 2026-10-13; 03 on 2026-10-17.**
-01 measured and preserved the baseline, extracted `world-model` and delivered the evidence runner.
-02 built the GPU boundary (`world-runtime`, `gpu-world`, the `transfers` suite). 03 put every
-material rule family on the GPU with sparse scheduling (the `cells` suite). 04–07 have not
-started. Deliver GPU-authoritative material/body simulation and an independently
+**00 executed on 2026-10-10; 01 on 2026-10-10 to 2026-10-12; 02 on 2026-10-13; 03 on 2026-10-17;
+04 on 2026-10-17 to 2026-10-18.** 01 measured and preserved the baseline, extracted `world-model`
+and delivered the evidence runner. 02 built the GPU boundary (`world-runtime`, `gpu-world`, the
+`transfers` suite). 03 put every material rule family on the GPU with sparse scheduling (the
+`cells` suite). 04 put bodies, rays and body observations on the GPU (the `bodies` suite and
+`resident-world`'s first three steps). 05–07 have not started. Deliver GPU-authoritative material/body simulation and an independently
 usable native application, retaining `bevy_ecs` for CPU orchestration. This is an implementation
 sprint, not a planning-only program or an instruction to port one shader.
 
 ## Start here
 
 [00](00-first-execution-prompt.md), [01](01-baseline-contracts-and-seams.md),
-[02](02-gpu-runtime-and-transfer-lifecycle.md) and [03](03-gpu-cell-simulation.md) are complete.
-Assign the remaining stages individually, starting with 04. Read the
+[02](02-gpu-runtime-and-transfer-lifecycle.md), [03](03-gpu-cell-simulation.md) and
+[04](04-gpu-bodies-and-interaction.md) are complete. Assign the remaining stages individually,
+starting with 05. Read the
 [source audit](source-audit.md), [acceptance](acceptance.md) and the current [handoff](handoff.md)
 before continuing a stage.
 

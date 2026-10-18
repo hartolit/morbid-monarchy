@@ -6,9 +6,12 @@ duplicate every acceptance item here.
 
 ## Overview
 
-No topics are open. 00 found nothing outside the active sprint's scope. Relevant findings
-discovered during execution can be added to [issues](issues/README.md) or
-[discussions](discussions/README.md).
+| Topic | State | Next action | Assignment | Last evaluated |
+| --- | --- | --- | --- | --- |
+| [Convergence of the body solver in dense piles](discussions/dense-pile-convergence.md) | parked | Revisit if the native client's piles (06) show visible interpenetration or a rule needs contact depth. | None. | 2026-10-18 |
+
+00 found nothing outside the active sprint's scope. Relevant findings discovered during
+execution can be added to [issues](issues/README.md) or [discussions](discussions/README.md).
 
 When a topic exists, this overview alone records its state (`open`, `assigned`, `parked`), next
 action, real assignment and last evaluated date. Topic files own evidence/assessment, not duplicate

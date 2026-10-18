@@ -80,8 +80,10 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 | Unmatched donor/receiver transfer | 03 | `cells` GPU suite, `unmatched-transfer-detected` (a `react` built to drop accepted liquid: unbalanced ticks, reference mismatch, lost volume) |
 | A sparse schedule missing a dependency | 03 | `cells` `dense-sparse-agreement`, `sleeping-receivers`, `seam-flow` (dense execution and the CPU reference disagree with a wrong wake reach) |
 | Stale slot generation | 02 | `gpu-world` `slots::tests`; `transfers` `stale-session-and-slot`, `resize-success-and-refusal`, `device-loss-and-recreation` |
-| Stale body generation | 04 | pending |
-| Missing event overflow signal | 02 | `gpu-world` `readback::tests::a_missing_overflow_signal_is_rejected`; `transfers` `event-overflow-and-reset` (04 adds its producers) |
+| Stale body generation | 04 | `gpu-world` `bodies::tests`; `bodies` GPU suite, `body-handles` and `controls` (removed, out-of-table and wrong-generation handles are stale for every body command; a sample of a stale handle is reported gone) |
+| Missing event overflow signal | 02 | `gpu-world` `readback::tests::a_missing_overflow_signal_is_rejected`; `transfers` `event-overflow-and-reset`; `bodies` `observation-delivery` (the body producers overflow four events a tick and the ledger counts it) |
+| A body slot beyond the table in a ray result | 04 | `gpu-world` `readback::tests::body_results_become_absolute_and_samples_must_echo_their_handles` (the f32-rounded sentinel the first ray kernel produced is a decode error) |
+| An important body event lost in a full ring | 04 | `world-runtime` `bodies::tests` (deferral, waiting removals, late removals after slot reuse); `bodies` `observation-delivery` (hostile replays deliver what the in-order replay delivers) |
 | Old save revision replacing a newer one | 05 | pending |
 
 ## Connected scenario

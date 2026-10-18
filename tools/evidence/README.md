@@ -12,8 +12,8 @@ test selection is never reported as success.
 | `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; naga validation of every assembled `gpu-world` shader; `cargo deny` with [`deny.toml`](../../deny.toml) and `cargo machete` at their required versions; dependency direction (each package's own resolved closure); toolchain/lock/alias pins; the CI workflow's lanes and checker versions. |
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with the stable `--adapter` identifier `gpu-world` assigns, limits and features. |
-| `test gpu --suite NAME --adapter ID` | `transfers` (02) and `cells` (03) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. Other suites fail explicitly until their stage registers them. |
-| `run --scenario NAME --adapter ID` | Fails explicitly until `resident-world` exists. |
+| `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03) and `bodies` (04) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. Other suites fail explicitly until their stage registers them. |
+| `run --scenario NAME --adapter ID` | `resident-world` runs in its own `gpu-suite` process through the runtime and the live world, one item per step; steps 1–3 exist since 04, and a step its stage has not delivered fails. |
 | `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/). |
 | `check all --adapter ID` | Every lane above, without skipping. |
 
@@ -44,15 +44,16 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
 through `morbid_app::build_app` in scripted input mode. For every simulation tick, the scenario
 turns its actions into `world_model` commands; the driver executes them through the same tool
 functions the mouse uses, writes per-frame samples, and summarizes the driven body's
-`BodyObservation`s. `bench` builds
+`BodySample`s. `bench` builds
 it on demand and gives each run a new directory, so the user's `world_data/` is never opened. The
 driver, and the runner's dependency on the old application, go away with the Bevy application in
 prompt 06. Default builds of the runner do not compile Bevy; `check static` enforces that.
 
 ## GPU suites
 
-`src/suites/` holds the GPU suites; `src/bin/gpu-suite.rs` runs one case per process, so a lost
-device, crash or hang affects one case, which is killed after three minutes. Cases drive
+`src/suites/` holds the GPU suites and the connected scenarios (`scenarios.rs`);
+`src/bin/gpu-suite.rs` runs one case (or one scenario) per process, so a lost device, crash or
+hang affects one case, which is killed after three minutes (a scenario after five). Cases drive
 `gpu_world::world::GpuWorld` and `world_runtime::runtime::Runtime` through their public
 interfaces, as the application will. Layout probes (`suites/probe.rs`) assemble small kernels
 from `gpu-world`'s exported declarations and run them on the session's device through its

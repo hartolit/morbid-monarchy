@@ -72,8 +72,9 @@ not success.
 | `cargo evidence inspect-adapter` | Runnable (01) | Enumerates adapters with stable identifiers, backend, driver, limits and features; picks none. |
 | `cargo evidence test gpu --suite transfers --adapter ADAPTER_ID` | Runnable (02) | Runs each case of the suite in its own `gpu-suite` process on the explicit adapter, with a time limit, and checks the executed cases against the registry; a missing adapter is unavailable, a failed or missing case fails. |
 | `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Runnable (03) | The same for the material phases: the CPU reference, dense and sparse execution, the deliberate unmatched-transfer specimen and the activity measurement. |
-| `cargo evidence test gpu --suite bodies` (and `streaming`, `render`) | Fails until the owning stage registers the suite | The same, for the suites of 04–06. |
-| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Fails until 04–05 | Executes the connected scenario through the same runtime/adapter as the app. |
+| `cargo evidence test gpu --suite bodies --adapter ADAPTER_ID` | Runnable (04) | The same for bodies, rays and body observations: the baseline sphere intentions, probes, the broadphase oracle, clusters, deformation, the residency edge, commands and consumers, and the measurements. |
+| `cargo evidence test gpu --suite streaming` (and `render`) | Fails until the owning stage registers the suite | The same, for the suites of 05–06. |
+| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Partial (04): steps 1–3 run, steps 4–6 fail until 05 and 07 | Executes the connected scenario through the same runtime/adapter as the app, in its own `gpu-suite` process, one item per step of the acceptance's connected trace. |
 | `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01, baseline driver) | Release measurements of the frozen scenarios, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
 | `cargo evidence check all --adapter ADAPTER_ID` | Fails until every lane exists | Docs, static, CPU, all GPU suites and the connected scenario; no silent skipping. |
 

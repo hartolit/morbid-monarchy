@@ -32,25 +32,25 @@ and an ordered physical tick; separating them behind per-cell traits would obscu
 
 ## Current baseline
 
-This is the source at `a9c1539` with the changes of 01 and 02; the sprint
+This is the source at `a9c1539` with the changes of 01–04; the sprint
 [source audit](development/virtual-office/gpu-transition/source-audit.md) lists the symbols. Each
 row describes current behavior that the target replaces, except the rows naming `world-model`,
 `world-runtime` and `gpu-world`, which are already the target owners. None of it is a second
-supported path: the GPU owner executes commands, transfers (02) and the material phases (03)
-headlessly, and the baseline application does not use it.
+supported path: the GPU owner executes commands, transfers (02), the material phases (03) and
+bodies (04) headlessly, and the baseline application does not use it.
 
 | Responsibility | Current owner and behavior | Target owner |
 | --- | --- | --- |
-| Cell meaning, materials, coordinates, units, supported settings, generation | `world-model` since 01 (`cell`, `material`, `spatial`, `units`, `config`, `body`, `generation`; `rules` since 03: the automaton's switches, cadences, constants, wake levels and keyed hashes). The engine, application, GPU owner (through generated declarations) and evidence runner import it; none keeps its own copy. Commands and observations exist with the evidence driver as their first consumer | `world-model` |
+| Cell meaning, materials, coordinates, units, supported settings, generation | `world-model` since 01 (`cell`, `material`, `spatial`, `units`, `config`, `body`, `generation`; `rules` since 03: the automaton's switches, cadences, constants, wake levels and keyed hashes; since 04 `body` also holds the sphere tuning, the substep and apportionment rules, and `command` the rays and targets). The engine, application, GPU owner (through generated declarations) and evidence runner import it; none keeps its own copy. Commands and observations exist with the runtime and the evidence driver as their consumers | `world-model` |
 | Cell simulation | `monarch-engine` `core/simulation*`: a CPU Rayon pass over the double-buffered `ActiveWorldGrid`, on a fixed clock inside Bevy `Update`, reading its constants and hashes from `world_model::rules` since 03. The GPU owner runs the same rules since 03, unused by the application | `gpu-world` |
-| Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid | `gpu-world`; ECS keeps identity and a `BodyHandle` |
+| Bodies | `core/entities/spherical.rs`: ECS `Transform` and `DynamicRigidSphere` hold the physical state; substeps divide frame time; `GridPhysicsApi` mutates the CPU grid; its constants come from `world_model::body::tuning` since 04. The GPU owner runs bodies since 04 (state, substeps, bins, solver, terrain and liquid coupling), unused by the application | `gpu-world`; ECS keeps identity and a `BodyHandle` |
 | Observer, brushes, picking, statistics | `core/entities/observer.rs` and `morbid-app` `runtime/{input,dev_tools}` read and write the CPU grid directly | Intent in `world-runtime`; queries, edits and reductions in `gpu-world`; UI in `morbid-app` |
 | Residency | `spatial-lib` `chunk/manager.rs` and toroidal `grid.rs` over `world_model::spatial` keys; payloads kept in an active map and an LRU cache | `world-runtime` policy; GPU slots in `gpu-world` |
 | Persistence | `morbid-app` `runtime/persistence.rs` and `legacy_format.rs` (the old writer's bitcode bytes) over `spatial-lib` `chunk/storage.rs` (redb) | `world-store` |
 | Rendering | `morbid-app` `runtime/render.rs`: four Bevy materials, a whole-grid `ShaderBuffer` copy, shaders under `crates/morbid-app/assets` | `world-render` |
 | Composition | `morbid_app::run`: Bevy `DefaultPlugins`, `bevy_egui`, Bevy task pools | `morbid-app` native composition |
-| Runtime orchestration | `world-runtime` since 02: identities, the `PhysicalWorld` port, bounded receipts, the outcome ledger, the fixed clock and a standalone `bevy_ecs` runtime. Its consumers are the `transfers` suite now and the native client from 06; the baseline keeps its own Bevy schedule | `world-runtime` |
-| GPU execution | `gpu-world` since 02: one device context and submission timeline, checked resource plans, generated layouts, assembled WGSL, chunk slots, ordered brush edits and column queries, bounded staging, loss and stop handling. Since 03 the material phases with sparse tile scheduling, configuration and totals commands, and per-tick accounting; bodies follow in 04 | `gpu-world` |
+| Runtime orchestration | `world-runtime` since 02: identities, the `PhysicalWorld` port, bounded receipts, the outcome ledger, the fixed clock and a standalone `bevy_ecs` runtime; since 04 the body monitor (sample selection and lossless body events). Its consumers are the GPU suites and `resident-world` now and the native client from 06; the baseline keeps its own Bevy schedule | `world-runtime` |
+| GPU execution | `gpu-world` since 02: one device context and submission timeline, checked resource plans, generated layouts, assembled WGSL, chunk slots, ordered brush edits and column queries, bounded staging, loss and stop handling. Since 03 the material phases with sparse tile scheduling, configuration and totals commands, and per-tick accounting; since 04 bodies (`bodies`: the slot table; `shaders/body`: integration, bins, the pair solver, contact, deformation, displacement, observation), GPU-resolved rays and every body command | `gpu-world` |
 | Evidence | `monarchy-evidence` (01–03): docs/static/CPU lanes, shader validation, adapter inspection, the `transfers` and `cells` GPU suites, the CPU reference of the cell rules, the frozen scenarios and the baseline driver; tests and suite cases registered in `coverage.toml` | `monarchy-evidence` |
 
 Cells, bodies and the observer are unordered `Update` systems. The only thing that serializes them

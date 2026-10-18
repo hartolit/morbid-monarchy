@@ -4,16 +4,53 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 03 boundary
+## 04 boundary
 
-**State:** 03 complete (2026-10-17), assigned by the user on 2026-10-17. Checkpoints A–D are
-committed on `experimental`, and every lane passed on the nominated hardware after the user's
-reboot restored the NVIDIA driver (during implementation the kernel module, 615.71.09, did not
-match the userspace driver, 615.78.08, so the GPU suites first ran on Mesa llvmpipe). 04 has not
-started and needs its own assignment.
+**State:** 04 complete (2026-10-18), assigned by the user on 2026-10-17. Checkpoints A–D are
+committed on `experimental` and every lane passed on the nominated hardware; the checks row
+names the commit. 05 has not started and needs its own assignment.
 
-**Next action:** assign [04-gpu-bodies-and-interaction.md](04-gpu-bodies-and-interaction.md).
-Nothing in 03 is left to resume.
+**Next action:** assign [05-streaming-checkpoints-and-recovery.md](05-streaming-checkpoints-and-recovery.md).
+Nothing in 04 is left to resume.
+
+## 04 record
+
+| Field | Record |
+| --- | --- |
+| Assigned stage / checkpoint | 04 — GPU bodies and useful interaction. A–D complete. |
+| Source state | `experimental`: `49c3f6b` (A–B: identity, clock, bins, solver, contact, deformation, the first 24 `bodies` cases), `2975112` (C: rays, observation delivery, four cases), `e8ee688` (D: measurement cases, per-body workgroup gather, `resident-world` steps 1–3), the documentation commit (the scenario aligned with the acceptance trace, these docs), then this record. Work began on a clean tree at `9506de9`; no unrelated work was present. |
+| Actual adoption | **A:** `world-model` `body` (handles, descriptions and the drive envelope, the sphere tuning `monarch-engine` now reads, `substeps_per_tick`, the reach, `apportion` and its exact multiply-divide), `command` (rays, targets, every body command, `SetElevationScale`, `QueryRay`) and `observation` (`BodySample`, counters, ray hits). `world-runtime`: the tick rate and the bodies to sample in `TickBatch`, `BodyReport` and its outcome, the body monitor, ledger routing. `gpu-world`: the slot table, body records and plan (`4·(92 B + 26 S)` bytes, bins, claims `4 N`), substeps after the material commit, complete hashed bins with an all-pairs comparison mode, suspension at the residency edge, the speed cap. **B:** terrain contact, the bounded Jacobi solver, deformation under per-cell claims with exact apportionment, buoyancy and displacement, accounting with the compaction sink, preflight before mutation. **C:** GPU-resolved rays and ray-targeted commands, every body command, readback validation of ray answers, the monitor's lossless delivery. **D:** the four measurement cases, the per-body workgroup pair passes, `resident-world` through `gpu-suite --scenario`. Superseded: `BodyObservation` and `BodyRecord` (now `BodySample` and `BodyState`), `NotSupported` refusals of body commands, the overwriting event ring. |
+| Decisions / deviations | Solver: per-body Jacobi with fixed-point sums so bins and all pairs agree bit for bit; position passes split overlaps equally and move a body at most 0.5 units a substep from where it was binned, which also bounds the candidate margin; velocity passes target a parting speed with the ground's settle threshold (resting pairs do not bounce); a body touching terrain slides along it. The default passes rose to 16 + 16 from the 8 + 4 first tried, on `dense-cluster` evidence. Convergence limit, declared from measurement: settled, no pair overlaps by more than 0.4 of its smaller radius (0.31 measured); a first draft bound of 0.4 units at the final tick, never committed, was not met and was replaced with this one and the reasons in the [discussion](../whiteboard/discussions/dense-pile-convergence.md). Residency edge: suspension (frozen, an obstacle, controls ignored); 05 persists it. The body report travels as its own outcome (`BodiesCompleted`): with it inside `TickReport`, `Outcome` grew to 376 bytes, and boxing would allocate every tick. Event ring: deferral instead of overwriting, so important body events are not lost under pressure. Found and fixed: the ray kernel's "no body" sentinel went through `f32` and reported a phantom body on every ray; the dense pile spent over 90% of its body pass in pair passes run one thread per body (7.6 ms at the qualification workload, now 0.64 ms). Upstream: 03's `cells` `presentation-rates` harness started its script at a timing-dependent tick and failed intermittently (4 of 4 runs at `9506de9` in a scratch worktree); it now starts at an aligned tick (`49c3f6b`). Rule changes from the baseline are listed in the [GPU contract](../../../reference/gpu-contract.md#bodies-04). |
+| Checks | Filled in by the record commit below. |
+| Hardware / measurements | RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.78.08), Ryzen 9 5950X, Linux 7.2.10, at `e8ee688`, clean: the legacy body workloads take 0.64 ms (64 spheres, qualification) and 1.00 ms (256, scale) of device time per tick against the baseline's 5.32 and 16.99 ms of CPU time; 4,096 resting bodies 0.95 ms; a dense attracted pile of 4,096 bodies 8.2 ms with the bins and 97 ms with all pairs; paced at 60 Hz, 4,096 dense bodies keep 60 ticks/s with no frame wait, at most three in flight and body samples at most two ticks old; encode 0.19–0.36 ms; 336–347 process allocations per tick on the submit path in wgpu's command recording, 3 per poll. Details and resources: [performance budgets](../../../reference/performance-budgets.md#bodies-04). Per-case JSON in `target/evidence/<run>/gpu-bodies/` on that machine only. Headless physics only: no native frame time. |
+| Acceptance | A06 satisfied: the twelve baseline sphere intentions and apportionment as GPU cases, the broadphase against an exhaustive oracle (dense, mixed-radius, coincident, bin-edge, fast), clusters and fast bodies, simultaneous deformation with brushes on the same cells, edits under a resting body, a bounded solve with declared limits and the suspension policy. A07 satisfied: spawn, removal, drive, jump, attract, lift, edits and queries at columns and GPU-resolved rays through runtime receipts (retry, conflict, expiry, capacity and stale handles), the body monitor and `resident-world`'s consumer reacting to observed immersion, deferral under a saturated ring with hostile replays, counted cosmetic overflow, and observation age at most two ticks. A08–A15 not run. |
+| Data safety | No case or scenario opens a store; every world is synthetic or generated in memory. `world_data/save.redb` was written between the end of 03 (2026-10-17 17:59 local time) and the start of 04 (18:41): 04 found it at 8,266,977,280 bytes, modified 2026-10-17 18:39:53 local time, 72 seconds before this stage's first command. The session's commands were searched: none opened `world_data` or ran the application, and the file was unchanged at the end of 04. The earlier record (8,237,617,152 bytes, 2026-10-11 14:24) describes the file before that write. |
+| Blockers | None for 05. |
+| Next action / stop | Stopped at the end of 04. Assign 05. |
+
+### Carried into later stages (04)
+
+1. **Suspended bodies** (05): a body at missing terrain is suspended on the device only; 05
+   persists it with its chunks, reloads it and resumes it, keeping its handle or replacing it
+   explicitly.
+2. **Checkpointed body state** (05): bodies (state, configuration, counters, the slot table's
+   generations), the elevation scale, the broadphase and solver passes belong in the checkpoint;
+   the counters are 32-bit and wrap, and the monitor's watermarks rely on that.
+3. **`resident-world` steps 4–6** (05, 07): window movement and return, checkpoint and reopen,
+   the adversarial repeat. The scenario reports them failed until then.
+4. **Presentation from device state** (06): poses come from `BodyState` on the device, not from
+   samples; possession maps to `Runtime::set_controlled`, the camera follows without a blocking
+   readback.
+5. **Submit-path allocations** (06–07): about two per dispatch inside wgpu (the body pass issues
+   about 70 dispatches per substep); fewer, larger dispatches would reduce them if the frame
+   budget needs it.
+6. **Dense piles** (whiteboard, parked): [convergence of the body solver](../whiteboard/discussions/dense-pile-convergence.md).
+7. **The baseline engine** (06) keeps its CPU bodies until the application moves to the GPU
+   owner; the shared tuning keeps them in step.
+
+## 03 boundary (closed)
+
+03 completed on 2026-10-17; its record follows.
 
 ## 03 record
 

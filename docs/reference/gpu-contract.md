@@ -460,6 +460,17 @@ and resumed when the terrain under it is resident again (`residency-edge`). Miss
 never empty space and wrapped slots are never neighbours. 05 persists suspended bodies and
 reloads them with their chunks.
 
+*Changes from the baseline (04).* Recorded rule changes, each with a test that would fail
+without it: substeps divide the tick, not frame time (`fixed-tick-substeps`,
+`body-presentation-rates`); pairs are solved by Jacobi passes, not one sequential pass, with
+equal position splits and a 0.5-unit correction bound per substep (`dense-cluster`); a pair's
+bounce uses the ground's settle threshold, so resting bodies do not bounce on each other
+(`dense-cluster`, `pair-collision`); pairs and terrain are swept, and speed is capped at 600
+(`fast-bodies`, `fixed-tick-substeps`); several bodies on the same cells share them by claims
+instead of overwriting each other (`shared-deformation`); a body at missing terrain is suspended
+instead of meeting an empty grid (`residency-edge`). The baseline's sphere tuning is unchanged and
+shared: `monarch-engine` reads it from `world_model::body::tuning`.
+
 *Preflight and faults.* A tick's command, staging, sample and readback reservations are taken
 before any command is encoded, and the CPU body table changes only once the tick is accepted,
 so a refused tick changes nothing. Device work is bounded by construction: a footprint fits

@@ -1,6 +1,6 @@
 # GPU transition acceptance
 
-**A01–A05 satisfied for their stages' scope (01–03); A06–A15 not run.** The
+**A01–A07 satisfied for their stages' scope (01–04); A08–A15 not run.** The
 [handoff](handoff.md) records the evidence. 00 reviewed this matrix against checkout `a9c1539`
 and found no existing test intention or tool missing from it. The feature inventory below adds the controls it
 had left implicit, and one conflict is recorded under it. This is the shared outcome matrix, not a
@@ -87,7 +87,8 @@ decided that it is **physical configuration**: a supported setting (0.01–5.0, 
 configuration command and records with the configuration in every checkpoint. Cells keep integer
 units. In 01, the model owns the range and default, and scenario validation refuses a scale
 outside it (`scenario::tests::location_and_ranges_are_checked`). The control stays in this
-inventory; 04 implements the tick-boundary rule and 05 saves the value. See
+inventory; 04 implemented the tick-boundary rule (`SetElevationScale`, applied to the tick it
+arrives in) and 05 saves the value. See
 [world format](../../../reference/world-format.md#existing-packed-cell).
 
 New audio/damage systems, arbitrary rigid shapes/joints, multi-species fluid fields, networking and
@@ -113,7 +114,8 @@ native client. Freeze concrete values in 01; do not allow each stage to choose a
    a controlled interruption/loss. Recover from the actual last complete checkpoint, not a fictional
    command replay.
 
-The trace grows through 04–05. 06 runs this same trace visibly, through the native client, its
+The trace grows through 04–05; `cargo evidence run --scenario resident-world` executes it, steps
+1–3 since 04, and fails each later step as not implemented until its stage delivers it. 06 runs this same trace visibly, through the native client, its
 renderer and its tools. 07 repeats it in the integrated run. Interactive checks of individual
 tools extend this trace; they do not replace it, and a headless run alone does not complete it.
 
