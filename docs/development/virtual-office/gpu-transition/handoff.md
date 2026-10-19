@@ -4,6 +4,35 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
+## 06 in progress (not closed)
+
+**State (2026-10-19):** 06 assigned and under way on `experimental`; checkpoints A–C have a first
+pass, D and E are not done. Resume here.
+
+- **Done:** `1afad00` and the commit after it. `apps/morbid` is `morbid-app` (winit pumped loop,
+  egui overlay, world catalog, settings, explicit adapter choice, open/close/save feedback,
+  device-loss report and recovery, every inventory tool as commands at GPU-resolved rays);
+  `crates/world-render` draws the cells and bodies from the GPU owner's buffers on its device and
+  timeline (camera follow computed on the device, heightfield shadows/AO, sphere shadow map, fog,
+  bloom, AgX tone map, optional pass timestamps, CPU `project`); gpu-world presents through
+  `open_presenting`/`submit_presentation`; the Bevy app is renamed `bevy-baseline`. The
+  `native-client script features` run passed 41 checks in the real window on vulkan-10de-2c05
+  (scratch world under `target/drafts/06/run1`); `transfers` and `streaming` lanes passed on
+  `1afad00` (`target/evidence/06a-*`).
+- **Next:** write and register the `render` GPU suite (`tools/evidence/src/suites/render.rs`:
+  formats, zero size, terrain materials, missing-chunk gap and seams, edit visible next frame,
+  sphere at GPU pose, follow camera without readback, bind groups only on buffer replacement,
+  activity overlay, device loss, frame cost at radius 6 and 16 with timestamps), then decide
+  culling from that measurement; loss/recovery and start-screen scripts; `resident-world`
+  visibly (viewer hook in `streaming::world::Live`); native frame measurement replacing the
+  `legacy-baseline` driver; D (delete `bevy-baseline`, `monarch-engine`, `spatial-lib`, the
+  legacy feature, re-point the 23 baseline registry ids to their GPU cases, deny.toml, CI apt
+  list, lint baseline); full lanes; status, architecture, workflow, acceptance, budgets.
+- **Known:** windows on KWin Wayland report neither minimization nor resize for
+  `request_inner_size` (the client applies the returned size); the zero-size path is exercised
+  through the client's resize handling. Not yet run on the current tree: `check static`,
+  `test cpu`, `cells`, `bodies`.
+
 ## 05 boundary (closed)
 
 **State:** 05 complete (2026-10-19), assigned by the user on 2026-10-18. Checkpoints A–D are

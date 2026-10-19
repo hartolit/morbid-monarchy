@@ -152,8 +152,19 @@ struct Targets {
     bytes: u64,
 }
 
+/// Device timestamps around the scene passes (camera, shadows, main) and the post passes (bloom,
+/// tone map), resolved into a buffer the caller copies out; for measurement only.
+struct Timestamps {
+    queries: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+}
+
+/// Queries per frame: scene begin and end, post begin and end.
+pub const TIMESTAMP_QUERIES: u32 = 4;
+
 pub struct Renderer {
     session: SessionId,
+    timestamps: Option<Timestamps>,
     encode_srgb: bool,
     layouts: Layouts,
     pipelines: Pipelines,
@@ -677,6 +688,7 @@ impl Renderer {
             + u64::from(SHADOW_MAP_SIZE) * u64::from(SHADOW_MAP_SIZE) * 4;
         Ok(Self {
             session: view.session,
+            timestamps: None,
             encode_srgb,
             layouts,
             pipelines,
@@ -703,6 +715,37 @@ impl Renderer {
 
     pub fn session(&self) -> SessionId {
         self.session
+    }
+
+    /// Writes device timestamps around the scene and post passes from now on (the device must
+    /// have `TIMESTAMP_QUERY`). After each [`encode`](Self::encode), the resolved ticks are in
+    /// [`timestamp_buffer`](Self::timestamp_buffer): [`TIMESTAMP_QUERIES`] `u64`s.
+    pub fn enable_timestamps(&mut self, device: &wgpu::Device) -> Result<(), RenderError> {
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return Err(RenderError::Device {
+                what: "render timestamps",
+                description: "the device has no TIMESTAMP_QUERY".to_owned(),
+            });
+        }
+        let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("render timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: TIMESTAMP_QUERIES,
+        });
+        let resolve = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render timestamps"),
+            size: u64::from(TIMESTAMP_QUERIES) * 8,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        self.timestamps = Some(Timestamps { queries, resolve });
+        Ok(())
+    }
+
+    pub fn timestamp_buffer(&self) -> Option<&wgpu::Buffer> {
+        self.timestamps
+            .as_ref()
+            .map(|timestamps| &timestamps.resolve)
     }
 
     pub fn counters(&self) -> RenderCounters {
@@ -918,10 +961,22 @@ impl Renderer {
         let chunks = view.window.chunk_count();
         let bodies = view.body_extent;
 
+        let stamp = |begin: Option<u32>, end: Option<u32>| {
+            self.timestamps
+                .as_ref()
+                .map(|timestamps| (&timestamps.queries, begin, end))
+        };
+        let scene_start = stamp(Some(0), None);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("place camera"),
-                timestamp_writes: None,
+                timestamp_writes: scene_start.map(|(query_set, begin, end)| {
+                    wgpu::ComputePassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: begin,
+                        end_of_pass_write_index: end,
+                    }
+                }),
             });
             pass.set_pipeline(&self.pipelines.camera);
             pass.set_bind_group(0, &groups.camera, &[]);
@@ -977,7 +1032,13 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: stamp(None, Some(1)).map(|(query_set, begin, end)| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: begin,
+                        end_of_pass_write_index: end,
+                    }
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1002,12 +1063,28 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.fluid);
             pass.draw_indexed(0..TERRAIN_INDEX_COUNT, 0, 0..chunks);
         }
-        self.encode_bloom(encoder, targets, request.lighting.bloom_intensity);
+        let post_start = stamp(Some(2), None);
+        let bloomed = self.encode_bloom(
+            encoder,
+            targets,
+            request.lighting.bloom_intensity,
+            post_start,
+        );
         {
-            let mut pass = fullscreen_pass(encoder, "tone map", output, true);
+            let start = if bloomed { None } else { Some(2) };
+            let mut pass =
+                fullscreen_pass_stamped(encoder, "tone map", output, true, stamp(start, Some(3)));
             pass.set_pipeline(&self.pipelines.tonemap);
             pass.set_bind_group(0, &targets.post_hdr, &[]);
             pass.draw(0..3, 0..1);
+        }
+        if let Some(timestamps) = &self.timestamps {
+            encoder.resolve_query_set(
+                &timestamps.queries,
+                0..TIMESTAMP_QUERIES,
+                &timestamps.resolve,
+                0,
+            );
         }
         self.counters.frames += 1;
         self.counters.chunk_instances = chunks;
@@ -1015,13 +1092,21 @@ impl Renderer {
         Ok(())
     }
 
-    fn encode_bloom(&self, encoder: &mut wgpu::CommandEncoder, targets: &Targets, intensity: f32) {
+    /// Encodes the bloom chain; returns whether it ran (and wrote `start`'s timestamp).
+    fn encode_bloom(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        targets: &Targets,
+        intensity: f32,
+        start: Option<Stamp<'_>>,
+    ) -> bool {
         let mips = targets.bloom_mips.len();
         if mips == 0 || intensity <= 0.0 {
-            return;
+            return false;
         }
         {
-            let mut pass = fullscreen_pass(encoder, "bloom", &targets.bloom_mips[0], true);
+            let mut pass =
+                fullscreen_pass_stamped(encoder, "bloom", &targets.bloom_mips[0], true, start);
             pass.set_pipeline(&self.pipelines.downsample_first);
             pass.set_bind_group(0, &targets.post_hdr, &[]);
             pass.draw(0..3, 0..1);
@@ -1057,6 +1142,7 @@ impl Renderer {
             a: blend,
         });
         pass.draw(0..3, 0..1);
+        true
     }
 
     /// Device bytes of the current render targets.
@@ -1065,11 +1151,24 @@ impl Renderer {
     }
 }
 
+/// A timestamp query set with the begin and end indices a pass writes.
+type Stamp<'a> = (&'a wgpu::QuerySet, Option<u32>, Option<u32>);
+
 fn fullscreen_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     label: &'static str,
     target: &'a wgpu::TextureView,
     clear: bool,
+) -> wgpu::RenderPass<'a> {
+    fullscreen_pass_stamped(encoder, label, target, clear, None)
+}
+
+fn fullscreen_pass_stamped<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    label: &'static str,
+    target: &'a wgpu::TextureView,
+    clear: bool,
+    stamp: Option<Stamp<'a>>,
 ) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
@@ -1087,7 +1186,11 @@ fn fullscreen_pass<'a>(
             },
         })],
         depth_stencil_attachment: None,
-        timestamp_writes: None,
+        timestamp_writes: stamp.map(|(query_set, begin, end)| wgpu::RenderPassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: begin,
+            end_of_pass_write_index: end,
+        }),
         occlusion_query_set: None,
         multiview_mask: None,
     })

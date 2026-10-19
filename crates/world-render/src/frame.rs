@@ -156,6 +156,33 @@ pub fn view_ray(yaw: f32, pitch: f32, fov_y: f32, aspect: f32, ndc: Vec2) -> Vec
     (forward + right * (ndc.x * half_height * aspect) + up * (ndc.y * half_height)).normalize()
 }
 
+/// Where `point` (absolute render space) lands on the screen of a camera at `eye` looking along
+/// `yaw` and `pitch`, as normalized device coordinates (x right, y up, -1..1); `None` behind the
+/// camera. The CPU mirror of camera.wgsl's view and infinite reverse-Z projection, for evidence
+/// and for placing overlay labels.
+pub fn project(
+    eye: DVec3,
+    yaw: f32,
+    pitch: f32,
+    fov_y: f32,
+    aspect: f32,
+    point: DVec3,
+) -> Option<Vec2> {
+    let forward = forward(yaw, pitch);
+    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let up = right.cross(forward);
+    let relative = (point - eye).as_vec3();
+    let depth = relative.dot(forward);
+    if depth <= 0.0 {
+        return None;
+    }
+    let focal = 1.0 / (fov_y * 0.5).tan();
+    Some(Vec2::new(
+        relative.dot(right) * focal / aspect / depth,
+        relative.dot(up) * focal / depth,
+    ))
+}
+
 /// The frame uniform; must match `Frame` in shaders/types.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -320,6 +347,32 @@ mod tests {
         // The centre of the screen is straight ahead.
         let ray = view_ray(0.3, -0.2, 1.4, 1.7, Vec2::ZERO);
         assert!((ray - forward(0.3, -0.2)).length() < 1e-6);
+    }
+
+    #[test]
+    fn projection_inverts_the_cursor_ray() {
+        let eye = DVec3::new(10.0, 50.0, -20.0);
+        let (yaw, pitch, fov, aspect) = (0.4, -0.6, 1.3, 1.6);
+        for ndc in [Vec2::ZERO, Vec2::new(0.5, -0.25), Vec2::new(-0.9, 0.8)] {
+            let direction = view_ray(yaw, pitch, fov, aspect, ndc);
+            let point = eye + (direction * 37.0).as_dvec3();
+            let projected = project(eye, yaw, pitch, fov, aspect, point).expect("in front");
+            assert!(
+                (projected - ndc).length() < 1e-4,
+                "{projected} against {ndc}"
+            );
+        }
+        assert!(
+            project(
+                eye,
+                yaw,
+                pitch,
+                fov,
+                aspect,
+                eye - (forward(yaw, pitch) * 5.0).as_dvec3()
+            )
+            .is_none()
+        );
     }
 
     #[test]
