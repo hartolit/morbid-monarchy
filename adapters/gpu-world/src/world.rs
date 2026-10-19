@@ -242,9 +242,16 @@ pub struct SessionReport {
 
 /// A read-only view of the resident world for consumers that encode their own passes on the
 /// same device: the renderer, layout probes.
+///
+/// Its buffers are the live ones: a pass encoded with this view and submitted after the ticks
+/// reads the world as the last submitted tick leaves it, in queue order, without the CPU
+/// waiting for that tick. The window's buffers are replaced when the window moves or resizes;
+/// `buffers_generation` changes exactly then, so a consumer rebuilds its bindings only then.
 pub struct WorldView<'a> {
     pub session: SessionId,
     pub device: &'a wgpu::Device,
+    /// For small per-frame writes; they land before the next submission on the timeline.
+    pub queue: &'a wgpu::Queue,
     pub cells: &'a wgpu::Buffer,
     pub window_map: &'a wgpu::Buffer,
     pub slot_records: &'a wgpu::Buffer,
@@ -255,6 +262,23 @@ pub struct WorldView<'a> {
     pub plan: &'a ResourcePlan,
     pub window: ResidentWindow,
     pub last_submitted_tick: Option<Tick>,
+    /// Body slots below this index may hold a live body (as of the commands encoded so far);
+    /// every slot from it on is free.
+    pub body_extent: u32,
+    /// Changes whenever the window's buffers are replaced (a move or resize).
+    pub buffers_generation: u64,
+    /// The elevation scale of the last encoded tick (a `SetElevationScale` applies at a tick
+    /// boundary), which the surface the renderer draws must use.
+    pub elevation_scale: ElevationScale,
+}
+
+/// Why a presentation frame was not submitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentRefusal {
+    /// Two frames are still rendering; skip this one (the device sets the pace).
+    Busy,
+    /// The session admits no work: it stopped, faulted or lost its device.
+    Closed(Refusal),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +370,8 @@ pub struct GpuWorld {
     bodies: BodyTable,
     /// The next tick wakes every resident cell (after a resize).
     wake_all_pending: bool,
+    /// Counts replacements of the window's buffers ([`WorldView::buffers_generation`]).
+    buffers_generation: u64,
     snapshots: Snapshots,
     /// Body restoration copies the first submission carries: upload staging, offset in the
     /// bodies buffer and length.
@@ -363,6 +389,29 @@ impl GpuWorld {
     /// Opens the adapter, requests a device for the largest supported plan, checks and
     /// allocates the plan for `config.window`, and compiles the kernels.
     pub fn open(config: GpuWorldConfig) -> Result<Self, OpenError> {
+        Self::open_with(config, None).map(|(world, _)| world)
+    }
+
+    /// Opens the session as [`open`](Self::open) does, and a surface for `target` (a window)
+    /// on the same instance, which the adapter must be able to present to. A renderer draws
+    /// into it with [`submit_presentation`](Self::submit_presentation): one device and one
+    /// timeline for simulation and presentation. A recovered session opens a new surface for
+    /// the same window, since a surface belongs to its instance.
+    pub fn open_presenting(
+        config: GpuWorldConfig,
+        target: wgpu::SurfaceTarget<'static>,
+    ) -> Result<(Self, wgpu::Surface<'static>), OpenError> {
+        let (world, surface) = Self::open_with(config, Some(target))?;
+        let surface = surface.ok_or_else(|| {
+            OpenError::Context(ContextError::Surface("no surface was created".to_owned()))
+        })?;
+        Ok((world, surface))
+    }
+
+    fn open_with(
+        config: GpuWorldConfig,
+        target: Option<wgpu::SurfaceTarget<'static>>,
+    ) -> Result<(Self, Option<wgpu::Surface<'static>>), OpenError> {
         let session = SessionId {
             world: config.world,
             epoch: config.epoch,
@@ -370,7 +419,7 @@ impl GpuWorld {
         let pair_iterations = config.pair_iterations.validate().map_err(OpenError::Plan)?;
         let (max_buffer_size, max_storage_binding) =
             plan::largest_supported_needs(config.transfer).map_err(OpenError::Plan)?;
-        let mut context = GpuContext::open(
+        let (mut context, surface) = GpuContext::open(
             &config.adapter,
             config.allow_software,
             config.limit_ceiling,
@@ -380,6 +429,7 @@ impl GpuWorld {
                 timestamps: config.timestamps,
             },
             config.transfer.max_in_flight,
+            target,
         )
         .map_err(OpenError::Context)?;
         let timestamps = match (config.timestamps, context.timestamp_period_ns()) {
@@ -525,13 +575,14 @@ impl GpuWorld {
             elevation_scale: config.elevation_scale,
             bodies: BodyTable::new(config.transfer.bodies),
             wake_all_pending: false,
+            buffers_generation: 0,
             snapshots: Snapshots::new(image, config.transfer.snapshot_entries),
             body_restore: Vec::new(),
             submitted_any: false,
             first_tick: config.first_tick,
         };
         world.refresh_counters();
-        Ok(world)
+        Ok((world, surface))
     }
 
     /// Plans `request` and checks the old and new allocations together against the budget.
@@ -615,6 +666,7 @@ impl GpuWorld {
         WorldView {
             session: self.session,
             device: self.context.device(),
+            queue: self.context.queue(),
             cells: &self.window.cells,
             window_map: &self.window.window_map,
             slot_records: &self.window.slot_records,
@@ -623,7 +675,69 @@ impl GpuWorld {
             plan: &self.plan,
             window: self.slots.window(),
             last_submitted_tick: self.last_submitted,
+            body_extent: self.bodies.extent(),
+            buffers_generation: self.buffers_generation,
+            elevation_scale: self.elevation_scale,
         }
+    }
+
+    /// A new surface for `target` on the session's instance (a surface reported lost must be
+    /// created again), refused when the adapter cannot present to it.
+    pub fn create_surface(
+        &self,
+        target: wgpu::SurfaceTarget<'static>,
+    ) -> Result<wgpu::Surface<'static>, ContextError> {
+        let surface = self
+            .context
+            .instance()
+            .create_surface(target)
+            .map_err(|error| ContextError::Surface(error.to_string()))?;
+        if self.context.supports_surface(&surface) {
+            Ok(surface)
+        } else {
+            Err(ContextError::SurfaceUnsupported(
+                self.context.adapter().id.clone(),
+            ))
+        }
+    }
+
+    /// What a surface opened by [`open_presenting`](Self::open_presenting) supports.
+    pub fn surface_capabilities(&self, surface: &wgpu::Surface<'_>) -> wgpu::SurfaceCapabilities {
+        self.context.surface_capabilities(surface)
+    }
+
+    /// Whether a presentation frame would be admitted now: check before acquiring a surface
+    /// texture, so a frame that cannot be submitted is not acquired.
+    pub fn presentation_ready(&self) -> Result<(), PresentRefusal> {
+        self.admission().map_err(PresentRefusal::Closed)?;
+        if self.context.has_presentation_capacity() {
+            Ok(())
+        } else {
+            Err(PresentRefusal::Busy)
+        }
+    }
+
+    /// Encodes and submits a presentation frame (the renderer's passes over this view) on the
+    /// session's timeline, after every tick submitted so far. Never waits: at most
+    /// [`crate::context::PRESENTATION_IN_FLIGHT_LIMIT`] frames are outstanding, apart from the
+    /// in-flight limit of world work. The caller presents its surface texture after this.
+    pub fn submit_presentation(
+        &mut self,
+        label: &'static str,
+        encode: impl FnOnce(&WorldView<'_>, &mut wgpu::CommandEncoder),
+    ) -> Result<u64, PresentRefusal> {
+        self.presentation_ready()?;
+        let mut encoder = self
+            .context
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        encode(&self.view(), &mut encoder);
+        Ok(self.context.submit_presentation([encoder.finish()]))
+    }
+
+    /// Presentation frames submitted and not yet completed.
+    pub fn presentations_in_flight(&self) -> u32 {
+        self.context.presentations_in_flight()
     }
 
     /// Creates a buffer on the session's device, counted with the session's own.
@@ -713,7 +827,7 @@ impl GpuWorld {
         self.counters.in_flight_high_water = self
             .counters
             .in_flight_high_water
-            .max(self.context.in_flight());
+            .max(self.context.world_in_flight());
     }
 
     fn refresh_counters(&mut self) {
@@ -999,6 +1113,7 @@ impl PhysicalWorld for GpuWorld {
         let serial = self.context.submit([encoder.finish()]);
         self.note_submission();
         let old = std::mem::replace(&mut self.window, window);
+        self.buffers_generation += 1;
         self.retired.push(Retired {
             buffers: old,
             serial,

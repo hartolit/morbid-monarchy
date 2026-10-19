@@ -242,6 +242,11 @@ impl WorldSession {
         Ok(())
     }
 
+    /// Changes the autosave interval (ticks since the latest checkpoint); `None` turns it off.
+    pub fn set_autosave(&mut self, ticks: Option<u64>) {
+        self.checkpoints.set_autosave(ticks);
+    }
+
     /// Asks for a checkpoint; the receipt tells how it went.
     pub fn save(&mut self) -> SaveId {
         self.checkpoints.request(SaveReason::Requested)

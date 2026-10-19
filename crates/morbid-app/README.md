@@ -1,14 +1,15 @@
-# morbid-app
+# bevy-baseline
 
-The current desktop application. It composes the Bevy engine with `monarch-engine`'s CPU
-simulation, the landscape renderer, the developer tools and chunk persistence. It is the baseline
-for the GPU transition, and prompt 06 replaces it with the native client. Nothing else in the
-workspace imports it, except the evidence runner's baseline driver.
+The Bevy application the GPU transition started from (package `bevy-baseline`, formerly
+`morbid-app`). It composes the Bevy engine with `monarch-engine`'s CPU simulation, the landscape
+renderer, the developer tools and chunk persistence. Prompt 06 replaced it with the native
+client (`apps/morbid`, package `morbid-app`) and removes it; until then only the evidence
+runner's baseline driver imports it.
 
 ## Run it
 
 ```sh
-cargo run --locked --release -p morbid-app
+cargo run --locked --release -p bevy-baseline
 ```
 
 The application opens or creates `world_data/save.redb` **relative to the working directory**
@@ -18,7 +19,7 @@ a fresh store.
 
 ## Composition
 
-`morbid_app::run` builds the interactive application with `build_app(AppOptions::interactive())`.
+`bevy_baseline::run` builds the interactive application with `build_app(AppOptions::interactive())`.
 `AppOptions` selects the world directory, the asset directory, the window size and presentation,
 and the input mode. In `InputMode::Scripted`, no keyboard or mouse system changes the world. The
 caller sets the observer pose and applies tools through [`baseline`](src/baseline.rs), which also

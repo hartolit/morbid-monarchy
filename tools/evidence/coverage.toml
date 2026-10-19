@@ -460,6 +460,198 @@ expectation = "Generation depends only on seed and key: repeated calls agree and
 destination = "world-model; streaming generation (05)"
 determinism = "exact"
 
+# --- Native client and renderer: world-render and morbid-app (added in 06) ---
+
+[[behavior]]
+id = "render.frame.uniform-size"
+package = "world-render"
+target = "lib"
+test = "frame::tests::the_uniform_matches_the_wgsl_struct_size"
+origin = "transition"
+expectation = "The frame uniform's Rust record has the size of the WGSL `Frame` struct it fills."
+destination = "world-render frame uniform (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.frame.compass-axes"
+package = "world-render"
+target = "lib"
+test = "frame::tests::forward_follows_the_compass_convention"
+origin = "transition"
+expectation = "Yaw and pitch give the baseline observer's forward vector (north -Z, positive yaw west, pitch up), and the cursor ray through the screen centre is that forward."
+destination = "world-render camera math shared by the client and camera.wgsl (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.frame.window-local"
+package = "world-render"
+target = "lib"
+test = "frame::tests::window_local_positions_are_relative_to_the_minimum_chunk"
+origin = "transition"
+expectation = "Absolute render positions become window-local against the window's minimum chunk, as the body kernels place bodies, including negative keys."
+destination = "world-render coordinate conversion (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.geometry.terrain-grid"
+package = "world-render"
+target = "lib"
+test = "geometry::tests::the_terrain_grid_covers_every_cell_quad_once"
+origin = "transition"
+expectation = "The landscape grid covers each cell quad with two triangles split along the body surface's diagonal."
+destination = "world-render landscape geometry (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.geometry.icosphere"
+package = "world-render"
+target = "lib"
+test = "geometry::tests::the_icosphere_is_a_closed_unit_sphere"
+origin = "transition"
+expectation = "The sphere mesh is a closed unit icosphere wound counter-clockwise from outside, so back-face culling keeps its outside."
+destination = "world-render sphere geometry (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.palette.layer-rows"
+package = "world-render"
+target = "lib"
+test = "lighting::tests::the_palette_places_every_material_in_its_layer_row"
+origin = "transition"
+expectation = "Each material's colour and shading properties land in its layer's row; liquids carry their mobility (ice frozen) and magma its glow."
+destination = "world-render landscape palette, ported from the baseline (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.palette.srgb"
+package = "world-render"
+target = "lib"
+test = "lighting::tests::srgb_conversion_matches_the_transfer_function"
+origin = "transition"
+expectation = "sRGB colours convert to linear light with the sRGB transfer function."
+destination = "world-render palette and lighting colours (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.lighting.sun-bearing"
+package = "world-render"
+target = "lib"
+test = "lighting::tests::the_sun_points_where_its_bearing_says"
+origin = "transition"
+expectation = "The sun's direction follows its compass bearing and elevation; panel values outside their ranges or not finite are clamped or reset."
+destination = "world-render lighting (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.post.bloom-chain"
+package = "world-render"
+target = "lib"
+test = "renderer::tests::the_bloom_chain_follows_bevys_natural_settings"
+origin = "transition"
+expectation = "The bloom chain's first mip is 512 high with eight mips at 1080p, never zero-sized, and its per-mip blend follows Bevy's natural settings."
+destination = "world-render bloom (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.post.output-encoding"
+package = "world-render"
+target = "lib"
+test = "renderer::tests::outputs_are_encoded_once"
+origin = "transition"
+expectation = "sRGB outputs are encoded by the hardware, 8-bit linear ones by the tone map, and other formats are refused."
+destination = "world-render tone map (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "render.shaders.validate"
+package = "world-render"
+target = "lib"
+test = "shaders::tests::every_render_assembly_validates"
+origin = "transition"
+expectation = "Every render assembly, after gpu-world's generated declarations, validates with naga."
+destination = "world-render shader assembly (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.options.layering"
+package = "morbid-app"
+target = "lib"
+test = "options::tests::options_override_the_settings_file_and_defaults_fill_the_rest"
+origin = "transition"
+expectation = "Command-line options override the settings file and defaults fill the rest; worlds default to the user data directory, never the working directory."
+destination = "morbid-app configuration (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.options.refusal"
+package = "morbid-app"
+target = "lib"
+test = "options::tests::unknown_or_malformed_input_is_refused"
+origin = "transition"
+expectation = "Unknown settings keys, unknown options and out-of-range sizes, vsync and autosave values are refused."
+destination = "morbid-app configuration (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.options.remember-adapter"
+package = "morbid-app"
+target = "lib"
+test = "options::tests::the_chosen_adapter_is_remembered_with_the_other_settings"
+origin = "transition"
+expectation = "The adapter chosen on the start screen is written to the settings file without losing its other settings."
+destination = "morbid-app adapter choice (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.catalog.create-list"
+package = "morbid-app"
+target = "lib"
+test = "catalog::tests::names_are_checked_and_worlds_never_overwritten"
+origin = "transition"
+expectation = "World names are checked, an existing world is never overwritten, and a file that is not a world is listed as unreadable without being changed."
+destination = "morbid-app world catalog over world-store (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.input.edges-focus"
+package = "morbid-app"
+target = "lib"
+test = "input::tests::edges_last_one_frame_and_focus_loss_releases_everything"
+origin = "transition"
+expectation = "Presses last one frame, repeats are not new presses, and losing focus releases every held key and button."
+destination = "morbid-app input (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.observer.fly-walk"
+package = "morbid-app"
+target = "lib"
+test = "observer::tests::flying_follows_the_view_and_walking_stays_above_the_floor"
+origin = "transition"
+expectation = "Flying moves along the view; walking stays the walk height above the queried floor; keys are ignored while the overlay has the keyboard."
+destination = "morbid-app observer (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.observer.zoom"
+package = "morbid-app"
+target = "lib"
+test = "observer::tests::the_wheel_zooms_within_the_tether_range"
+origin = "transition"
+expectation = "The wheel changes the tether distance within 5 to 100."
+destination = "morbid-app camera tether (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.tools.toolbar-keys"
+package = "morbid-app"
+target = "lib"
+test = "play::tests::digits_select_the_toolbar_in_order"
+origin = "transition"
+expectation = "Digit keys select the tool bar's tools in order, and every baseline brush is offered once."
+destination = "morbid-app tools (06)"
+determinism = "exact"
+
 # --- Legacy saved rows: world-store tests/legacy_fixtures.rs (added in 01 in morbid-app; moved in 05) ---
 
 [[behavior]]

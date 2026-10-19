@@ -149,7 +149,7 @@ impl GpuWorld {
         if matches!(self.lifecycle, Lifecycle::Lost | Lifecycle::Faulted) {
             return PollReport {
                 health: self.health(),
-                in_flight: self.context.in_flight(),
+                in_flight: self.context.world_in_flight(),
                 delivered: 0,
             };
         }
@@ -204,7 +204,7 @@ impl GpuWorld {
         self.refresh_counters();
         PollReport {
             health: self.health(),
-            in_flight: self.context.in_flight(),
+            in_flight: self.context.world_in_flight(),
             delivered: (outcomes.len() - start) as u32,
         }
     }

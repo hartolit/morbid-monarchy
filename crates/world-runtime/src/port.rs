@@ -978,7 +978,11 @@ pub struct TransferCounters {
 ///
 /// Implementations never block in [`submit_tick`](Self::submit_tick) or
 /// [`poll`](Self::poll); [`stop`](Self::stop) is the explicit maintenance wait.
-pub trait PhysicalWorld: Send + Sync {
+///
+/// `Any` lets the composition root, which opened the concrete world, reach it again for the
+/// consumers it composes on the same device ([`crate::runtime::Runtime::port_as`]); nothing in
+/// the runtime looks behind the port.
+pub trait PhysicalWorld: std::any::Any + Send + Sync {
     fn session(&self) -> SessionId;
 
     fn capabilities(&self) -> PortCapabilities;

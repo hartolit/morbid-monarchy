@@ -11,6 +11,7 @@ pub mod cli;
 pub mod gpu;
 pub mod identity;
 pub mod measurement;
+pub mod native;
 pub mod process;
 pub mod report;
 pub mod scenario;

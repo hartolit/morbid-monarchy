@@ -88,6 +88,13 @@ impl FixedClock {
         due as u32
     }
 
+    /// The ticks [`advance`](Self::advance) would return for `elapsed`, without advancing: a
+    /// client that issues one command per tick (a held key) queues this many before the frame.
+    pub fn due_after(&self, elapsed: Duration) -> u32 {
+        let due = ((self.accumulated_seconds + elapsed.as_secs_f64()) / self.tick_seconds).floor();
+        due.min(f64::from(self.max_ticks_per_frame)) as u32
+    }
+
     /// Consumes one due tick after it was submitted.
     pub fn consume(&mut self) {
         self.accumulated_seconds = (self.accumulated_seconds - self.tick_seconds).max(0.0);
@@ -106,6 +113,8 @@ mod tests {
     fn whole_intervals_become_ticks_and_the_backlog_is_capped() {
         let mut clock = FixedClock::new(60.0, 4).expect("supported");
         assert_eq!(clock.advance(Duration::from_millis(10)), 0);
+        assert_eq!(clock.due_after(Duration::from_millis(10)), 1);
+        assert_eq!(clock.due_after(Duration::from_secs(1)), 4, "capped");
         assert_eq!(clock.advance(Duration::from_millis(10)), 1);
         clock.consume();
         // A one-second stall owes 60 ticks; four run and the rest are discarded.

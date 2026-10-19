@@ -1,3 +1,3 @@
 fn main() {
-    morbid_app::run();
+    bevy_baseline::run();
 }

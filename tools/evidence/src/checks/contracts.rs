@@ -47,9 +47,40 @@ const STANDALONE_ECS: &[&str] = &[
 const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
     ForbiddenClosure {
         package: EVIDENCE_PACKAGE,
-        forbidden_prefixes: &["bevy", "morbid-app", "monarch-engine"],
+        forbidden_prefixes: &["bevy", "monarch-engine", "spatial-lib"],
         allowed: STANDALONE_ECS,
-        reason: "default evidence builds must not compile the Bevy baseline; it is behind `legacy-baseline`",
+        reason: "default evidence builds drive the native client, never the Bevy baseline (behind `legacy-baseline` until 06 removes it)",
+    },
+    ForbiddenClosure {
+        package: APPLICATION_PACKAGE,
+        forbidden_prefixes: &[
+            "bevy",
+            "monarch-engine",
+            "spatial-lib",
+            "rayon",
+            EVIDENCE_PACKAGE,
+        ],
+        allowed: STANDALONE_ECS,
+        reason: "the native client's production closure has no Bevy engine, render, app, window, input, time or task crate and no CPU simulation; the standalone ECS arrives only through world-runtime",
+    },
+    ForbiddenClosure {
+        package: "world-render",
+        forbidden_prefixes: &[
+            "bevy",
+            "winit",
+            "egui",
+            "redb",
+            "bitcode",
+            "rayon",
+            "flume",
+            "monarch-engine",
+            "morbid-app",
+            "spatial-lib",
+            "world-store",
+            EVIDENCE_PACKAGE,
+        ],
+        allowed: STANDALONE_ECS,
+        reason: "the renderer draws the GPU owner's view: no window, UI, store, engine or baseline; the ECS arrives only through world-runtime",
     },
     ForbiddenClosure {
         package: "world-model",
@@ -375,36 +406,65 @@ mod tests {
         .expect("metadata")
     }
 
+    fn rule(package: &str) -> &'static [ForbiddenClosure] {
+        let index = FORBIDDEN_CLOSURES
+            .iter()
+            .position(|rule| rule.package == package)
+            .expect("a rule for the package");
+        &FORBIDDEN_CLOSURES[index..index + 1]
+    }
+
+    /// The violations of `package`'s rule when it depends directly on one package `name`.
+    fn direct(package: &'static str, name: &str) -> Vec<String> {
+        let workspace = Workspace::from_metadata(&serde_json::json!({
+            "workspace_members": [package],
+            "packages": [
+                {"id": package, "name": package, "manifest_path": "/w/r/Cargo.toml"},
+                {"id": name, "name": name, "manifest_path": "/r/x/Cargo.toml"}
+            ],
+            "resolve": {"nodes": [
+                {"id": package, "deps": [{"pkg": name, "dep_kinds": [{"kind": null}]}]},
+                {"id": name, "deps": []}
+            ]}
+        }))
+        .expect("metadata");
+        closure_violations(&|_| Ok(workspace.clone()), rule(package))
+    }
+
     #[test]
     fn the_standalone_ecs_is_allowed_where_listed_and_the_engine_never() {
-        let runtime_rule = &FORBIDDEN_CLOSURES[2..3];
-        assert_eq!(runtime_rule[0].package, "world-runtime");
-        // The runtime depending directly on one package called `name`.
-        let renamed = |name: &str| {
-            let workspace = Workspace::from_metadata(&serde_json::json!({
-                "workspace_members": ["world-runtime"],
-                "packages": [
-                    {"id": "world-runtime", "name": "world-runtime", "manifest_path": "/w/r/Cargo.toml"},
-                    {"id": name, "name": name, "manifest_path": "/r/x/Cargo.toml"}
-                ],
-                "resolve": {"nodes": [
-                    {"id": "world-runtime", "deps": [{"pkg": name, "dep_kinds": [{"kind": null}]}]},
-                    {"id": name, "deps": []}
-                ]}
-            }))
-            .expect("metadata");
-            closure_violations(&|_| Ok(workspace.clone()), runtime_rule)
-        };
-        assert!(renamed("bevy_ecs").is_empty());
-        assert!(renamed("bevy_tasks").is_empty());
-        assert_eq!(renamed("bevy_render").len(), 1);
-        assert_eq!(renamed("bevy").len(), 1);
-        assert_eq!(renamed("wgpu-core").len(), 1);
+        assert!(direct("world-runtime", "bevy_ecs").is_empty());
+        assert!(direct("world-runtime", "bevy_tasks").is_empty());
+        assert_eq!(direct("world-runtime", "bevy_render").len(), 1);
+        assert_eq!(direct("world-runtime", "bevy").len(), 1);
+        assert_eq!(direct("world-runtime", "wgpu-core").len(), 1);
+    }
+
+    #[test]
+    fn the_native_client_closure_has_no_bevy_engine_crate() {
+        for engine in [
+            "bevy",
+            "bevy_render",
+            "bevy_winit",
+            "bevy_window",
+            "bevy_input",
+            "bevy_app",
+            "bevy_time",
+            "bevy_egui",
+            "monarch-engine",
+        ] {
+            assert_eq!(direct(APPLICATION_PACKAGE, engine).len(), 1, "{engine}");
+        }
+        for allowed in ["bevy_ecs", "bevy_tasks", "winit", "egui", "wgpu"] {
+            assert!(direct(APPLICATION_PACKAGE, allowed).is_empty(), "{allowed}");
+        }
+        assert_eq!(direct("world-render", "winit").len(), 1);
+        assert_eq!(direct("world-render", "egui").len(), 1);
     }
 
     #[test]
     fn the_model_may_not_reach_an_engine_or_store_even_indirectly() {
-        let model_rule = &FORBIDDEN_CLOSURES[1..2];
+        let model_rule = rule("world-model");
         assert_eq!(model_rule[0].package, "world-model");
         assert!(closure_violations(&|_| Ok(workspace(None)), model_rule).is_empty());
         for forbidden in ["bevy_ecs", "wgpu-core", "redb", "monarch-engine"] {
@@ -434,7 +494,7 @@ mod tests {
     fn package_graphs_come_from_one_package_s_own_resolution() {
         let tree = "0world-runtime v0.1.0 (/w/crates/world-runtime)\n1bevy_ecs v0.19.0\n2bevy_ptr v0.19.0\n1world-model v0.1.0 (/w/crates/world-model)\n2glam v0.32.1\n2bevy_ptr v0.19.0 (*)\n";
         let workspace = Workspace::from_tree(tree).expect("tree");
-        let rule = &FORBIDDEN_CLOSURES[2..3];
+        let rule = rule("world-runtime");
         assert!(closure_violations(&|_| Ok(workspace.clone()), rule).is_empty());
         let engine = "0world-runtime v0.1.0 (/w)\n1bevy_ecs v0.19.0\n2bevy_reflect v0.19.0\n";
         let workspace = Workspace::from_tree(engine).expect("tree");

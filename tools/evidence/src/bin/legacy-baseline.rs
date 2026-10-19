@@ -1,6 +1,6 @@
 //! Scripted driver for the Bevy baseline application.
 //!
-//! Runs one frozen scenario once through `morbid_app::build_app` in scripted input mode, then
+//! Runs one frozen scenario once through `bevy_baseline::build_app` in scripted input mode, then
 //! writes per-frame samples and a summary. `cargo evidence bench` builds and launches it with a
 //! fresh world directory per run; run it by hand only to reproduce one run:
 //!
@@ -34,6 +34,15 @@ use bevy::{
         view::screenshot::{Screenshot, save_to_disk},
     },
 };
+use bevy_baseline::{
+    AppOptions, InputMode, WindowRequest,
+    baseline::{
+        BrushSettings, DevOverlay, GridBrush, PersistenceCounters, RenderCounters, SphereSpawn,
+        apply_brush, attract_sphere, drive_sphere, jump_sphere, lift_sphere, retained_payload,
+        spawn_sphere,
+    },
+    build_app,
+};
 use monarch_engine::{
     core::{
         counters::EngineCounters,
@@ -45,15 +54,6 @@ use monarch_engine::{
 use monarchy_evidence::{
     measurement::{CSV_HEADER, FrameSample, distribution},
     scenario::{self, Family, LoadedScenario, PresentMode, Scenario},
-};
-use morbid_app::{
-    AppOptions, InputMode, WindowRequest,
-    baseline::{
-        BrushSettings, DevOverlay, GridBrush, PersistenceCounters, RenderCounters, SphereSpawn,
-        apply_brush, attract_sphere, drive_sphere, jump_sphere, lift_sphere, retained_payload,
-        spawn_sphere,
-    },
-    build_app,
 };
 use spatial_lib::prelude::manager::ChunkManager;
 use world_model::{

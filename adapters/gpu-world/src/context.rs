@@ -24,6 +24,12 @@ use futures_lite::future::block_on;
 /// The most submitted, uncompleted batches a session may have; the budgets' initial target.
 pub const MAX_IN_FLIGHT_LIMIT: u32 = 3;
 
+/// The most submitted, uncompleted presentation frames (a renderer's work on the same
+/// timeline). They are bounded separately so a frame never takes a tick's place and a busy
+/// device paces the renderer instead of queueing frames without limit; two lets the CPU encode
+/// the next frame while the previous one renders.
+pub const PRESENTATION_IN_FLIGHT_LIMIT: u32 = 2;
+
 /// An adapter as `inspect-adapter` lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterRecord {
@@ -100,6 +106,22 @@ struct SelectedAdapter {
     instance: wgpu::Instance,
     record: AdapterRecord,
     adapter: wgpu::Adapter,
+}
+
+/// The identifiers of the hardware adapters that can present to `target`: the choices a
+/// windowed client offers. Each is tested with a surface of its own instance, which is dropped
+/// again; a session opened later creates its own.
+pub fn presentable_adapters(target: wgpu::SurfaceTarget<'static>) -> Vec<AdapterRecord> {
+    let inventory = AdapterInventory::enumerate();
+    let Ok(surface) = inventory.instance.create_surface(target) else {
+        return Vec::new();
+    };
+    inventory
+        .adapters
+        .iter()
+        .filter(|(record, adapter)| !record.software && adapter.is_surface_supported(&surface))
+        .map(|(record, _)| record.clone())
+        .collect()
 }
 
 fn record(adapter: &wgpu::Adapter) -> AdapterRecord {
@@ -189,6 +211,10 @@ pub enum ContextError {
     DefaultLimitsUnsupported(String),
     /// The adapter refused a device with limits and features it reported.
     DeviceRequest(String),
+    /// The window could not be given a surface on this instance.
+    Surface(String),
+    /// The adapter cannot present to the window's surface.
+    SurfaceUnsupported(String),
 }
 
 /// A device-level failure noticed by a callback.
@@ -291,10 +317,19 @@ pub enum WaitOutcome {
     Lost,
 }
 
+/// What a submission carries: world work (ticks and transfers, bounded by the session's
+/// in-flight limit) or a presentation frame (bounded by [`PRESENTATION_IN_FLIGHT_LIMIT`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubmissionKind {
+    World,
+    Presentation,
+}
+
 struct InFlight {
     serial: u64,
     index: wgpu::SubmissionIndex,
     submitted_at: Instant,
+    kind: SubmissionKind,
 }
 
 /// The session's one submission timeline.
@@ -314,7 +349,8 @@ struct Timeline {
 
 /// The device of one session and everything that must be shared by all its GPU work.
 pub struct GpuContext {
-    _instance: wgpu::Instance,
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     record: AdapterRecord,
     adapter_limits: wgpu::Limits,
     device: wgpu::Device,
@@ -332,14 +368,32 @@ impl GpuContext {
     /// describes, raised from WebGPU's defaults no further than the adapter and `ceiling`
     /// allow. A plan that later needs more than the granted limits is refused by the plan,
     /// not by the device.
+    ///
+    /// With a `surface` target, the window's surface is created on the same instance and the
+    /// adapter must be able to present to it: a renderer then draws the resident world on this
+    /// device and timeline, never on a second one.
     pub fn open(
         adapter_id: &str,
         allow_software: bool,
         ceiling: LimitCeiling,
         needs: DeviceNeeds,
         max_in_flight: u32,
-    ) -> Result<Self, ContextError> {
+        surface: Option<wgpu::SurfaceTarget<'static>>,
+    ) -> Result<(Self, Option<wgpu::Surface<'static>>), ContextError> {
         let selected = AdapterInventory::enumerate().take(adapter_id, allow_software)?;
+        let surface = match surface {
+            None => None,
+            Some(target) => {
+                let surface = selected
+                    .instance
+                    .create_surface(target)
+                    .map_err(|error| ContextError::Surface(error.to_string()))?;
+                if !selected.adapter.is_surface_supported(&surface) {
+                    return Err(ContextError::SurfaceUnsupported(selected.record.id));
+                }
+                Some(surface)
+            }
+        };
         let adapter_limits = selected.adapter.limits();
         let defaults = wgpu::Limits::default();
         if !defaults.check_limits(&adapter_limits) {
@@ -400,8 +454,9 @@ impl GpuContext {
             .filter(|period| *period > 0.0);
         let granted = device.limits();
         let capacity = max_in_flight.clamp(1, MAX_IN_FLIGHT_LIMIT) as usize;
-        Ok(Self {
-            _instance: selected.instance,
+        let context = Self {
+            instance: selected.instance,
+            adapter: selected.adapter,
             record: selected.record,
             adapter_limits,
             device,
@@ -411,14 +466,15 @@ impl GpuContext {
             health,
             timeline: Timeline {
                 next_serial: 1,
-                in_flight: Vec::with_capacity(capacity),
+                in_flight: Vec::with_capacity(capacity + PRESENTATION_IN_FLIGHT_LIMIT as usize),
                 capacity,
                 completed: Arc::new(AtomicU64::new(0)),
                 observed_completed: 0,
             },
             allocations: AllocationCounters::default(),
             timestamp_period_ns,
-        })
+        };
+        Ok((context, surface))
     }
 
     pub fn adapter(&self) -> &AdapterRecord {
@@ -427,6 +483,27 @@ impl GpuContext {
 
     pub fn adapter_limits(&self) -> &wgpu::Limits {
         &self.adapter_limits
+    }
+
+    /// What `surface` (created by [`open`](Self::open) on this instance) supports on this
+    /// adapter: formats, present modes and alpha modes.
+    pub fn surface_capabilities(&self, surface: &wgpu::Surface<'_>) -> wgpu::SurfaceCapabilities {
+        surface.get_capabilities(&self.adapter)
+    }
+
+    pub fn supports_surface(&self, surface: &wgpu::Surface<'_>) -> bool {
+        self.adapter.is_surface_supported(surface)
+    }
+
+    /// The instance the device and any surface belong to.
+    pub fn instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
+    /// The queue, for consumers that write small per-frame data (a renderer's uniforms). Its
+    /// writes take effect before the next submission on the timeline, whichever it is.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
     }
 
     /// The device, for creating pipelines and resources that share it. Buffers that belong to
@@ -505,8 +582,28 @@ impl GpuContext {
         drop(buffer);
     }
 
+    /// Every submitted, uncompleted batch, world work and presentation alike.
     pub fn in_flight(&self) -> u32 {
         self.timeline.in_flight.len() as u32
+    }
+
+    fn in_flight_of(&self, kind: SubmissionKind) -> usize {
+        self.timeline
+            .in_flight
+            .iter()
+            .filter(|entry| entry.kind == kind)
+            .count()
+    }
+
+    /// Submitted, uncompleted world batches (ticks and transfers): what the in-flight limit
+    /// bounds.
+    pub fn world_in_flight(&self) -> u32 {
+        self.in_flight_of(SubmissionKind::World) as u32
+    }
+
+    /// Submitted, uncompleted presentation frames.
+    pub fn presentations_in_flight(&self) -> u32 {
+        self.in_flight_of(SubmissionKind::Presentation) as u32
     }
 
     pub fn max_in_flight(&self) -> u32 {
@@ -514,7 +611,11 @@ impl GpuContext {
     }
 
     pub fn has_submission_capacity(&self) -> bool {
-        self.timeline.in_flight.len() < self.timeline.capacity
+        self.in_flight_of(SubmissionKind::World) < self.timeline.capacity
+    }
+
+    pub fn has_presentation_capacity(&self) -> bool {
+        self.in_flight_of(SubmissionKind::Presentation) < PRESENTATION_IN_FLIGHT_LIMIT as usize
     }
 
     /// The highest serial whose submission is known to have completed.
@@ -530,6 +631,23 @@ impl GpuContext {
     /// Submits command buffers on the session's timeline. The caller has checked
     /// [`has_submission_capacity`](Self::has_submission_capacity) before encoding them.
     pub fn submit(&mut self, buffers: impl IntoIterator<Item = wgpu::CommandBuffer>) -> u64 {
+        self.submit_kind(buffers, SubmissionKind::World)
+    }
+
+    /// Submits a presentation frame on the same timeline, after every earlier submission. The
+    /// caller has checked [`has_presentation_capacity`](Self::has_presentation_capacity).
+    pub fn submit_presentation(
+        &mut self,
+        buffers: impl IntoIterator<Item = wgpu::CommandBuffer>,
+    ) -> u64 {
+        self.submit_kind(buffers, SubmissionKind::Presentation)
+    }
+
+    fn submit_kind(
+        &mut self,
+        buffers: impl IntoIterator<Item = wgpu::CommandBuffer>,
+        kind: SubmissionKind,
+    ) -> u64 {
         let serial = self.timeline.next_serial;
         self.timeline.next_serial += 1;
         let index = self.queue.submit(buffers);
@@ -542,6 +660,7 @@ impl GpuContext {
             serial,
             index,
             submitted_at: Instant::now(),
+            kind,
         });
         serial
     }

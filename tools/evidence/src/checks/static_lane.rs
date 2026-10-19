@@ -123,13 +123,13 @@ pub fn run(root: &Path, run_dir: &Path, lint_baseline: &Path) -> Vec<Item> {
 }
 
 /// Validates every assembled production shader with naga, as wgpu compiles it, and writes the
-/// assembled sources to `shaders/` in the run directory for inspection and editor diagnostics.
-/// The legacy Bevy shaders under `crates/morbid-app/assets` are validated only by Bevy at
-/// runtime and leave with the baseline in 06.
+/// assembled sources to `shaders/` in the run directory for inspection and editor diagnostics:
+/// the GPU owner's kernels and the renderer's passes.
 pub fn shaders_item(run_dir: &Path) -> Item {
     let directory = run_dir.join("shaders");
     let mut problems = Vec::new();
-    let assemblies = gpu_world::shader::production_assemblies();
+    let mut assemblies = gpu_world::shader::production_assemblies();
+    assemblies.extend(world_render::shaders::production_assemblies());
     if let Err(error) = std::fs::create_dir_all(&directory) {
         problems.push(format!("{}: {error}", directory.display()));
     }

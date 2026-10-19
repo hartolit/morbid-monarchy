@@ -336,6 +336,13 @@ impl Runtime {
             .reconfigure(tick_rate_hz, max_ticks_per_frame)
     }
 
+    /// The ticks a [`frame`](Self::frame) of `elapsed` would owe (before pressure), without
+    /// advancing the clock.
+    pub fn ticks_due(&self, elapsed: Duration) -> u32 {
+        let clock = self.world.resource::<Clock>();
+        clock.clock.due_after(clock.elapsed + elapsed)
+    }
+
     /// The fixed tick's duration.
     pub fn tick_duration(&self) -> Duration {
         self.world.resource::<Clock>().clock.tick_duration()
@@ -343,6 +350,12 @@ impl Runtime {
 
     pub fn counters(&self) -> TransferCounters {
         self.world.resource::<Port>().0.counters()
+    }
+
+    /// The clock's rate and per-frame cap.
+    pub fn clock_settings(&self) -> (f64, u32) {
+        let clock = &self.world.resource::<Clock>().clock;
+        (clock.tick_rate_hz(), clock.max_ticks_per_frame())
     }
 
     pub fn last_frame(&self) -> FrameReport {
@@ -496,6 +509,21 @@ impl Runtime {
     /// The live world, for queries of its capabilities and counters.
     pub fn port(&self) -> &dyn PhysicalWorld {
         self.world.resource::<Port>().0.as_ref()
+    }
+
+    /// The live world as the concrete type the composition root opened, for consumers it
+    /// composes beside the runtime on the same owner (a renderer reading the resident world on
+    /// the same device). `None` when the port is another type. Physical work still goes through
+    /// the runtime: commands, ticks and residency are never issued behind its back.
+    pub fn port_as<T: PhysicalWorld>(&mut self) -> Option<&mut T> {
+        let port: &mut dyn std::any::Any = self.port_mut();
+        port.downcast_mut::<T>()
+    }
+
+    /// Read-only form of [`port_as`](Self::port_as).
+    pub fn port_ref<T: PhysicalWorld>(&self) -> Option<&T> {
+        let port: &dyn std::any::Any = self.port();
+        port.downcast_ref::<T>()
     }
 
     fn port_mut(&mut self) -> &mut dyn PhysicalWorld {

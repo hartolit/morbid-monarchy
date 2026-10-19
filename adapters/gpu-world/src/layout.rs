@@ -1283,6 +1283,22 @@ fn write_body_constants(text: &mut String) {
 /// `store_<prefix>(base, value)`. Generated, like the structs, so a field cannot be read at
 /// one offset and written at another. Atomic fields are not supported here.
 pub fn word_access(layout: &RecordLayout, array: &str, prefix: &str) -> String {
+    let mut text = word_load_access(layout, array, prefix);
+    let _ = writeln!(text, "fn store_{prefix}(base: u32, r: {}) {{", layout.name);
+    for (index, field) in layout.fields.iter().enumerate() {
+        let _ = writeln!(
+            text,
+            "    {array}[base + {index}u] = bitcast<u32>(r.{});",
+            field.name
+        );
+    }
+    text.push_str("}\n");
+    text
+}
+
+/// The load function of [`word_access`] alone, for consumers that bind `array` read-only (a
+/// renderer reading body state); a store into a read-only binding would not validate.
+pub fn word_load_access(layout: &RecordLayout, array: &str, prefix: &str) -> String {
     let mut text = format!(
         "fn load_{prefix}(base: u32) -> {} {{\n    var r: {};\n",
         layout.name, layout.name
@@ -1298,15 +1314,6 @@ pub fn word_access(layout: &RecordLayout, array: &str, prefix: &str) -> String {
         let _ = writeln!(text, "    r.{} = {value};", field.name);
     }
     text.push_str("    return r;\n}\n");
-    let _ = writeln!(text, "fn store_{prefix}(base: u32, r: {}) {{", layout.name);
-    for (index, field) in layout.fields.iter().enumerate() {
-        let _ = writeln!(
-            text,
-            "    {array}[base + {index}u] = bitcast<u32>(r.{});",
-            field.name
-        );
-    }
-    text.push_str("}\n");
     text
 }
 

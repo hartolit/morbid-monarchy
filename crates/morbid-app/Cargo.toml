@@ -1,5 +1,5 @@
 [package]
-name = "morbid-app"
+name = "bevy-baseline"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -15,5 +15,5 @@ world-model.workspace = true
 world-store.workspace = true
 
 [lib]
-name = "morbid_app"
+name = "bevy_baseline"
 path = "src/lib.rs"

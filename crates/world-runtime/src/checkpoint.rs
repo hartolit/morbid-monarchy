@@ -192,6 +192,16 @@ impl Checkpoints {
         }
     }
 
+    /// Ticks between periodic saves, or `None` when they are off.
+    pub fn autosave_ticks(&self) -> Option<u64> {
+        self.config.autosave_ticks
+    }
+
+    /// Changes the periodic save interval from the next frame on; `None` turns it off.
+    pub fn set_autosave(&mut self, ticks: Option<u64>) {
+        self.config.autosave_ticks = ticks.filter(|ticks| *ticks > 0);
+    }
+
     /// The latest published checkpoint: what a reopened world, or a recovery, starts from.
     pub fn latest(&self) -> &CheckpointManifest {
         &self.latest

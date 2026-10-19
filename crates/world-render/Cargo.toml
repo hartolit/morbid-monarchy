@@ -1,0 +1,14 @@
+[package]
+name = "world-render"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Native rendering of the GPU-owned world: the landscape layers and spheres drawn from the live buffers on the simulation's device, with lighting, shadows, fog, bloom and tone mapping."
+
+[dependencies]
+bytemuck.workspace = true
+futures-lite.workspace = true
+gpu-world.workspace = true
+wgpu.workspace = true
+world-model.workspace = true
+world-runtime.workspace = true
