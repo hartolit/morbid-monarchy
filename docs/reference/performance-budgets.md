@@ -353,6 +353,65 @@ it, and the rest in proportion to the body pass's dispatches (249 at 4 + 4 passe
 reused buffers, so these are wgpu's command recording (an inference from the source, as at 03);
 fewer, larger dispatches would reduce them, which 06–07 can measure against the frame budget.
 
+## Streaming and checkpoints (05)
+
+**Resources.** On the device, snapshots are planned beside live terrain: a fixed chunk snapshot
+image of 32 entries (1 MiB) and the world image a world snapshot allocates while it drains,
+`8 N + 144 B` bytes (6,127,616 B at radius 6 with the default 4,096 bodies), reserved in the plan
+so the budget holds while one drains; one change word per slot. During a resize the budget holds
+the old allocations, the new ones and the larger world image together
+([GPU contract](gpu-contract.md#snapshots-and-completed-ticks)). On the CPU the residency owner
+keeps metadata per key, never cells, and two byte budgets: payloads loaded and waiting for upload
+(16 MiB) and payloads captured and not yet durable (32 MiB), 48 MiB together against the 64 MiB
+working-set envelope below. At most 16 loads are in flight; the workers' queues hold 32 loads and
+16 writes. Over its budget the owner stops moving the window and reports the pressure.
+
+**Measured on the nominated hardware.** Run on 2026-10-19 at 12:46 UTC with
+`cargo evidence test gpu --suite streaming --adapter vulkan-10de-2c05` on the tree committed as `6f6297c`
+(RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux 7.2.11, Ryzen 9 5950X; release build). A frame's CPU
+time is the `WorldSession::frame_ticks(1)` call: the runtime's frame (polling, encoding and
+submitting the tick) and the residency and checkpoint owners. Frames are paced 0.5 ms apart so the
+device keeps up; there is no presentation, so this is not a native frame time. Allocations are
+the process's, counted by the runner's allocator, including the store's worker threads and wgpu.
+The window is radius 6 (169 chunks) of generated terrain, seed 69, with every rule on.
+
+*Ordinary resident simulation* (`resident-no-readback`): 600 ticks with water poured at
+the centre, no move and no save, uploaded no chunk, copied and read back no snapshot or capture and
+submitted no transfer. Each tick read back 1,312 B (results, events,
+accounting, samples) and uploaded 276 B.
+
+*A save of the resident window* (`streaming-measure`): the world snapshot copied all 169 chunks on
+the device (5,537,792 B) and read back only the
+112 the flowing water had changed (3,670,692 B: their payloads
+and the flag sheet), in 5 transfer submissions, and committed
+26 frames after it was requested.
+
+*Walking* (`streaming-measure`): eight one-chunk moves east, 13 chunks entering and 13 leaving per
+move, with the 26 chunks of the two westernmost columns edited first and a save requested after
+the fourth move. Each entered chunk uploaded 32,768 B. Snapshots
+read back 4,260,932 B during the walk: 130 changed chunks' payloads and their flag sheets. A
+chunk whose snapshot finds it unchanged costs its flag word only. Every move settled in
+5 frames; loads waited at most 0.881 ms (mean
+0.434), writes at most 9.13 ms, and retained payloads
+peaked at 3,145,728 B. No frame or maintenance wait occurred.
+
+| Frames | CPU p50 (ms) | p95 | p99 | max | Allocations per frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Resident, 300 frames | 0.072 | 0.113 | 0.133 | 0.377 | 119 |
+| Saving, until committed | 0.076 | 0.528 | 0.554 | 0.554 | 306 |
+| Walking, 8 moves | 0.129 | 0.447 | 0.530 | 0.530 | 469 |
+| Resident with water, 600 frames | 0.070 | 0.100 | 0.118 | 2.01 | 119 |
+
+Saving and walking add about 0.4 ms at the 95th percentile to a frame's CPU time and 190–350
+allocations per frame; the allocations are not yet broken down by source. One resident frame
+took 2.01 ms. 06–07 judge these against the frame budget.
+
+*Under faults*: with writes failing, retention stops at its budget and the window waits
+(65,536 B, the two payloads `retention-budget` allows;
+65,536 B through 3 failed writes in
+`failed-commits-retained`). A world snapshot draining while the window grows from radius 1 to 2
+peaks at 8,616,352 requested device bytes, exactly the plan's overlap bound.
+
 ## Structural gates
 
 These gates are independent of an arbitrary FPS target.

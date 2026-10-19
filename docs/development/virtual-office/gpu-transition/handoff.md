@@ -4,21 +4,43 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 05 boundary (in progress)
+## 05 boundary (closed)
 
-**State:** 05 assigned by the user on 2026-10-18 and in progress on `experimental`. `f01c71a`
-holds checkpoints A–B (the GPU change words and snapshot images, `world-store`, and
-`world-runtime`'s storage port, workers, residency, checkpoint and session owners, with the
-`streaming` suite's first 13 GPU cases). `9c104e4` holds C: the recovery and headless-session
-cases, `cargo evidence session`, a read-only look before a store's write-open (a refused open of
-the old writer's save had changed its bytes), and a close that now saves until a committed
-checkpoint holds the last completed tick (it had judged the save by its request's reason). The
-next commit holds D's code: the `streaming-measure` and `resident-no-readback` cases,
-`resident-world` steps 4–5 and 05's part of step 6 over a real store, and the ADR, audit and
-specimen updates. Checks for each commit are in its message.
+**State:** 05 complete (2026-10-19), assigned by the user on 2026-10-18. Checkpoints A–D are
+committed on `experimental`; every lane passed on the nominated hardware except
+`resident-world`'s step 6, which 07 completes. The checks row names the commits.
 
-**Next action:** record D's measurements (performance budgets, status, acceptance A08/A09, the
-sprint README) and the 05 record below, then stop before 06.
+## 05 record
+
+| Field | Record |
+| --- | --- |
+| Assigned stage / checkpoint | 05 — Streaming, checkpoints and recovery. A–D complete. |
+| Source state | `experimental`: `f01c71a` (A–B), `9c104e4` (C), `6f6297c` (D's code and the measurement-independent documents), then this record with the measurements, status and acceptance. Work began at `a6c74d7` with a clean tree; no unrelated work was present. |
+| Actual adoption | **A:** `gpu-world` change words (every cell writer marks its slot; activation and snapshots clear it; resize carries it), the fixed chunk snapshot image and the on-demand world image within the plan, flag sheets so unchanged chunks are never read back, transfer-only submissions, body export and restore, resize preflight. `world-runtime`: the storage port (`store`), load and write workers, the residency owner (per-key phases, request generations, newest retained and durable revisions, byte budgets, pressure, stale and out-of-order loads discarded, absent / corrupt / unsupported / I/O failures kept apart). `world-model`: `identity` (layout and physics fingerprints), `resume` (body slots and resume records), `SimulationRules::from_bits`. **B:** `world-store` (format version 1, the redb store with atomic publication, stale-save refusal, idempotent retries, reopening after I/O errors, session markers and reclaim; fault injection under redb and at barriers), the checkpoint owner (one world snapshot at a completed tick, durable revisions, bodies, publication, retries, receipts) and `WorldSession`. **C:** the legacy reader and non-destructive import (`world_store::legacy`, moved from `spatial-lib` and `morbid-app`, with the old writer's fixtures), the `world-store` command, orderly close, loss reports and recovery under a new epoch, the headless `cargo evidence session`. **D:** the `streaming` suite's 19 cases with real temporary stores, `resident-world` steps 4–5 and 05's part of step 6 through `WorldSession`. Superseded: `spatial-lib`'s storage module; the baseline load task's generation over unreadable rows. |
+| Decisions / deviations | Change detection is on the device (one word per slot), not a CPU dirty flag, so a snapshot can tell an unchanged chunk without reading it. A checkpoint is one world snapshot at a completed tick plus the immutable revisions of chunks that were not resident; inactive chunks stay frozen. One redb file per world, `Durability::Immediate`; chunk rows and body sets are written ahead and one transaction publishes. A failed sync is treated as ambiguous: retries of the same operation are idempotent. A world whose layout, physics or generator identity differs is refused, not converted. Import requires the seed and elevation scale, refuses `z ≠ 0` rows unless told to skip them, and repairs a copy of an unclean original. Close publishes a checkpoint holding the last completed tick or reports that it did not; a session that did not close leaves the store unclean and the next one reclaims what it left. No command journal: changes after the last checkpoint are lost on a crash or device loss, and the loss report says how many ticks. The headless session command is 05's consumer of store selection, saving and reopening; the application's options are 06's. Behavior change in the baseline: an unreadable row is left unloaded instead of generated over. Found and fixed in C: a store opened for writing changed the bytes of a file it then refused as not a world (the old writer's save among them); a close judged its save by the request's reason, reporting a committed close unsaved during an autosave and taking no save of its own after an earlier one. `resident-world` step 6 runs 05's part and stays failed; the six steps of the acceptance trace are unchanged. A reboot (kernel 7.2.10 to 7.2.11) interrupted C's lanes, which were rerun from the start. |
+| Checks | `f01c71a`'s tree (2026-10-18 22:06–22:18 UTC, Linux 7.2.10): `check docs`, `check static`, `test cpu` (231 tests; 180 behaviors, 56 runner tests), `test gpu` `streaming` (13 cases), `transfers`, `cells`, `bodies`, all passed. `9c104e4`'s tree (2026-10-19 12:34–12:39 UTC, Linux 7.2.11): `check docs`, `check static`, `test cpu` (235 tests; 183 behaviors, 57 runner tests), `streaming` (17 cases), all passed. `6f6297c`'s tree (12:42–12:49 UTC): `check docs`, `check static` (Clippy 7 diagnostics, all covered by the 3 recorded exceptions), `test cpu` (235 tests; 183 behaviors, 57 runner tests), `test gpu --suite streaming --adapter vulkan-10de-2c05` (19 cases), `transfers` (29 items), `cells` (32), `bodies` (33) passed; `run --scenario resident-world` failed as intended: steps 1–5 passed, step 6 failed only on its "07 completes this" check. Reports in `target/evidence/05ab-*`, `05c-*` and `05d-*`. Each tree was tested as committed, with `CARGO_BUILD_JOBS=4`. This record changes documentation only; `check docs` on it is in its commit message. |
+| Hardware / measurements | RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.78.08), Ryzen 9 5950X, Linux 7.2.11, on `6f6297c`'s tree: the ordinary resident simulation at radius 6 with every rule on uploads and reads back no world data (1,312 B read back a tick, its own records); a save of the resident window copies 169 chunks on the device and reads back the 112 that changed, committing 26 frames after the request; walking, each entered chunk uploads 32,768 B, moves settle in 5 frames, loads wait at most 0.88 ms and writes 9.1 ms, retained payloads peak at 3 MiB; saving and walking add about 0.4 ms at p95 and 190–350 allocations to a frame's CPU time against 0.11 ms and 119 resident; no frame or maintenance wait. A world snapshot draining through a resize peaks exactly at the plan's overlap bound. Details: [performance budgets](../../../reference/performance-budgets.md#streaming-and-checkpoints-05). Headless only: no native frame time. |
+| Acceptance | A08 satisfied: metadata-only residency (`world_runtime::residency` holds no cells; `resident-no-readback`), capture before reuse (`delayed-mapping`, `newest-retained-wins`, step 4), reordered and stale loads (`reordered-and-stale-loads`), a dirty chunk returning before its save (`newest-retained-wins`, step 4), resize overlap (`snapshot-resize-overlap`, step 6), bounded retries and retention (`failed-commits-retained`, `retention-budget`), body suspension and resume across saves (`body-suspension-resume`, `snapshot-restore-bodies`, step 4), closed missing neighbours at negative-key corners (`missing-neighbours-closed`). A09 satisfied: resident-only autosave and periodic saves, chunk, body and configuration capture at one tick (step 5's byte-for-byte re-save), atomic publication under interruption (`store_lifecycle`, `process-interruption`), fresh reopen by new store objects, refusal of corrupt, truncated and future rows (`refused-rows-stay-out`), import of the old writer's fixtures (`import`, `cli`), orderly close with work in flight and its timeout (`orderly-shutdown`), and the loss boundary before and after capture (`loss-and-recovery`). A10–A15 not run; A14's complete trace is 07's. |
+| Data safety | Every case, the scenario and the session runs used temporary stores or scratch copies; the legacy fixtures are only read, or copied before an import or a session opens them. `world_data/save.redb` was not opened by any 05 command: it is 8,266,977,280 bytes, modified 2026-10-17 18:39:53 local time, as 04 left it, checked at each checkpoint. Since C a store opened for writing refuses a file that is not a version-1 world before opening it for writing, so pointing a store option at the legacy save leaves it unchanged. |
+| Blockers | None for 06. |
+| Next action / stop | Stopped at the end of 05. Assign 06. |
+
+### Carried into later stages (05)
+
+1. **The native client** (06) composes `WorldSession` over `world-store`: world selection,
+   creating and importing worlds (the user decides whether and when to import
+   `world_data/save.redb`, from a copy), save and close feedback, and loss and recovery
+   feedback. It retires the baseline's legacy persistence, `spatial-lib`'s grid and chunk
+   manager, and the headless session command's role as the only consumer.
+2. **`resident-world` step 6** (07): delayed consumers, dense body work at chunk seams with phase
+   changes, a negative-coordinate rebase and the native consumer, on top of 05's faults.
+3. **Frame cost of saving and streaming** (06–07): about 0.4 ms at p95 and 190–350 allocations a
+   frame, not yet broken down by source; judge against the frame budget.
+4. **Format evolution** (whenever a layout, rule or body constant changes): there is no
+   conversion; a changed fingerprint refuses older worlds. A migration must exist before such a
+   change ships to a user with saved worlds.
+5. **Autosave interval** (06): the session's default is 3,600 ticks (one minute at 60 Hz); the
+   client chooses and exposes it.
 
 ## 04 boundary (closed)
 
