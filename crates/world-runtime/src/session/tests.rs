@@ -394,6 +394,83 @@ fn an_orderly_close_saves_the_last_completed_tick() {
     );
 }
 
+/// Writes held for a moment, from another thread, while a close waits.
+fn release_later(store: &Arc<MemoryStore>) -> std::thread::JoinHandle<()> {
+    let store = Arc::clone(store);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        store.release();
+    })
+}
+
+#[test]
+fn a_close_after_an_earlier_save_saves_its_own_last_tick() {
+    let (mut session, port, store) = open_with(quiet(), |_| {});
+    until(&mut session, "settle", |session| {
+        session.residency().settled()
+    });
+    port.model().edit(key(0, 1), 4);
+    store.state().hold_writes = true;
+    session.save();
+    session.frame_ticks(1);
+    assert!(session.checkpoints().busy());
+    // A change after that save's boundary, which only the close's own save can hold.
+    for _ in 0..4 {
+        session.frame_ticks(1);
+    }
+    port.model().edit(key(0, 1), 5);
+    session.frame_ticks(1);
+    let last = port.model().next_tick.value() - 1;
+    let releaser = release_later(&store);
+    let report = session.close(Duration::from_secs(10));
+    releaser.join().expect("releaser");
+    assert!(report.saved, "{report:?}");
+    assert_eq!(report.latest.tick, Some(Tick::new(last)));
+    assert_eq!(
+        report.latest.id.value(),
+        3,
+        "the earlier save, then the close's"
+    );
+    let state = store.state();
+    assert_eq!(state.heads.get(&key(0, 1)), Some(&ChunkRevision::new(2)));
+    assert_eq!(state.chunks.get(&(key(0, 1), 2)), Some(&cells(5)));
+}
+
+#[test]
+fn a_close_during_an_autosave_of_its_last_tick_is_saved() {
+    let mut config = quiet();
+    config.checkpoints.autosave_ticks = Some(8);
+    let (mut session, port, store) = open_with(config, |_| {});
+    until(&mut session, "settle", |session| {
+        session.residency().settled()
+    });
+    port.model().edit(key(-1, -1), 6);
+    store.state().hold_writes = true;
+    until(&mut session, "an autosave", |session| {
+        session.checkpoints().busy()
+            && session
+                .checkpoints()
+                .receipt()
+                .is_some_and(|receipt| receipt.reason == SaveReason::Autosave)
+    });
+    let last = port.model().next_tick.value() - 1;
+    let latest = session.checkpoints().latest().id.value();
+    let releaser = release_later(&store);
+    let report = session.close(Duration::from_secs(10));
+    releaser.join().expect("releaser");
+    assert!(report.saved, "{report:?}");
+    assert_eq!(report.latest.tick, Some(Tick::new(last)));
+    assert_eq!(
+        report.latest.id.value(),
+        latest + 1,
+        "the autosave already holds the last tick"
+    );
+    assert_eq!(
+        store.state().heads.get(&key(-1, -1)),
+        Some(&ChunkRevision::new(1))
+    );
+}
+
 #[test]
 fn a_lost_device_reports_what_the_latest_checkpoint_does_not_hold() {
     let (mut session, port, store) = open_with(quiet(), |_| {});

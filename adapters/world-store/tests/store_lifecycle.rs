@@ -581,6 +581,40 @@ fn read_only_stores_never_write() {
     assert_eq!(fs::read(&path).expect("bytes"), before);
 }
 
+/// Opening for writing changes a redb file's bytes, so files that are not saved worlds (the old
+/// writer's save, an empty redb file, bytes that are not redb) are refused before that, unchanged.
+#[test]
+fn files_that_are_not_saved_worlds_are_refused_unchanged() {
+    let scratch = Scratch::new("foreign");
+    let legacy = scratch.path("save.redb");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy-v0/legacy-chunks.redb"),
+        &legacy,
+    )
+    .expect("copy fixture");
+    let empty = scratch.path("empty.redb");
+    drop(Database::create(&empty).expect("empty redb"));
+    let junk = scratch.path("junk.redb");
+    fs::write(&junk, vec![0x5a; 8192]).expect("junk");
+    for path in [&legacy, &empty, &junk] {
+        let before = fs::read(path).expect("bytes");
+        let refused = RedbWorldStore::open(path, OpenOptionsStore::default());
+        assert!(
+            matches!(
+                refused,
+                Err(StoreError::Corrupt {
+                    item: StoredItem::Header,
+                    ..
+                } | StoreError::Io { .. })
+            ),
+            "{}: {:?}",
+            path.display(),
+            refused.err()
+        );
+        assert_eq!(fs::read(path).expect("bytes"), before, "{}", path.display());
+    }
+}
+
 #[test]
 fn a_store_without_a_published_checkpoint_is_incomplete() {
     let scratch = Scratch::new("incomplete");

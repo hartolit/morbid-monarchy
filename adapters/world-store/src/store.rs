@@ -219,7 +219,10 @@ impl RedbWorldStore {
             });
         }
         let db = match options.access {
-            Access::ReadWrite => Db::Write(Self::open_write(path, &options.faults)?),
+            Access::ReadWrite => {
+                Self::probe(path)?;
+                Db::Write(Self::open_write(path, &options.faults)?)
+            }
             Access::ReadOnly => Db::Read(
                 Builder::new()
                     .open_read_only(path)
@@ -263,6 +266,27 @@ impl RedbWorldStore {
             Err(error) => return Err(error),
         }
         Ok(store)
+    }
+
+    /// Opening a file for writing changes its bytes even when nothing is written, so a
+    /// read-only look first confirms it is a saved world: a legacy save, another redb file or
+    /// anything else is refused unchanged. A file redb must repair cannot be looked at without
+    /// that repair; it is opened for writing (redb repairs it without losing committed data) and
+    /// checked after.
+    fn probe(path: &Path) -> Result<(), StoreError> {
+        let database = match Builder::new().open_read_only(path) {
+            Ok(database) => database,
+            Err(redb::DatabaseError::RepairAborted) => return Ok(()),
+            Err(error) => return Err(io("open store read-only")(error)),
+        };
+        let txn = database.begin_read().map_err(io("begin read"))?;
+        match read_table(&txn, WORLD)? {
+            Some(_) => Ok(()),
+            None => Err(StoreError::Corrupt {
+                item: StoredItem::Header,
+                detail: "no world table: not a saved world",
+            }),
+        }
     }
 
     fn open_write(path: &Path, faults: &StoreFaults) -> Result<Database, StoreError> {

@@ -7,7 +7,11 @@
 //! gpu-suite --suite transfers --adapter vulkan-10de-2c05 --case empty-batches --result out.json
 //!           [--allow-software]
 //! gpu-suite --scenario resident-world --adapter vulkan-10de-2c05 --result out.json
+//! gpu-suite --session --store world.redb --adapter vulkan-10de-2c05 --result out.json
+//!           [--ticks N] [--center X,Y --radius R] [--edit TOOL,X,Y]... [--autosave TICKS|off]
 //! ```
+//!
+//! `--session` takes the options of `cargo evidence session`, parsed by the same grammar.
 //!
 //! The process exits 0 only when the case (or every step of the scenario) passed; its result,
 //! with failures, notes and metrics, is written as JSON to `--result`.
@@ -15,7 +19,7 @@
 use std::process::ExitCode;
 
 use monarchy_evidence::{
-    cli::GpuSuite,
+    cli::{self, GpuSuite},
     suites::{self, alloc::CountingAllocator},
 };
 
@@ -31,6 +35,9 @@ fn main() -> ExitCode {
             .and_then(|index| args.get(index + 1))
             .cloned()
     };
+    if args.iter().any(|arg| arg == "--session") {
+        return run_session(&args);
+    }
     if let Some(scenario) = value("--scenario") {
         return run_scenario(&scenario, value("--adapter"), value("--result"), &args);
     }
@@ -96,6 +103,59 @@ fn run_scenario(
     for step in &result.steps {
         for failure in &step.failures {
             println!("FAILED {}: {failure}", step.name);
+        }
+    }
+    let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+    if let Err(error) = std::fs::write(&result_path, json) {
+        eprintln!("gpu-suite: write {result_path}: {error}");
+        return ExitCode::from(1);
+    }
+    if result.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn run_session(args: &[String]) -> ExitCode {
+    // The runner's grammar, without this process's own flags.
+    let mut words = vec!["session".to_owned()];
+    let mut result_path = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--session" => {}
+            "--allow-software" => suites::set_allow_software(true),
+            "--result" => result_path = rest.next().cloned(),
+            _ => words.push(arg.clone()),
+        }
+    }
+    let Some(result_path) = result_path else {
+        eprintln!("gpu-suite: --result is required");
+        return ExitCode::from(2);
+    };
+    let request = match cli::parse(words) {
+        Ok(cli::Invocation {
+            command: cli::Command::Session(request),
+            ..
+        }) => request,
+        Ok(_) => {
+            eprintln!("gpu-suite: not a session");
+            return ExitCode::from(2);
+        }
+        Err(cli::UsageError(message)) => {
+            eprintln!("gpu-suite: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    let result = suites::session::run(&request);
+    for step in &result.steps {
+        println!("{}: {}", step.name, step.summary);
+        for failure in &step.failures {
+            println!("FAILED {}: {failure}", step.name);
+        }
+        for note in &step.notes {
+            println!("note {}: {note}", step.name);
         }
     }
     let json = serde_json::to_string_pretty(&result).unwrap_or_default();

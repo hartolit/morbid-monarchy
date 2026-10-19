@@ -126,6 +126,7 @@ fn command_slug(command: &Command) -> String {
         Command::TestGpu { suite, .. } => format!("test-gpu-{}", suite.name()),
         Command::InspectAdapter => "inspect-adapter".to_owned(),
         Command::Run { scenario, .. } => format!("run-{scenario}"),
+        Command::Session(_) => "session".to_owned(),
         Command::Bench(request) => format!("bench-{}", request.profile),
     }
 }
@@ -200,6 +201,19 @@ fn run_command(command: &Command, root: &Path, run_dir: &Path) -> (Vec<Item>, se
                     items.push(item);
                     (items, serde_json::Value::Null)
                 }
+            }
+        }
+        Command::Session(request) => {
+            let records = gpu::enumerate();
+            match gpu::resolve(&records, &request.adapter) {
+                Ok(record) => {
+                    let lane = gpu::LaneContext { root, run_dir };
+                    (
+                        gpu::session_items(request, record, &lane),
+                        adapter_data(record),
+                    )
+                }
+                Err(item) => (vec![item], serde_json::Value::Null),
             }
         }
         Command::Bench(request) => bench::run(request, root, run_dir),

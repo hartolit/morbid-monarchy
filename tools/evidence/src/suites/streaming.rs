@@ -6,8 +6,9 @@ use super::Case;
 
 mod checkpoints;
 mod mechanism;
+mod recovery;
 mod residency;
-mod world;
+pub(super) mod world;
 
 pub const CASES: &[Case] = &[
     Case {
@@ -74,5 +75,25 @@ pub const CASES: &[Case] = &[
         name: "snapshot-restore-bodies",
         summary: "a world snapshot's bodies restored into a new session continue bit for bit, with the same handles and none twice",
         run: mechanism::restore_bodies,
+    },
+    Case {
+        name: "orderly-shutdown",
+        summary: "an orderly close waits for a held save, saves the last completed tick, reports the command it abandons and reopens clean; a close that cannot save in time says so and the next session reclaims what it left",
+        run: recovery::orderly_shutdown,
+    },
+    Case {
+        name: "loss-and-recovery",
+        summary: "a device lost before a save's payloads reach the CPU fails that save and reports the last complete checkpoint, which a later epoch recovers exactly while refusing the lost session's slots; lost after capture, the save is still published",
+        run: recovery::loss_and_recovery,
+    },
+    Case {
+        name: "process-interruption",
+        summary: "a live session's process ends inside a save at a defined barrier: before the publication commits the world reopens at the previous checkpoint, after it at the new one, never a mix",
+        run: recovery::process_interruption,
+    },
+    Case {
+        name: "headless-session",
+        summary: "the headless session consumer saves its edits when it closes, a second run reopens them under the next epoch, and a legacy save given as its store is refused unchanged",
+        run: recovery::headless_session,
     },
 ];

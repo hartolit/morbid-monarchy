@@ -14,11 +14,11 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    cli::GpuSuite,
+    cli::{Autosave, GpuSuite, SessionRequest},
     paths,
     process::{Step, run_logged},
     report::{Item, State},
-    suites::{self, CaseResult, scenarios::ScenarioResult},
+    suites::{self, CaseResult, scenarios::ScenarioResult, session::SessionResult},
     tests_cpu::Registry,
 };
 
@@ -346,6 +346,159 @@ fn run_suite(
     (items, results)
 }
 
+/// Builds the release `gpu-suite` binary that scenarios and sessions run in; a failure is the
+/// `<id>.build` item.
+fn build_suite_binary(lane: &LaneContext<'_>, id: &str, label: &str) -> Result<(), Item> {
+    if !lane.root.join("Cargo.toml").is_file() {
+        return Err(Item::new(
+            format!("{id}.build"),
+            State::Failed,
+            format!("{} is not the workspace", lane.root.display()),
+        ));
+    }
+    let build = run_logged(
+        &Step::new("cargo", lane.root).args([
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "monarchy-evidence",
+            "--bin",
+            SUITE_BINARY,
+        ]),
+        lane.run_dir,
+        &format!("{label}-build"),
+    );
+    if build.state != State::Passed {
+        return Err(Item::new(
+            format!("{id}.build"),
+            build.state,
+            format!("{label} build {}", build.reason.unwrap_or_default()),
+        )
+        .with_log(build.log));
+    }
+    Ok(())
+}
+
+/// A headless session over the store the request names, in its own `gpu-suite` process: one
+/// item each for opening, running and closing. Relative store paths are resolved against the
+/// invoking directory, not the workspace.
+pub fn session_items(
+    request: &SessionRequest,
+    adapter: &AdapterRecord,
+    lane: &LaneContext<'_>,
+) -> Vec<Item> {
+    let store = if request.store.is_absolute() {
+        request.store.clone()
+    } else {
+        match std::env::current_dir() {
+            Ok(dir) => dir.join(&request.store),
+            Err(error) => {
+                return vec![Item::new(
+                    "session.open",
+                    State::Failed,
+                    format!("cannot resolve {}: {error}", request.store.display()),
+                )];
+            }
+        }
+    };
+    if let Err(item) = build_suite_binary(lane, "session", "session") {
+        return vec![item];
+    }
+    let result_path = lane.run_dir.join("session.json");
+    let _ = std::fs::remove_file(&result_path);
+    let mut step = Step::new(suite_binary(lane.root).as_os_str(), lane.root)
+        .args(["--session", "--store"])
+        .arg(store.as_os_str())
+        .args([
+            "--adapter",
+            &adapter.id,
+            "--ticks",
+            &request.ticks.to_string(),
+        ])
+        .timeout(Duration::from_secs(300 + u64::from(request.ticks) / 20));
+    if let Some(((x, y), radius)) = request.window {
+        step = step.args([
+            "--center".to_owned(),
+            format!("{x},{y}"),
+            "--radius".to_owned(),
+            radius.to_string(),
+        ]);
+    }
+    for edit in &request.edits {
+        step = step.args([
+            "--edit".to_owned(),
+            format!("{},{},{}", edit.name(), edit.cell.0, edit.cell.1),
+        ]);
+    }
+    match request.autosave {
+        Autosave::Default => {}
+        Autosave::Off => step = step.args(["--autosave", "off"]),
+        Autosave::Every(ticks) => step = step.args(["--autosave".to_owned(), ticks.to_string()]),
+    }
+    step = step.arg("--result").arg(result_path.as_os_str());
+    if adapter.software {
+        step = step.arg("--allow-software");
+    }
+    let outcome = run_logged(&step, lane.run_dir, "session");
+    let parsed = std::fs::read_to_string(&result_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<SessionResult>(&text).ok());
+    let Some(result) = parsed else {
+        return vec![
+            Item::new(
+                "session",
+                State::Failed,
+                format!(
+                    "no result ({})",
+                    outcome
+                        .reason
+                        .unwrap_or_else(|| "exited without writing one".to_owned())
+                ),
+            )
+            .with_log(outcome.log),
+        ];
+    };
+    let mut items: Vec<Item> = result
+        .steps
+        .iter()
+        .map(|step| {
+            let mut details: Vec<String> = step
+                .failures
+                .iter()
+                .map(|failure| format!("FAILED {failure}"))
+                .collect();
+            details.extend(step.notes.iter().map(|note| format!("note: {note}")));
+            details.extend(
+                step.metrics
+                    .iter()
+                    .map(|(key, value)| format!("{key}: {value}")),
+            );
+            Item::new(
+                format!("session.{}", step.name),
+                if step.passed {
+                    State::Passed
+                } else {
+                    State::Failed
+                },
+                step.summary.clone(),
+            )
+            .with_details(details)
+            .with_log(outcome.log.clone())
+        })
+        .collect();
+    for name in ["open", "run", "close"] {
+        if !result.steps.iter().any(|step| step.name == name) {
+            items.push(Item::new(
+                format!("session.{name}"),
+                State::Failed,
+                "not reached: an earlier step stopped the session",
+            ));
+        }
+    }
+    items
+}
+
 /// The longest a connected scenario may run before it is killed and failed.
 const SCENARIO_TIME_LIMIT: Duration = Duration::from_secs(300);
 
@@ -365,35 +518,8 @@ pub fn scenario_items(
             format!("unknown scenario `{scenario}`; registered: resident-world"),
         )];
     }
-    if !lane.root.join("Cargo.toml").is_file() {
-        return vec![Item::new(
-            format!("{id}.build"),
-            State::Failed,
-            format!("{} is not the workspace", lane.root.display()),
-        )];
-    }
-    let build = run_logged(
-        &Step::new("cargo", lane.root).args([
-            "build",
-            "--locked",
-            "--release",
-            "-p",
-            "monarchy-evidence",
-            "--bin",
-            SUITE_BINARY,
-        ]),
-        lane.run_dir,
-        &format!("{scenario}-build"),
-    );
-    if build.state != State::Passed {
-        return vec![
-            Item::new(
-                format!("{id}.build"),
-                build.state,
-                format!("scenario build {}", build.reason.unwrap_or_default()),
-            )
-            .with_log(build.log),
-        ];
+    if let Err(item) = build_suite_binary(lane, &id, scenario) {
+        return vec![item];
     }
     let result_path = lane.run_dir.join(format!("{scenario}.json"));
     let _ = std::fs::remove_file(&result_path);

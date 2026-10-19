@@ -12,6 +12,7 @@ pub mod cells;
 pub mod driver;
 pub mod probe;
 pub mod scenarios;
+pub mod session;
 pub mod streaming;
 pub mod transfers;
 

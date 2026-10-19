@@ -12,8 +12,9 @@ test selection is never reported as success.
 | `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; naga validation of every assembled `gpu-world` shader; `cargo deny` with [`deny.toml`](../../deny.toml) and `cargo machete` at their required versions; dependency direction (each package's own resolved closure); toolchain/lock/alias pins; the CI workflow's lanes and checker versions. |
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with the stable `--adapter` identifier `gpu-world` assigns, limits and features. |
-| `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03) and `bodies` (04) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. Other suites fail explicitly until their stage registers them. |
+| `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03), `bodies` (04) and `streaming` (05) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. `render` fails explicitly until 06 registers it. |
 | `run --scenario NAME --adapter ID` | `resident-world` runs in its own `gpu-suite` process through the runtime and the live world, one item per step; steps 1–3 exist since 04, and a step its stage has not delivered fails. |
+| `session --store PATH --adapter ID` | Opens a saved world (`world-store`) headless in its own `gpu-suite` process through `world_runtime::session::WorldSession` and the live world, runs it (`--ticks`, a new window with `--center`/`--radius`, `--edit TOOL,X,Y`, `--autosave`), and closes it in order; one item each for opening, running and closing, which passes only when the close saved the last completed tick. Running it again reopens what the close saved. |
 | `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/). |
 | `check all --adapter ID` | Every lane above, without skipping. |
 
@@ -52,14 +53,18 @@ prompt 06. Default builds of the runner do not compile Bevy; `check static` enfo
 ## GPU suites
 
 `src/suites/` holds the GPU suites and the connected scenarios (`scenarios.rs`);
-`src/bin/gpu-suite.rs` runs one case (or one scenario) per process, so a lost device, crash or
+`src/bin/gpu-suite.rs` runs one case (or one scenario, or one headless session from
+`suites/session.rs`) per process, so a lost device, crash or
 hang affects one case, which is killed after three minutes (a scenario after five). Cases drive
 `gpu_world::world::GpuWorld` and `world_runtime::runtime::Runtime` through their public
 interfaces, as the application will. Layout probes (`suites/probe.rs`) assemble small kernels
 from `gpu-world`'s exported declarations and run them on the session's device through its
 timeline. The binary installs a counting allocator so steady-state cases can report
 allocations. Each case writes a JSON result with failures, notes and metrics; the runner keeps
-them in `gpu-<suite>/` of its run directory and the metrics in `report.json`.
+them in `gpu-<suite>/` of its run directory and the metrics in `report.json`. The `streaming`
+cases (`suites/streaming/`) create real redb stores in temporary directories, inject I/O
+failures through `world_store::faults`, and re-run the binary as a child process to interrupt a
+live session at a store barrier; none opens `world_data/`.
 
 ## Adding a lane
 

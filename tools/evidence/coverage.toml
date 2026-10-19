@@ -2436,6 +2436,26 @@ destination = "world-runtime residency, checkpoints and session against the mode
 determinism = "exact"
 
 [[behavior]]
+id = "runtime.session.a-close-after-an-earlier-save-saves-its-own-last-tick"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_close_after_an_earlier_save_saves_its_own_last_tick"
+origin = "transition"
+expectation = "A close that finds a save of an earlier tick under way waits for it, then saves again so the change after that boundary is published at the last completed tick."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.a-close-during-an-autosave-of-its-last-tick-is-saved"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_close_during_an_autosave_of_its_last_tick_is_saved"
+origin = "transition"
+expectation = "A close during an autosave of the last completed tick reports it saved without another checkpoint: what counts is a committed save at the boundary, not which request started it."
+destination = "world-runtime residency, checkpoints and session against the model port (05); the GPU suite runs the real owners"
+determinism = "exact"
+
+[[behavior]]
 id = "runtime.session.a-lost-device-reports-what-the-latest-checkpoint-does-not-ho"
 package = "world-runtime"
 target = "lib"
@@ -2606,6 +2626,16 @@ destination = "world-store redb store (05)"
 determinism = "exact"
 
 [[behavior]]
+id = "store.lifecycle.files-that-are-not-saved-worlds-are-refused-unchanged"
+package = "world-store"
+target = "test:store_lifecycle"
+test = "files_that_are_not_saved_worlds_are_refused_unchanged"
+origin = "transition"
+expectation = "The old writer's save, an empty redb file and bytes that are not redb are refused by a read-write open before anything opens them for writing, and stay byte for byte."
+destination = "world-store redb store (05)"
+determinism = "exact"
+
+[[behavior]]
 id = "store.lifecycle.a-store-without-a-published-checkpoint-is-incomplete"
 package = "world-store"
 target = "test:store_lifecycle"
@@ -2745,6 +2775,46 @@ test = "snapshot-restore-bodies"
 origin = "transition"
 expectation = "A world snapshot's bodies restored with its chunks into a later-epoch session continue bit for bit, keep their handles, keep the removed one stale and are not duplicated."
 destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.orderly-shutdown"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "orderly-shutdown"
+origin = "transition"
+expectation = "An orderly close with a queued later command, ticks in flight and a save held at its barrier waits for it, saves the last submitted tick, reports one abandoned command and reopens clean with every change; a close whose save is held past its limit reports a timeout without saving, the previous checkpoint stays, and the next session finds the store unclean, reclaims and lacks the unsaved change."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.loss-and-recovery"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "loss-and-recovery"
+origin = "transition"
+expectation = "A device lost while a save's deliveries are held fails it as abandoned and reports the latest complete checkpoint, the ticks lost and the resident chunks; a later epoch recovers exactly that checkpoint (changes after it are gone) and refuses the lost session's slot; a loss after every payload reached the CPU still publishes the save, and the next epoch holds it."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.process-interruption"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "process-interruption"
+origin = "transition"
+expectation = "A child process running a live session aborts at the publication's barriers: before the commit the reopened world is the previous checkpoint, after it the new one, recorded unclean either way, and the next session closes cleanly."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.headless-session"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "headless-session"
+origin = "transition"
+expectation = "The headless session consumer behind `cargo evidence session` saves its edit when it closes; a second run opens that checkpoint under the next epoch after a clean close; a live session finds the edit; the old writer's save given as the store is refused as not a saved world and stays byte for byte."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); the native client's world options replace the consumer (06)"
 determinism = "exact"
 
 [[behavior]]

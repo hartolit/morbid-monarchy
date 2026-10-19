@@ -24,7 +24,9 @@ use std::{
 use world_model::{resume::BodySet, spatial::ChunkKey};
 
 use crate::{
-    checkpoint::{CheckpointConfig, Checkpoints, SaveFailure, SaveId, SaveReason, SaveReceipt},
+    checkpoint::{
+        CheckpointConfig, Checkpoints, SaveFailure, SaveId, SaveReason, SaveReceipt, SaveState,
+    },
     ids::{SessionEpoch, Tick},
     port::{AbandonReason, PhysicalWorld, PortHealth, Refusal, ResidentWindow},
     residency::{Residency, ResidencyConfig},
@@ -139,6 +141,15 @@ pub struct WorldSession {
     health: Health,
     loss: Option<LossReport>,
     start: SessionStart,
+    /// The tick of the checkpoint the session opened.
+    opened_tick: Option<Tick>,
+}
+
+/// Whether `receipt` is a committed save of the world at `boundary`.
+fn holds(receipt: Option<&SaveReceipt>, boundary: Option<Tick>) -> bool {
+    receipt.is_some_and(
+        |receipt| matches!(receipt.state, SaveState::Committed { tick, .. } if tick == boundary),
+    )
 }
 
 impl WorldSession {
@@ -180,6 +191,7 @@ impl WorldSession {
             health: Health::Live,
             loss: None,
             start: plan.start,
+            opened_tick: plan.manifest.tick,
         })
     }
 
@@ -370,15 +382,32 @@ impl WorldSession {
             self.frame_ticks(0);
             std::thread::sleep(Duration::from_micros(200));
         }
+        // The close publishes everything up to the last completed tick (with none run, the
+        // tick the session opened at, where a save captures the restored state).
+        let boundary = self.runtime.last_submitted_tick().or(self.opened_tick);
         let save = if self.health == Health::Live {
-            self.checkpoints.request(SaveReason::Close);
-            while Instant::now() < deadline && (self.checkpoints.busy() || self.residency.busy()) {
-                self.residency.retry_writes_now();
-                self.checkpoints.retry_now();
-                self.frame_ticks(0);
-                std::thread::sleep(Duration::from_micros(200));
+            // A save already under way keeps its own boundary, which may be earlier; once it is
+            // over, the close takes another. At most two run here.
+            let mut receipt = None;
+            for _ in 0..2 {
+                self.checkpoints.request(SaveReason::Close);
+                while Instant::now() < deadline
+                    && (self.checkpoints.busy() || self.residency.busy())
+                {
+                    self.residency.retry_writes_now();
+                    self.checkpoints.retry_now();
+                    self.frame_ticks(0);
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                receipt = self.checkpoints.receipt().cloned();
+                let over = receipt
+                    .as_ref()
+                    .is_none_or(|receipt| !matches!(receipt.state, SaveState::Committed { .. }));
+                if over || holds(receipt.as_ref(), boundary) || Instant::now() >= deadline {
+                    break;
+                }
             }
-            self.checkpoints.receipt().cloned()
+            receipt
         } else {
             self.checkpoints.receipt().cloned()
         };
@@ -394,9 +423,7 @@ impl WorldSession {
             }
             None => true,
         };
-        let committed = save.as_ref().is_some_and(|receipt| {
-            receipt.reason == SaveReason::Close && receipt.committed().is_some()
-        });
+        let committed = holds(save.as_ref(), boundary);
         let unwritten = self.residency.retained_unwritten() as u32;
         let saved = committed && unwritten == 0 && workers_joined && self.health == Health::Live;
         if saved {

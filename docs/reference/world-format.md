@@ -157,6 +157,41 @@ back, and only then publishes the first checkpoint. The supplied seed and elevat
 recorded as the import's interpretation in the header. An import that stops earlier leaves an
 incomplete store that opening refuses. The original is never written.
 
+### Operating a saved world (05)
+
+Since 05 these commands work on version-1 stores. The application still reads and writes the
+legacy `world_data/save.redb` until prompt 06 composes the runtime's session over `world-store`;
+nothing in the application opens a version-1 store yet.
+
+```bash
+cargo run --locked --release -p world-store -- create --store WORLD.redb --seed 7 --radius 2
+cargo run --locked --release -p world-store -- import-legacy --legacy COPY.redb --store WORLD.redb --seed 69 --elevation-scale 0.5 --skip-nonplanar-rows
+cargo run --locked --release -p world-store -- inspect --store WORLD.redb
+cargo run --locked --release -p world-store -- verify --store WORLD.redb
+cargo evidence session --store WORLD.redb --adapter ADAPTER_ID --ticks 600 --edit raise,10,10
+```
+
+- `create` and `import-legacy` refuse an existing destination. A legacy file records neither seed
+  nor elevation scale, so the import requires both and reports and records them as its
+  interpretation; `--skip-nonplanar-rows` leaves out rows with `z ≠ 0`, which are refused
+  otherwise. Import from a copy while the old application might be running: the importer never
+  writes the original, and copies it to repair it when the old application left it unclean.
+- `inspect` and `verify` open read-only and leave the file byte for byte. `verify` reads and
+  checks every published row and the latest body set.
+- `session` (the evidence runner's headless consumer) opens the latest checkpoint as the next
+  session epoch, runs it by wall time, applies the edits once the window has settled, and closes
+  in order: admission closes, the in-flight ticks complete, and a checkpoint of the last
+  completed tick is published (after a save already under way, if that one holds an earlier
+  tick). It passes only when that checkpoint was published, all captured revisions are durable
+  and the workers finished. Running it again reopens that checkpoint.
+- A session that did not close (killed, timed out, device lost) leaves the store marked unclean.
+  The next session to open it reclaims the revisions and body sets no checkpoint reached, reports
+  that it did, and starts from the latest complete checkpoint; changes after it are lost, as the
+  loss report of a lost device says (its checkpoint, tick and ticks lost). Nothing is replayed.
+- Every one of these opens only the file it is given. A file that is not a version-1 world (a
+  legacy save, another redb file, anything else) is refused before it is opened for writing,
+  unchanged.
+
 ## Residency state machine
 
 `absent -> load/generate pending -> CPU payload ready -> upload reserved -> GPU resident`

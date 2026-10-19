@@ -13,6 +13,12 @@ made durable.
 | `faults` | `StoreFaults`: I/O errors inside redb's own writes and syncs (`FaultBackend`, a `StorageBackend` around the real file), failures and holds at defined points of the store's operations, and process interruption at those points or at the n-th file write. For tests. |
 | `legacy` | The baseline's `spatial_chunks` rows: their bitcode bytes (the one owner of them), the table the baseline writes through `LegacyStore` until prompt 06, and `import`, which reads a legacy file without changing it and writes a new world. |
 
+`src/bin/world-store.rs` is the command line: `create`, `import-legacy`, `inspect` and `verify`,
+each naming its store; the recipe is in
+[world format](../../docs/reference/world-format.md#operating-a-saved-world-05). Opening a
+store for writing first looks at the file read-only: redb changes a file's bytes when it opens it
+for writing, so a legacy save or any other file given as a store is refused unchanged.
+
 The exact bytes and the compatibility policy are in
 [world format](../../docs/reference/world-format.md#saved-world-format-version-1-05). The
 [legacy fixtures](tests/fixtures/legacy-v0/README.md) are the old writer's rows. Tests run against
