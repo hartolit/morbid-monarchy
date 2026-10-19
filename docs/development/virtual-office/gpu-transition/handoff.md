@@ -7,20 +7,18 @@ artifacts. Update after each coherent checkpoint and before stopping or changing
 ## 05 boundary (in progress)
 
 **State:** 05 assigned by the user on 2026-10-18 and in progress on `experimental`. `f01c71a`
-holds checkpoints A–B: the GPU change words and snapshot images, `world-store` (format version
-1, the redb store, fault injection, the legacy reader and import, the `world-store` command), and
-`world-runtime`'s storage port, workers, residency, checkpoint and session owners, with their CPU
-tests and the `streaming` suite's first 13 GPU cases. The next commit holds checkpoint C: the
-`orderly-shutdown`, `loss-and-recovery`, `process-interruption` and `headless-session` cases, the
-headless consumer `cargo evidence session`, and two defects C found. Opening a store for writing
-changed the bytes of a file that was then refused as not a world (the old writer's save among
-them); it now looks read-only first. An orderly close judged its result by the save's reason: a
-close during an autosave of the last tick reported a committed checkpoint unsaved, and a close
-after a save of an earlier tick took no save of its own. It now saves until a committed
-checkpoint holds the last completed tick. Checks for each commit are in its message.
+holds checkpoints A–B (the GPU change words and snapshot images, `world-store`, and
+`world-runtime`'s storage port, workers, residency, checkpoint and session owners, with the
+`streaming` suite's first 13 GPU cases). `9c104e4` holds C: the recovery and headless-session
+cases, `cargo evidence session`, a read-only look before a store's write-open (a refused open of
+the old writer's save had changed its bytes), and a close that now saves until a committed
+checkpoint holds the last completed tick (it had judged the save by its request's reason). The
+next commit holds D's code: the `streaming-measure` and `resident-no-readback` cases,
+`resident-world` steps 4–5 and 05's part of step 6 over a real store, and the ADR, audit and
+specimen updates. Checks for each commit are in its message.
 
-**Next action:** checkpoint D (the measurement cases, `resident-world` steps 4–6, and the
-maintained docs, status and this record).
+**Next action:** record D's measurements (performance budgets, status, acceptance A08/A09, the
+sprint README) and the 05 record below, then stop before 06.
 
 ## 04 boundary (closed)
 

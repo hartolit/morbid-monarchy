@@ -84,7 +84,9 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 | Missing event overflow signal | 02 | `gpu-world` `readback::tests::a_missing_overflow_signal_is_rejected`; `transfers` `event-overflow-and-reset`; `bodies` `observation-delivery` (the body producers overflow four events a tick and the ledger counts it) |
 | A body slot beyond the table in a ray result | 04 | `gpu-world` `readback::tests::body_results_become_absolute_and_samples_must_echo_their_handles` (the f32-rounded sentinel the first ray kernel produced is a decode error) |
 | An important body event lost in a full ring | 04 | `world-runtime` `bodies::tests` (deferral, waiting removals, late removals after slot reuse); `bodies` `observation-delivery` (hostile replays deliver what the in-order replay delivers) |
-| Old save revision replacing a newer one | 05 | pending |
+| Old save revision replacing a newer one | 05 | `world-store` `store_lifecycle` `publication_refuses_missing_older_and_out_of_order_data_and_changes_nothing`; `streaming` `newest-retained-wins` (an older revision published after a newer one is refused with `Conflict::HeadNotNewer` and changes nothing) |
+| A stored row that is damaged, truncated or of a future version | 05 | `world-store` `format::tests` and `store_lifecycle` `absent_found_corrupt_and_unsupported_rows_read_differently`; `streaming` `refused-rows-stay-out` (never generated over, kept byte for byte) |
+| A save reported complete without the last tick | 05 | `world-runtime` `session::tests::a_close_after_an_earlier_save_saves_its_own_last_tick`; `streaming` `orderly-shutdown` (a close that cannot save in time reports it) |
 
 ## Connected scenario
 

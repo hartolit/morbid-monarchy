@@ -13,7 +13,7 @@ test selection is never reported as success.
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with the stable `--adapter` identifier `gpu-world` assigns, limits and features. |
 | `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03), `bodies` (04) and `streaming` (05) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. `render` fails explicitly until 06 registers it. |
-| `run --scenario NAME --adapter ID` | `resident-world` runs in its own `gpu-suite` process through the runtime and the live world, one item per step; steps 1–3 exist since 04, and a step its stage has not delivered fails. |
+| `run --scenario NAME --adapter ID` | `resident-world` runs in its own `gpu-suite` process through the runtime's session, the live world and a temporary store, one item per step; steps 1–3 exist since 04 and 4–5 since 05. Step 6 runs 05's part and stays failed until 07 completes it. |
 | `session --store PATH --adapter ID` | Opens a saved world (`world-store`) headless in its own `gpu-suite` process through `world_runtime::session::WorldSession` and the live world, runs it (`--ticks`, a new window with `--center`/`--radius`, `--edit TOOL,X,Y`, `--autosave`), and closes it in order; one item each for opening, running and closing, which passes only when the close saved the last completed tick. Running it again reopens what the close saved. |
 | `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/). |
 | `check all --adapter ID` | Every lane above, without skipping. |

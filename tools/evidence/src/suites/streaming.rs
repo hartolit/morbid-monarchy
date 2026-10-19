@@ -5,6 +5,7 @@
 use super::Case;
 
 mod checkpoints;
+mod measure;
 mod mechanism;
 mod recovery;
 mod residency;
@@ -95,5 +96,15 @@ pub const CASES: &[Case] = &[
         name: "headless-session",
         summary: "the headless session consumer saves its edits when it closes, a second run reopens them under the next epoch, and a legacy save given as its store is refused unchanged",
         run: recovery::headless_session,
+    },
+    Case {
+        name: "streaming-measure",
+        summary: "the qualification window walks eight chunks east with changed chunks leaving and a save halfway: bytes per entered chunk, snapshot bytes, retained memory, load and write age, frames per move, and frame CPU time and allocations against a resident baseline",
+        run: measure::streaming_measure,
+    },
+    Case {
+        name: "resident-no-readback",
+        summary: "the ordinary resident simulation with water flowing, no move and no save, uploads and reads back no world data: only its bounded per-tick records",
+        run: measure::resident_no_readback,
     },
 ];

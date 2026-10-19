@@ -2,10 +2,10 @@
 //!
 //! `resident-world` is delivered incrementally (verification evidence, "Connected scenario").
 //! Each step reports on its own; a step a later stage owns is reported as not implemented, which
-//! fails the scenario until that stage delivers it.
+//! fails the scenario until that stage delivers it. A step two stages share runs the earlier
+//! stage's part, reports its checks, and stays failed until the later stage completes it.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -20,13 +20,25 @@ use world_model::{
 };
 use world_runtime::{
     bodies::BodyEvent,
-    ids::{CommandId, Tick, WorldId},
-    port::{CommandResult, ResidentWindow},
+    checkpoint::{SaveFailure, SaveState},
+    ids::{ChunkRevision, CommandId, SessionEpoch, Tick},
+    port::{AbandonReason, CommandResult, Refusal, ResidentWindow},
     receipts::ReceiptState,
-    runtime::{Runtime, RuntimeConfig},
+    runtime::Runtime,
+    session::{CloseReport, SessionConfig, WorldSession},
+    store::{ChunkPayload, ChunkRow, Publication, WorldStore},
+    workers::WorkerConfig,
+};
+use world_store::{
+    faults::{Action, Barrier, StoreFaults},
+    store::RedbWorldStore,
 };
 
-use super::{Check, allow_software, bodies::scene, transfers::runtime_upload};
+use super::{
+    Check,
+    bodies::scene,
+    streaming::world::{self, Live, Scratch, open_store, session_config},
+};
 
 /// One step of a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,22 +165,38 @@ fn chunk(key: ChunkKey) -> Vec<WorldCell> {
 }
 
 struct Story {
-    runtime: Runtime,
+    live: Live,
+    store: Arc<RedbWorldStore>,
+    faults: StoreFaults,
+    path: std::path::PathBuf,
     id: u64,
+    /// The centre of step 3's stroke, once it is known.
+    stroke: Option<IVec2>,
+    // Last: the directory outlives every store and session above.
+    _scratch: Scratch,
 }
 
 impl Story {
+    fn runtime(&mut self) -> &mut Runtime {
+        self.live.session.runtime_mut()
+    }
+
+    fn session(&self) -> &WorldSession {
+        &self.live.session
+    }
+
     fn submit(&mut self, command: Command, tick: u64) -> Result<CommandId, String> {
         self.id += 1;
         let id = CommandId::new(self.id);
-        self.runtime
+        self.runtime()
             .submit_at(id, command, Tick::new(tick))
             .map_err(|error| format!("submit {command:?}: {error:?}"))?;
         Ok(id)
     }
 
     fn next(&self) -> u64 {
-        self.runtime
+        self.session()
+            .runtime()
             .last_submitted_tick()
             .map_or(0, |tick| tick.value() + 1)
     }
@@ -179,7 +207,7 @@ impl Story {
         let before = self.next();
         let started = std::time::Instant::now();
         while self.next() == before && started.elapsed() < super::driver::DEVICE_PATIENCE {
-            self.runtime.frame_ticks(1);
+            self.live.session.frame_ticks(1);
             if self.next() == before {
                 std::thread::sleep(Duration::from_micros(50));
             }
@@ -189,20 +217,20 @@ impl Story {
     fn settle(&mut self) -> Result<(), String> {
         let started = std::time::Instant::now();
         loop {
-            let counters = self.runtime.counters();
+            let counters = self.session().runtime().counters();
             if counters.ticks_observed == counters.ticks_submitted {
                 return Ok(());
             }
             if started.elapsed() > super::driver::DEVICE_PATIENCE {
                 return Err("submitted ticks were never observed".to_owned());
             }
-            self.runtime.frame_ticks(0);
+            self.live.session.frame_ticks(0);
             std::thread::sleep(Duration::from_micros(100));
         }
     }
 
     fn result(&self, id: CommandId) -> Option<(Tick, CommandResult)> {
-        match self.runtime.receipt(id)?.state {
+        match self.session().runtime().receipt(id)?.state {
             ReceiptState::Completed { tick, result } => Some((tick, result)),
             _ => None,
         }
@@ -219,6 +247,67 @@ impl Story {
         self.settle()?;
         self.result(id)
             .ok_or_else(|| format!("{id:?} never completed"))
+    }
+
+    fn column(&mut self, cell: IVec2) -> Result<Option<WorldCell>, String> {
+        let at = self.next();
+        let id = self.submit(Command::QueryColumn { cell }, at)?;
+        match self.await_result(id)?.1 {
+            CommandResult::Column { column, .. } => Ok(Some(column)),
+            CommandResult::ColumnNotResident { .. } => Ok(None),
+            other => Err(format!("query {cell}: {other:?}")),
+        }
+    }
+
+    /// The columns at `cells`, in order.
+    fn columns(&mut self, cells: &[IVec2]) -> Result<Vec<Option<WorldCell>>, String> {
+        cells.iter().map(|cell| self.column(*cell)).collect()
+    }
+
+    fn sample(&self, body: BodyHandle) -> Option<world_model::observation::BodySample> {
+        self.session()
+            .runtime()
+            .bodies()
+            .body(body)
+            .and_then(|tracked| tracked.last)
+    }
+
+    /// Runs frames of one tick until `done` holds.
+    fn until(
+        &mut self,
+        what: &str,
+        done: impl FnMut(&WorldSession) -> bool,
+    ) -> Result<u32, String> {
+        self.live.until(what, done)
+    }
+
+    /// Closes this session in order, lets the store go, and opens the file again with a new
+    /// store object and a new session under `epoch`: nothing but the file connects them.
+    fn reopen(self, adapter: &str, epoch: SessionEpoch) -> Result<(Story, CloseReport), String> {
+        let Story {
+            live,
+            store,
+            faults,
+            path,
+            _scratch,
+            ..
+        } = self;
+        let report = live.session.close(Duration::from_secs(60));
+        drop(store);
+        let store = open_store(&path, faults.clone())?;
+        let live = world::open(adapter, Arc::clone(&store), epoch, trace_config(), |_| {})?;
+        Ok((
+            Story {
+                live,
+                store,
+                faults,
+                path,
+                id: 0,
+                stroke: None,
+                _scratch,
+            },
+            report,
+        ))
     }
 }
 
@@ -244,23 +333,56 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
     steps.push(step("sphere-into-water", check, true));
 
     let mut check = Check::default();
+    let mut edited = false;
     match (story.as_mut(), sphere) {
-        (Some(story), Some(body)) => {
-            if let Err(error) = edit_and_consumer_step(story, body, &mut check) {
-                check.fail(format!("stopped early: {error}"));
-            }
-        }
+        (Some(story), Some(body)) => match edit_and_consumer_step(story, body, &mut check) {
+            Ok(()) => edited = true,
+            Err(error) => check.fail(format!("stopped early: {error}")),
+        },
         _ => check.fail("the sphere step did not complete"),
     }
     steps.push(step("ray-edit-and-consumer", check, true));
 
-    for (name, owner, _) in &RESIDENT_WORLD_STEPS[3..] {
-        let mut check = Check::default();
-        check.fail(format!(
-            "not implemented: prompt {owner} delivers this step"
-        ));
-        steps.push(step(name, check, false));
+    let mut check = Check::default();
+    let mut probes = None;
+    match (story.as_mut(), sphere, edited) {
+        (Some(story), Some(body), true) => match move_and_return_step(story, body, &mut check) {
+            Ok(found) => probes = Some(found),
+            Err(error) => check.fail(format!("stopped early: {error}")),
+        },
+        _ => check.fail("an earlier step did not complete"),
     }
+    steps.push(step("move-and-return", check, true));
+
+    let mut check = Check::default();
+    match (story.take(), sphere, probes.as_ref()) {
+        (Some(current), Some(body), Some(probes)) => {
+            match checkpoint_and_reopen_step(adapter, current, body, probes, &mut check) {
+                Ok(reopened) => story = Some(reopened),
+                Err(error) => check.fail(format!("stopped early: {error}")),
+            }
+        }
+        _ => check.fail("an earlier step did not complete"),
+    }
+    steps.push(step("checkpoint-and-reopen", check, true));
+
+    // 05 runs its part of the adversarial repeat; 07 completes it, so the step stays failed.
+    let mut check = Check::default();
+    match (story.take(), sphere, probes) {
+        (Some(current), Some(body), Some(probes)) => {
+            if let Err(error) =
+                adversarial_recovery_step(adapter, current, body, probes, &mut check)
+            {
+                check.fail(format!("stopped early: {error}"));
+            }
+        }
+        _ => check.fail("an earlier step did not complete"),
+    }
+    check.fail(
+        "not complete: 07 adds delayed consumers, dense body work at chunk seams with phase changes, \
+         a negative-coordinate rebase and the native consumer; the checks above are 05's part",
+    );
+    steps.push(step("adversarial-recovery", check, false));
     ScenarioResult {
         scenario: "resident-world".to_owned(),
         adapter: adapter.to_owned(),
@@ -268,23 +390,104 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
     }
 }
 
-/// Step 1: the known chunks become resident through the runtime and read back exactly.
-fn known_terrain_step(adapter: &str, check: &mut Check) -> Result<Story, String> {
-    let window = ResidentWindow::new(ChunkKey::new(0, 0, 0), 2, 2).map_err(|e| format!("{e:?}"))?;
-    let mut config = gpu_world::world::GpuWorldConfig::new(WorldId::new(0x0007), adapter, window);
-    config.allow_software = allow_software();
-    // The terrain is read back before any rule runs; the rules start with step 2.
-    config.rules = SimulationRules::NONE;
-    config.transfer.bodies = 64;
-    let world = gpu_world::world::GpuWorld::open(config).map_err(|e| format!("open: {e:?}"))?;
-    let mut runtime =
-        Runtime::new(Box::new(world), RuntimeConfig::default()).map_err(|e| format!("{e:?}"))?;
-    let keys: Vec<ChunkKey> = window.view().iter().collect();
-    for key in &keys {
-        runtime_upload(&mut runtime, *key, &chunk(*key))?;
+/// The window the trace starts in and returns to.
+fn home() -> ResidentWindow {
+    ResidentWindow::new(ChunkKey::new(0, 0, 0), 2, 2).expect("window")
+}
+
+/// The scenario's sessions: four loaders, so loads may answer out of order, and no autosave.
+fn trace_config() -> SessionConfig {
+    SessionConfig {
+        workers: WorkerConfig {
+            loaders: 4,
+            load_queue: 64,
+            write_queue: 16,
+        },
+        ..session_config()
     }
+}
+
+/// Columns of the regions the earlier steps changed, and what they held.
+struct Probes {
+    cells: Vec<IVec2>,
+    columns: Vec<Option<WorldCell>>,
+}
+
+/// Step 1: the known chunks are the world's saved state; the residency owner loads them from
+/// the store and they read back exactly.
+fn known_terrain_step(adapter: &str, check: &mut Check) -> Result<Story, String> {
+    let scratch = Scratch::new("resident-world")?;
+    let path = scratch.path("world.redb");
+    let window = home();
+    // The terrain is read back before any rule runs; the rules start with step 2.
+    world::create(&path, window, SimulationRules::NONE)?;
+    let faults = StoreFaults::new();
+    let store = open_store(&path, faults.clone())?;
+    let keys: Vec<ChunkKey> = window.view().iter().collect();
+    let payloads = keys
+        .iter()
+        .map(|key| {
+            ChunkPayload::new(chunk(*key).into_boxed_slice(), Default::default())
+                .map_err(|error| format!("{error:?}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let rows: Vec<ChunkRow<'_>> = keys
+        .iter()
+        .zip(&payloads)
+        .map(|(key, payload)| ChunkRow {
+            key: *key,
+            revision: ChunkRevision::new(1),
+            payload,
+        })
+        .collect();
+    store
+        .write_chunks(&rows)
+        .map_err(|error| error.to_string())?;
+    let first = store.latest().map_err(|error| error.to_string())?;
+    let next = first.id.next().ok_or("checkpoints exhausted")?;
+    store
+        .write_bodies(next, &Default::default())
+        .map_err(|error| error.to_string())?;
+    let heads: Vec<(ChunkKey, ChunkRevision)> = keys
+        .iter()
+        .map(|key| (*key, ChunkRevision::new(1)))
+        .collect();
+    store
+        .publish(&Publication {
+            id: next,
+            tick: None,
+            config: first.config,
+            window,
+            epoch: SessionEpoch::FIRST,
+            heads: &heads,
+            bodies: 0,
+        })
+        .map_err(|error| error.to_string())?;
+    let live = world::open(
+        adapter,
+        Arc::clone(&store),
+        SessionEpoch::new(2),
+        trace_config(),
+        |_| {},
+    )?;
+    let mut story = Story {
+        live,
+        store,
+        faults,
+        path,
+        id: 0,
+        stroke: None,
+        _scratch: scratch,
+    };
+    story.live.settle()?;
+    let summary = *story.session().residency().summary();
     check.metric("chunks", keys.len());
-    let mut story = Story { runtime, id: 0 };
+    check.equal(
+        "chunks loaded from the store",
+        summary.loads_stored,
+        keys.len() as u64,
+    );
+    check.equal("chunks generated", summary.loads_generated, 0);
     // Chunk corners on both sides of the origin, the window's outer corners, interior cells,
     // and one cell past the edge.
     let probes = [
@@ -352,7 +555,7 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
         CommandResult::BodySpawned { body, .. } => body,
         other => return Err(format!("spawn: {other:?}")),
     };
-    story.runtime.set_controlled(Some(body));
+    story.runtime().set_controlled(Some(body));
     let east = Drive::controls(Direction::new(1.0, 0.0).map_err(|e| e.to_string())?);
     let started = story.next();
     let mut entered = None;
@@ -368,7 +571,7 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
         }
         story.frame();
         events.clear();
-        story.runtime.bodies_mut().drain_events(&mut events);
+        story.runtime().bodies_mut().drain_events(&mut events);
         for event in &events {
             let kind = match event {
                 BodyEvent::Spawned { .. } => "spawned",
@@ -384,7 +587,7 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
                 entered.get_or_insert(*tick);
             }
         }
-        if let Some(sample) = story.runtime.bodies().body(body).and_then(|t| t.last)
+        if let Some(sample) = story.runtime().bodies().body(body).and_then(|t| t.last)
             && entered.is_some()
             && sample.position.x > 72.0
         {
@@ -392,12 +595,7 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
         }
     }
     story.settle()?;
-    let sample = story
-        .runtime
-        .bodies()
-        .body(body)
-        .and_then(|tracked| tracked.last)
-        .ok_or("no sample of the sphere")?;
+    let sample = story.sample(body).ok_or("no sample of the sphere")?;
     check.that(entered.is_some(), || {
         format!("the sphere never entered water: {sample:?}")
     });
@@ -424,7 +622,7 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
         (CommandResult::Totals(before), CommandResult::Totals(after)) => (before, after),
         other => return Err(format!("totals: {other:?}")),
     };
-    let ledger = *story.runtime.ledger().summary();
+    let ledger = *story.runtime().ledger().summary();
     check.equal("inconsistent ticks", ledger.inconsistent_ticks, 0);
     check.equal(
         "water",
@@ -440,10 +638,10 @@ fn sphere_step(story: &mut Story, check: &mut Check) -> Result<BodyHandle, Strin
     check.metric("ticks_observed", ledger.ticks_observed);
     check.metric(
         "sample_age_ticks_max",
-        story.runtime.bodies().summary().sample_age_ticks.max,
+        story.runtime().bodies().summary().sample_age_ticks.max,
     );
     check.that(
-        story.runtime.bodies().summary().sample_age_ticks.max <= 2.0,
+        story.runtime().bodies().summary().sample_age_ticks.max <= 2.0,
         || "a controlled-body sample was applied more than two ticks late".to_owned(),
     );
     // The body accounting the device reported: the sphere moved sand (its rut) and water.
@@ -503,6 +701,7 @@ fn edit_and_consumer_step(
         other => return Err(format!("stroke: {other:?}")),
     };
     check.equal("stroke centre is the ray's hit", center, hit_cell);
+    story.stroke = Some(center);
     // Eventual observation: a later column query sees the added sand.
     let observe = story.submit(Command::QueryColumn { cell: center }, 0)?;
     match story.await_result(observe)? {
@@ -532,7 +731,7 @@ fn edit_and_consumer_step(
     let mut last_reacted = None;
     for _ in 0..240 {
         story.frame();
-        let Some(sample) = story.runtime.bodies().body(body).and_then(|t| t.last) else {
+        let Some(sample) = story.runtime().bodies().body(body).and_then(|t| t.last) else {
             continue;
         };
         if first.is_some() {
@@ -548,7 +747,10 @@ fn edit_and_consumer_step(
                 sample.position.x.round() as i32,
                 (-sample.position.z).round() as i32,
             );
-            let observed_at = story.runtime.last_submitted_tick().map_or(0, |t| t.value());
+            let observed_at = story
+                .runtime()
+                .last_submitted_tick()
+                .map_or(0, |t| t.value());
             let id = story.submit(
                 Command::LiftBodies {
                     target: Target::Column(cell),
@@ -584,9 +786,9 @@ fn edit_and_consumer_step(
         None => check.fail("the lifted sphere was never observed out of the water"),
     }
     story.settle()?;
-    let ledger = *story.runtime.ledger().summary();
+    let ledger = *story.runtime().ledger().summary();
     check.equal("inconsistent ticks", ledger.inconsistent_ticks, 0);
-    check.equal("unknown outcomes", story.runtime.unknown_outcomes(), 0);
+    check.equal("unknown outcomes", story.runtime().unknown_outcomes(), 0);
     check.metric(
         "input_latency_ticks_mean",
         ledger.input_latency_ticks.mean().unwrap_or(0.0),
@@ -595,5 +797,556 @@ fn edit_and_consumer_step(
         "observation_age_ticks_mean",
         ledger.observation_age_ticks.mean().unwrap_or(0.0),
     );
+    Ok(())
+}
+
+fn chunk_of(cell: IVec2) -> ChunkKey {
+    ChunkKey::new(
+        cell.x.div_euclid(CHUNK_SIZE as i32),
+        cell.y.div_euclid(CHUNK_SIZE as i32),
+        0,
+    )
+}
+
+/// The cell `cell` of a stored payload of its chunk.
+fn stored_cell(payload: &ChunkPayload, cell: IVec2) -> WorldCell {
+    let local = cell - chunk_of(cell).origin_cell();
+    payload.cells()[local.y as usize * CHUNK_SIZE + local.x as usize]
+}
+
+fn compare(check: &mut Check, when: &str, probes: &Probes, columns: &[Option<WorldCell>]) {
+    for ((cell, expected), actual) in probes.cells.iter().zip(&probes.columns).zip(columns) {
+        check.equal(&format!("{cell} {when}"), actual, expected);
+    }
+}
+
+/// Step 4: the rules go off so the regions the trace changed hold still; the window walks east
+/// until they have left it, they are captured before their slots are reused, and it comes back
+/// while their write is held: the returning chunks are the captured state, not the store's older
+/// rows. The sphere is suspended in place while its terrain is away, and resumes, once, when it
+/// is back.
+fn move_and_return_step(
+    story: &mut Story,
+    body: BodyHandle,
+    check: &mut Check,
+) -> Result<Probes, String> {
+    let at = story.next() + 1;
+    let rules = story.submit(Command::SetSimulationRules(SimulationRules::NONE), at)?;
+    story.await_result(rules)?;
+    // The stroke, the rut along the bank and the slope, a bank chunk nothing touched, and the
+    // cell beside the origin.
+    let mut cells = vec![
+        IVec2::new(12, 32),
+        IVec2::new(24, 32),
+        IVec2::new(36, 32),
+        IVec2::new(48, 32),
+        IVec2::new(-100, -100),
+        IVec2::new(-1, -1),
+    ];
+    if let Some(stroke) = story.stroke {
+        cells.insert(0, stroke);
+    }
+    let columns = story.columns(&cells)?;
+    check.that(columns.iter().all(Option::is_some), || {
+        format!("a probe is not resident: {columns:?}")
+    });
+    let probes = Probes { cells, columns };
+    let edited = chunk_of(IVec2::new(24, 32));
+    let untouched = chunk_of(IVec2::new(-100, -100));
+    let before = story.session().runtime().counters();
+    let summary_before = *story.session().residency().summary();
+
+    story.faults.arm(
+        Barrier::BeforeChunkCommit,
+        Action::Hold {
+            limit: Duration::from_secs(120),
+        },
+        1,
+    );
+    let mut walk_frames = 0;
+    for x in [2, 4] {
+        let window =
+            ResidentWindow::new(ChunkKey::new(x, 0, 0), 2, 2).map_err(|e| format!("{e:?}"))?;
+        walk_frames += story.live.move_to(window)?;
+    }
+    let faults = story.faults.clone();
+    story.until("an outgoing write held", |_| {
+        faults.holding() == Some(Barrier::BeforeChunkCommit)
+    })?;
+    check.equal(
+        "the edited chunk's newest revision while away",
+        story.session().residency().newest(edited),
+        Some((ChunkRevision::new(2), false)),
+    );
+    check.equal(
+        "an untouched chunk resolves to its stored revision",
+        story.session().residency().newest(untouched),
+        Some((ChunkRevision::new(1), true)),
+    );
+    check.that(!story.session().residency().is_resident(edited), || {
+        "the edited chunk is still resident".to_owned()
+    });
+    // The sphere's chunk is away: frozen where it was, and still sampled.
+    story.live.frames(10);
+    let frozen = story.sample(body).ok_or("no sample of the sphere")?;
+    story.live.frames(20);
+    let later = story.sample(body).ok_or("no sample of the sphere")?;
+    check.that(frozen.suspended && later.suspended, || {
+        format!("the sphere was not suspended while away: {frozen:?}")
+    });
+    check.that(later.tick > frozen.tick, || {
+        "the suspended sphere was not sampled".to_owned()
+    });
+    check.equal(
+        "the suspended sphere is frozen",
+        later.position,
+        frozen.position,
+    );
+
+    // Back home while the write is still held.
+    walk_frames += story.live.move_to(home())?;
+    check.that(
+        story.faults.holding() == Some(Barrier::BeforeChunkCommit),
+        || "the write finished before the window came back".to_owned(),
+    );
+    let returned = story.columns(&probes.cells)?;
+    compare(check, "after returning", &probes, &returned);
+    let summary = *story.session().residency().summary();
+    check.that(
+        summary.loads_from_retained > summary_before.loads_from_retained,
+        || "no returning chunk was taken from its retained payload".to_owned(),
+    );
+    story.live.frames(10);
+    let resumed = story.sample(body).ok_or("no sample of the sphere")?;
+    check.that(!resumed.suspended, || {
+        format!("the sphere did not resume: {resumed:?}")
+    });
+    check.equal(
+        "bodies after the return",
+        story.session().runtime().bodies().bodies().count(),
+        1,
+    );
+
+    // The held write finishes after the return; the revision becomes durable and the store's
+    // row holds the captured cells.
+    story.faults.release();
+    story.until("the delayed writes", |session| !session.residency().busy())?;
+    check.equal(
+        "the edited chunk after its write",
+        story.session().residency().newest(edited),
+        Some((ChunkRevision::new(2), true)),
+    );
+    let mut payload = ChunkPayload::zeroed();
+    check.equal(
+        "the stored revision",
+        story
+            .store
+            .read_chunk(edited, Some(ChunkRevision::new(2)), &mut payload)
+            .map_err(|error| error.to_string())?,
+        Some(ChunkRevision::new(2)),
+    );
+    for (cell, expected) in probes.cells.iter().zip(&probes.columns) {
+        if chunk_of(*cell) == edited {
+            check.equal(
+                &format!("{cell} in the stored row"),
+                Some(stored_cell(&payload, *cell)),
+                *expected,
+            );
+        }
+    }
+    let after = story.session().runtime().counters();
+    let summary = *story.session().residency().summary();
+    check.equal("frame waits", after.frame_waits - before.frame_waits, 0);
+    check.metric("walk_frames", walk_frames);
+    check.metric("upload_bytes", after.upload.chunks - before.upload.chunks);
+    check.metric(
+        "snapshot_readback_bytes",
+        after.readback.snapshots - before.readback.snapshots,
+    );
+    check.metric(
+        "snapshots_changed",
+        summary.snapshots_changed - summary_before.snapshots_changed,
+    );
+    check.metric(
+        "snapshots_unchanged",
+        summary.snapshots_unchanged - summary_before.snapshots_unchanged,
+    );
+    check.metric(
+        "loads_generated",
+        summary.loads_generated - summary_before.loads_generated,
+    );
+    check.metric(
+        "loads_stored",
+        summary.loads_stored - summary_before.loads_stored,
+    );
+    check.metric(
+        "loads_from_retained",
+        summary.loads_from_retained - summary_before.loads_from_retained,
+    );
+    check.metric("loads_out_of_order", summary.loads_out_of_order);
+    check.metric("stale_loads", summary.stale_loads);
+    check.metric("retained_high_water_bytes", summary.retained_high_water);
+    check.metric("load_age_ms_max", summary.load_age_ms.max);
+    check.metric("write_age_ms_max", summary.write_age_ms.max);
+    Ok(probes)
+}
+
+/// Step 5: a requested checkpoint at one completed tick, with the sphere and a changed
+/// configuration; then the session closes in order (saving its last tick), the store object is
+/// dropped, and a new store and session open the file under the next epoch. Saved again at its
+/// first boundary, before any tick, the reopened world is the checkpoint it opened: the same
+/// body records, configuration and heads. The probes read back and every resident chunk holds
+/// its published revision.
+fn checkpoint_and_reopen_step(
+    adapter: &str,
+    mut story: Story,
+    body: BodyHandle,
+    probes: &Probes,
+    check: &mut Check,
+) -> Result<Story, String> {
+    let ambient = world_model::command::AmbientTemperature::celsius(7.0)
+        .map_err(|error| format!("{error:?}"))?;
+    let at = story.next() + 1;
+    let configured = story.submit(Command::SetAmbientTemperature(ambient), at)?;
+    story.await_result(configured)?;
+    let requested = story.live.save()?;
+    let latest = story.store.latest().map_err(|error| error.to_string())?;
+    let receipt = story.session().checkpoints().receipt().cloned();
+    check.equal(
+        "the requested checkpoint is the latest",
+        latest.id,
+        requested,
+    );
+    check.that(
+        receipt.as_ref().is_some_and(|receipt| {
+            matches!(receipt.state, SaveState::Committed { tick, .. } if tick == latest.tick)
+        }),
+        || format!("the receipt and the manifest disagree: {receipt:?} {latest:?}"),
+    );
+    check.equal(
+        "saved ambient temperature",
+        latest.config.ambient_temperature,
+        ambient,
+    );
+    check.equal("saved rules", latest.config.rules, SimulationRules::NONE);
+    check.equal("saved window", latest.window, home());
+    let saved = story
+        .store
+        .read_bodies(latest.id)
+        .map_err(|error| error.to_string())?;
+    check.equal("saved bodies", saved.live(), 1);
+    check.that(
+        saved
+            .bodies
+            .first()
+            .is_some_and(|record| record.handle == body),
+        || {
+            format!(
+                "the saved body is not the sphere: {:?}",
+                saved.bodies.first()
+            )
+        },
+    );
+
+    let (mut story, report) = story.reopen(adapter, SessionEpoch::new(3))?;
+    check.that(
+        report.saved && report.workers_joined && !report.timed_out,
+        || format!("{report:?}"),
+    );
+    check.metric("close_waited_ms", report.waited.as_secs_f64() * 1000.0);
+    let closed = report.latest;
+    check.that(!story.session().start().previous_unclean, || {
+        "the orderly close left the store unclean".to_owned()
+    });
+    let closed_bodies = story
+        .store
+        .read_bodies(closed.id)
+        .map_err(|error| error.to_string())?;
+    let heads: Vec<(ChunkKey, ChunkRevision)> = story
+        .store
+        .heads()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|(key, head)| (key, head.revision))
+        .collect();
+
+    // Before any tick: save the restored world as it is.
+    story.live.session.save();
+    let started = std::time::Instant::now();
+    while !story
+        .session()
+        .checkpoints()
+        .receipt()
+        .is_some_and(|receipt| receipt.finished())
+    {
+        if started.elapsed() > super::driver::DEVICE_PATIENCE {
+            return Err("the first-boundary save never finished".to_owned());
+        }
+        story.live.session.frame_ticks(0);
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    let again = story.store.latest().map_err(|error| error.to_string())?;
+    check.that(again.id.value() == closed.id.value() + 1, || {
+        format!(
+            "the first-boundary save did not commit: {again:?}, {:?}",
+            story.session().checkpoints().receipt()
+        )
+    });
+    check.equal("reopened tick", again.tick, closed.tick);
+    check.equal("reopened configuration", again.config, closed.config);
+    check.equal(
+        "reopened bodies",
+        story
+            .store
+            .read_bodies(again.id)
+            .map_err(|error| error.to_string())?,
+        closed_bodies,
+    );
+    check.equal(
+        "reopened heads",
+        story
+            .store
+            .heads()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|(key, head)| (key, head.revision))
+            .collect::<Vec<_>>(),
+        heads.clone(),
+    );
+
+    story.runtime().set_controlled(Some(body));
+    story.live.settle()?;
+    let columns = story.columns(&probes.cells)?;
+    compare(check, "reopened", probes, &columns);
+    for (key, revision) in &heads {
+        if home().contains(*key) {
+            check.equal(
+                &format!("{key:?} published revision"),
+                story.session().residency().published_revision(*key),
+                Some(*revision),
+            );
+        }
+    }
+    check.equal(
+        "bodies after reopening",
+        story.session().runtime().bodies().bodies().count(),
+        1,
+    );
+    story.live.frames(5);
+    check.that(story.sample(body).is_some(), || {
+        "the reopened sphere is not sampled under its handle".to_owned()
+    });
+    check.metric(
+        "checkpoint_tick",
+        closed.tick.map_or(0, |tick| tick.value()),
+    );
+    check.metric("published_heads", heads.len());
+    Ok(story)
+}
+
+/// Opens the file again, waiting for a store object the lost session's workers may still hold.
+fn reopen_file(path: &std::path::Path) -> Result<Arc<RedbWorldStore>, String> {
+    let started = std::time::Instant::now();
+    loop {
+        match open_store(path, StoreFaults::new()) {
+            Ok(store) => return Ok(store),
+            Err(_) if started.elapsed() < Duration::from_secs(20) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Step 6, 05's part: the reopened trace under faults. Map deliveries are held while a save and
+/// a growth of the window overlap, eviction writes fail and are retried, loads may answer out of
+/// order, and the window comes back; a complete checkpoint follows. A later change and its save
+/// are then lost with the device before the save's payloads reach the CPU, and a new store and
+/// session recover exactly that checkpoint, refusing the lost session's slots.
+fn adversarial_recovery_step(
+    adapter: &str,
+    mut story: Story,
+    body: BodyHandle,
+    probes: Probes,
+    check: &mut Check,
+) -> Result<(), String> {
+    let bank = IVec2::new(-90, -40);
+    let edit = MaterialEdit::new(EditTool::Raise, bank, 2, 3).map_err(|e| e.to_string())?;
+    let at = story.next();
+    let stroke = story.submit(Command::EditMaterial(edit), at)?;
+    story.await_result(stroke)?;
+    let bank_column = story.column(bank)?;
+    let summary_before = *story.session().residency().summary();
+
+    // A save whose deliveries are held, and the window growing away while it drains.
+    story.live.faults.hold_deliveries(true);
+    story.faults.fail_writes(2);
+    story.live.session.save();
+    let grown = ResidentWindow::new(ChunkKey::new(4, 0, 0), 3, 3).map_err(|e| format!("{e:?}"))?;
+    story.live.session.set_window(grown);
+    story.live.frames(30);
+    let receipt = story.session().checkpoints().receipt().cloned();
+    check.that(
+        receipt
+            .as_ref()
+            .is_some_and(|receipt| matches!(receipt.state, SaveState::Capturing { .. })),
+        || format!("the save got ahead of held deliveries: {receipt:?}"),
+    );
+    story.live.faults.hold_deliveries(false);
+    story.until("the grown window and the save", |session| {
+        session.residency().window() == grown
+            && session.residency().settled()
+            && !session.residency().busy()
+            && session
+                .checkpoints()
+                .receipt()
+                .is_some_and(|receipt| receipt.finished())
+    })?;
+    let summary = *story.session().residency().summary();
+    check.that(
+        story
+            .session()
+            .checkpoints()
+            .receipt()
+            .is_some_and(|receipt| receipt.committed().is_some()),
+        || format!("{:?}", story.session().checkpoints().receipt()),
+    );
+    check.that(
+        summary.write_failures > summary_before.write_failures,
+        || "no eviction write failed".to_owned(),
+    );
+    let (_, _, injected) = story.faults.io_counts();
+    check.metric("injected_io_errors", injected);
+    check.metric(
+        "write_failures",
+        summary.write_failures - summary_before.write_failures,
+    );
+    check.metric("loads_out_of_order", summary.loads_out_of_order);
+    check.metric("stale_loads", summary.stale_loads);
+    check.metric(
+        "peak_requested_bytes",
+        story.session().runtime().counters().peak_requested_bytes,
+    );
+
+    story.live.move_to(home())?;
+    let columns = story.columns(&probes.cells)?;
+    compare(check, "after the faults", &probes, &columns);
+    check.equal(
+        "the bank edit after the faults",
+        story.column(bank)?,
+        bank_column,
+    );
+    let complete = story.live.save()?;
+
+    // A change after the checkpoint, and its save lost with the device before the readback.
+    let lost_cell = IVec2::new(20, -90);
+    let lost_before = story.column(lost_cell)?;
+    let edit = MaterialEdit::new(EditTool::Raise, lost_cell, 2, 3).map_err(|e| e.to_string())?;
+    let at = story.next();
+    let stroke = story.submit(Command::EditMaterial(edit), at)?;
+    story.await_result(stroke)?;
+    let stale_slot = story
+        .session()
+        .residency()
+        .slot(chunk_of(lost_cell))
+        .ok_or("no slot for the changed chunk")?;
+    story.live.faults.hold_deliveries(true);
+    story.live.session.save();
+    story.live.frames(10);
+    story.live.faults.lose_device();
+    story.until("the loss", |session| session.loss().is_some())?;
+    let loss = story.session().loss().ok_or("no loss report")?;
+    check.equal("loss reason", loss.reason, AbandonReason::DeviceLost);
+    check.equal(
+        "the latest complete checkpoint",
+        loss.last_complete,
+        complete,
+    );
+    let receipt = story.session().checkpoints().receipt().cloned();
+    check.that(
+        receipt.as_ref().is_some_and(|receipt| {
+            matches!(
+                receipt.state,
+                SaveState::Failed {
+                    failure: SaveFailure::Abandoned(AbandonReason::DeviceLost),
+                    retrying: false
+                }
+            )
+        }),
+        || format!("the uncaptured save: {receipt:?}"),
+    );
+    check.metric("ticks_lost", loss.ticks_lost);
+    let complete_bodies = story
+        .store
+        .read_bodies(complete)
+        .map_err(|error| error.to_string())?;
+
+    // Everything of the lost session goes; the file is opened again.
+    let Story {
+        live,
+        store,
+        path,
+        _scratch,
+        ..
+    } = story;
+    let (shared, loss) = live.session.finish_after_loss(Duration::from_secs(20));
+    check.that(!loss.finished_captured_save, || format!("{loss:?}"));
+    drop(shared);
+    drop(store);
+    let store = reopen_file(&path)?;
+    let faults = store.faults().clone();
+    let live = world::open(
+        adapter,
+        Arc::clone(&store),
+        SessionEpoch::new(4),
+        trace_config(),
+        |_| {},
+    )?;
+    let mut story = Story {
+        live,
+        store,
+        faults,
+        path,
+        id: 0,
+        stroke: None,
+        _scratch,
+    };
+    let start = story.session().start();
+    check.that(start.previous_unclean, || {
+        "the lost session's store was not recorded unclean".to_owned()
+    });
+    check.metric(
+        "reclaimed_rows",
+        start.reclaimed.chunk_rows + start.reclaimed.body_sets,
+    );
+    check.equal(
+        "recovered checkpoint",
+        story.store.latest().map_err(|error| error.to_string())?.id,
+        complete,
+    );
+    story.runtime().set_controlled(Some(body));
+    story.live.settle()?;
+    let columns = story.columns(&probes.cells)?;
+    compare(check, "recovered", &probes, &columns);
+    check.equal("the bank edit recovered", story.column(bank)?, bank_column);
+    check.equal(
+        "the change after the checkpoint is gone",
+        story.column(lost_cell)?,
+        lost_before,
+    );
+    check.that(
+        matches!(
+            story.runtime().retire_slot(stale_slot),
+            Err(Refusal::StaleSession { .. })
+        ),
+        || "the lost session's slot was accepted by the new one".to_owned(),
+    );
+    check.equal(
+        "recovered bodies",
+        story.session().runtime().bodies().bodies().count(),
+        complete_bodies.live(),
+    );
+    let report = story.live.session.close(Duration::from_secs(60));
+    check.that(report.saved, || format!("{report:?}"));
     Ok(())
 }

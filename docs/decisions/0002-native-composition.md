@@ -67,6 +67,23 @@ consumer, not an app.
 - **Not created.** `world-store` waits for 05 and `world-render` for 06. The runtime's storage
   port is created with the store.
 
+## 05 package check
+
+- **`world-store` — created** under `adapters/`, implementing `world-runtime`'s `WorldStore`
+  port over one redb file per world. Its consumers: the runtime's storage workers inside
+  `WorldSession`, the `world-store` command, the evidence runner's `streaming` suite and
+  `session` command, and the baseline application, whose `spatial_chunks` rows `world_store::legacy`
+  now owns until 06. Its closure is redb, bitcode (the legacy rows only), `world-model` and
+  `world-runtime`; `check static` refuses engines, GPU APIs, windows, UI, worker pools and the
+  baseline crates in it, and refuses `world-store` in the closures of `world-model`,
+  `world-runtime` and `gpu-world`.
+- **The storage port lives in `world-runtime`** (`store`), beside the workers, residency and
+  checkpoint owners that call it, so the runtime is tested against an in-memory store and the GPU
+  owner never sees storage.
+- **`spatial-lib` — reduced again.** Its redb backend moved to `world_store::legacy`; the grid and
+  chunk manager serve only the baseline until 06.
+- **Not created.** `world-render` waits for 06.
+
 If a proposed package has no actual boundary/consumer, use a module before creating it. A dependency
 cycle, duplicate wgpu device family or interface forcing world copies is evidence that the chosen
 boundary needs correction.

@@ -2818,6 +2818,26 @@ destination = "gpu-world snapshots with world-runtime residency and checkpoints 
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.streaming.streaming-measure"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "streaming-measure"
+origin = "transition"
+expectation = "At the qualification radius, eight one-chunk moves with changed chunks leaving and a save halfway settle with no frame or maintenance wait, the save commits, retention stays within its budget, and the close saves; bytes, ages, frames per move and frame CPU time and allocations are recorded against a resident baseline."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); the hardware measurement of record"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.resident-no-readback"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "resident-no-readback"
+origin = "transition"
+expectation = "600 ticks of the ordinary resident simulation (every rule on, water flowing) upload no chunk, copy and read back no snapshot or capture, submit no transfer, and read back under 64 KiB a tick of their own records."
+destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.streaming.newest-retained-wins"
 package = "monarchy-evidence"
 target = "gpu:streaming"
