@@ -1089,7 +1089,7 @@ impl ApplicationHandler for Client {
 
 /// Draws the frame into an offscreen texture of the surface's format and reads it back: a
 /// maintenance wait on the world's timeline, for evidence only.
-fn capture_frame(
+pub(crate) fn capture_frame(
     gpu: &mut gpu_world::world::GpuWorld,
     renderer: &mut Renderer,
     overlay: &mut Overlay,

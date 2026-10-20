@@ -10,7 +10,8 @@
 //! - [`input`], [`observer`], [`play`]: input, the viewpoint, and the tools as commands;
 //! - [`ui`]: the overlay's screens and panels;
 //! - [`client`]: the window's event loop and the phases of an open world;
-//! - [`driver`]: scripted runs of the real client for evidence.
+//! - [`driver`]: scripted runs of the real client for evidence;
+//! - [`viewer`]: the window showing a session a script drives (the visible scenarios).
 
 pub mod catalog;
 pub mod client;
@@ -22,6 +23,7 @@ pub mod options;
 pub mod play;
 pub mod present;
 pub mod ui;
+pub mod viewer;
 
 use std::process::ExitCode;
 

@@ -104,9 +104,40 @@ pub const RESIDENT_WORLD_STEPS: [(&str, &str, &str); 6] = [
 ];
 
 pub fn run(scenario: &str, adapter: &str) -> Option<ScenarioResult> {
+    run_viewed(scenario, adapter, None, None)
+}
+
+/// [`run`], presenting every session of the scenario in the native client's window when a
+/// viewer is given, and writing one frame per step into `captures`.
+pub fn run_viewed(
+    scenario: &str,
+    adapter: &str,
+    viewer: Option<world::SharedViewer>,
+    captures: Option<std::path::PathBuf>,
+) -> Option<ScenarioResult> {
     match scenario {
-        "resident-world" => Some(resident_world(adapter)),
+        "resident-world" => Some(resident_world_viewed(adapter, viewer, captures)),
         _ => None,
+    }
+}
+
+/// Captions the viewer for a step and, after it, writes the viewer's frame.
+fn show_step(
+    story: Option<&mut Story>,
+    name: &str,
+    captures: Option<&std::path::Path>,
+    check: &mut Check,
+) {
+    let Some(story) = story else {
+        return;
+    };
+    let Some(directory) = captures else {
+        return;
+    };
+    let path = directory.join(format!("resident-world-{name}.png"));
+    match story.live.capture(&path) {
+        Ok(()) => check.note(format!("frame written to {}", path.display())),
+        Err(error) => check.note(format!("no frame: {error}")),
     }
 }
 
@@ -207,7 +238,7 @@ impl Story {
         let before = self.next();
         let started = std::time::Instant::now();
         while self.next() == before && started.elapsed() < super::driver::DEVICE_PATIENCE {
-            self.live.session.frame_ticks(1);
+            self.live.frame_ticks(1);
             if self.next() == before {
                 std::thread::sleep(Duration::from_micros(50));
             }
@@ -224,7 +255,7 @@ impl Story {
             if started.elapsed() > super::driver::DEVICE_PATIENCE {
                 return Err("submitted ticks were never observed".to_owned());
             }
-            self.live.session.frame_ticks(0);
+            self.live.frame_ticks(0);
             std::thread::sleep(Duration::from_micros(100));
         }
     }
@@ -292,10 +323,19 @@ impl Story {
             _scratch,
             ..
         } = self;
+        let viewer = live.viewer.clone();
+        live.detach();
         let report = live.session.close(Duration::from_secs(60));
         drop(store);
         let store = open_store(&path, faults.clone())?;
-        let live = world::open(adapter, Arc::clone(&store), epoch, trace_config(), |_| {})?;
+        let live = world::open_viewed(
+            adapter,
+            Arc::clone(&store),
+            epoch,
+            trace_config(),
+            |_| {},
+            viewer,
+        )?;
         Ok((
             Story {
                 live,
@@ -312,17 +352,45 @@ impl Story {
 }
 
 pub fn resident_world(adapter: &str) -> ScenarioResult {
+    resident_world_viewed(adapter, None, None)
+}
+
+fn caption(story: &Option<Story>, name: &str) {
+    if let Some(story) = story {
+        let summary = RESIDENT_WORLD_STEPS
+            .iter()
+            .find(|(step, ..)| *step == name)
+            .map_or("", |(_, _, summary)| *summary);
+        story
+            .live
+            .set_caption(&format!("resident-world: {name}\n{summary}"));
+    }
+}
+
+pub fn resident_world_viewed(
+    adapter: &str,
+    viewer: Option<world::SharedViewer>,
+    captures: Option<std::path::PathBuf>,
+) -> ScenarioResult {
+    let captures = captures.as_deref();
     let mut steps = Vec::new();
     let mut story = None;
     let mut check = Check::default();
-    match known_terrain_step(adapter, &mut check) {
+    if let Some(viewer) = &viewer {
+        viewer
+            .borrow_mut()
+            .set_caption("resident-world: known-terrain");
+    }
+    match known_terrain_step(adapter, &mut check, viewer.clone()) {
         Ok(opened) => story = Some(opened),
         Err(error) => check.fail(format!("stopped early: {error}")),
     }
+    show_step(story.as_mut(), "known-terrain", captures, &mut check);
     steps.push(step("known-terrain", check, true));
 
     let mut sphere = None;
     let mut check = Check::default();
+    caption(&story, "sphere-into-water");
     match story.as_mut() {
         Some(story) => match sphere_step(story, &mut check) {
             Ok(body) => sphere = Some(body),
@@ -330,10 +398,12 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
         },
         None => check.fail("the terrain step did not open the world"),
     }
+    show_step(story.as_mut(), "sphere-into-water", captures, &mut check);
     steps.push(step("sphere-into-water", check, true));
 
     let mut check = Check::default();
     let mut edited = false;
+    caption(&story, "ray-edit-and-consumer");
     match (story.as_mut(), sphere) {
         (Some(story), Some(body)) => match edit_and_consumer_step(story, body, &mut check) {
             Ok(()) => edited = true,
@@ -341,10 +411,17 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
         },
         _ => check.fail("the sphere step did not complete"),
     }
+    show_step(
+        story.as_mut(),
+        "ray-edit-and-consumer",
+        captures,
+        &mut check,
+    );
     steps.push(step("ray-edit-and-consumer", check, true));
 
     let mut check = Check::default();
     let mut probes = None;
+    caption(&story, "move-and-return");
     match (story.as_mut(), sphere, edited) {
         (Some(story), Some(body), true) => match move_and_return_step(story, body, &mut check) {
             Ok(found) => probes = Some(found),
@@ -352,9 +429,11 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
         },
         _ => check.fail("an earlier step did not complete"),
     }
+    show_step(story.as_mut(), "move-and-return", captures, &mut check);
     steps.push(step("move-and-return", check, true));
 
     let mut check = Check::default();
+    caption(&story, "checkpoint-and-reopen");
     match (story.take(), sphere, probes.as_ref()) {
         (Some(current), Some(body), Some(probes)) => {
             match checkpoint_and_reopen_step(adapter, current, body, probes, &mut check) {
@@ -364,14 +443,21 @@ pub fn resident_world(adapter: &str) -> ScenarioResult {
         }
         _ => check.fail("an earlier step did not complete"),
     }
+    show_step(
+        story.as_mut(),
+        "checkpoint-and-reopen",
+        captures,
+        &mut check,
+    );
     steps.push(step("checkpoint-and-reopen", check, true));
 
     // 05 runs its part of the adversarial repeat; 07 completes it, so the step stays failed.
     let mut check = Check::default();
+    caption(&story, "adversarial-recovery");
     match (story.take(), sphere, probes) {
         (Some(current), Some(body), Some(probes)) => {
             if let Err(error) =
-                adversarial_recovery_step(adapter, current, body, probes, &mut check)
+                adversarial_recovery_step(adapter, current, body, probes, &mut check, captures)
             {
                 check.fail(format!("stopped early: {error}"));
             }
@@ -415,7 +501,11 @@ struct Probes {
 
 /// Step 1: the known chunks are the world's saved state; the residency owner loads them from
 /// the store and they read back exactly.
-fn known_terrain_step(adapter: &str, check: &mut Check) -> Result<Story, String> {
+fn known_terrain_step(
+    adapter: &str,
+    check: &mut Check,
+    viewer: Option<world::SharedViewer>,
+) -> Result<Story, String> {
     let scratch = Scratch::new("resident-world")?;
     let path = scratch.path("world.redb");
     let window = home();
@@ -463,12 +553,13 @@ fn known_terrain_step(adapter: &str, check: &mut Check) -> Result<Story, String>
             bodies: 0,
         })
         .map_err(|error| error.to_string())?;
-    let live = world::open(
+    let live = world::open_viewed(
         adapter,
         Arc::clone(&store),
         SessionEpoch::new(2),
         trace_config(),
         |_| {},
+        viewer,
     )?;
     let mut story = Story {
         live,
@@ -1082,7 +1173,7 @@ fn checkpoint_and_reopen_step(
         if started.elapsed() > super::driver::DEVICE_PATIENCE {
             return Err("the first-boundary save never finished".to_owned());
         }
-        story.live.session.frame_ticks(0);
+        story.live.frame_ticks(0);
         std::thread::sleep(Duration::from_micros(200));
     }
     let again = story.store.latest().map_err(|error| error.to_string())?;
@@ -1169,6 +1260,7 @@ fn adversarial_recovery_step(
     body: BodyHandle,
     probes: Probes,
     check: &mut Check,
+    captures: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let bank = IVec2::new(-90, -40);
     let edit = MaterialEdit::new(EditTool::Raise, bank, 2, 3).map_err(|e| e.to_string())?;
@@ -1289,18 +1381,21 @@ fn adversarial_recovery_step(
         _scratch,
         ..
     } = story;
+    let viewer = live.viewer.clone();
+    live.detach();
     let (shared, loss) = live.session.finish_after_loss(Duration::from_secs(20));
     check.that(!loss.finished_captured_save, || format!("{loss:?}"));
     drop(shared);
     drop(store);
     let store = reopen_file(&path)?;
     let faults = store.faults().clone();
-    let live = world::open(
+    let live = world::open_viewed(
         adapter,
         Arc::clone(&store),
         SessionEpoch::new(4),
         trace_config(),
         |_| {},
+        viewer,
     )?;
     let mut story = Story {
         live,
@@ -1346,6 +1441,8 @@ fn adversarial_recovery_step(
         story.session().runtime().bodies().bodies().count(),
         complete_bodies.live(),
     );
+    show_step(Some(&mut story), "adversarial-recovery", captures, check);
+    story.live.detach();
     let report = story.live.session.close(Duration::from_secs(60));
     check.that(report.saved, || format!("{report:?}"));
     Ok(())

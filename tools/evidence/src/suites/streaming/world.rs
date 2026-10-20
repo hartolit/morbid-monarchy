@@ -114,11 +114,16 @@ pub fn open_store(path: &Path, faults: StoreFaults) -> Result<Arc<RedbWorldStore
     .map_err(|error| format!("open store: {error}"))
 }
 
+/// The native client's window showing the scenario's sessions, when it runs visibly.
+pub type SharedViewer = std::rc::Rc<std::cell::RefCell<morbid_app::viewer::Viewer>>;
+
 /// A live session, and the controller of its device's faults.
 pub struct Live {
     pub session: WorldSession,
     pub faults: FaultController,
     next_command: u64,
+    /// Every frame this session runs is also presented in this window.
+    pub viewer: Option<SharedViewer>,
 }
 
 pub fn session_config() -> SessionConfig {
@@ -137,13 +142,36 @@ pub fn open(
     config: SessionConfig,
     tweak: impl FnOnce(&mut GpuWorldConfig),
 ) -> Result<Live, String> {
+    open_viewed(adapter, store, epoch, config, tweak, None)
+}
+
+/// [`open`], presenting in `viewer`'s window when there is one: the world is opened with a
+/// surface for it and the viewer draws each frame on the session's device.
+pub fn open_viewed(
+    adapter: &str,
+    store: Arc<RedbWorldStore>,
+    epoch: SessionEpoch,
+    config: SessionConfig,
+    tweak: impl FnOnce(&mut GpuWorldConfig),
+    viewer: Option<SharedViewer>,
+) -> Result<Live, String> {
     let plan = SessionPlan::prepare(&*store).map_err(|error| format!("prepare: {error}"))?;
     let mut gpu = GpuWorldConfig::resume(&plan, adapter, epoch).ok_or("no next tick")?;
     gpu.allow_software = allow_software();
     gpu.fault_injection = true;
     gpu.transfer.bodies = 64;
     tweak(&mut gpu);
-    let world = GpuWorld::open(gpu).map_err(|error| format!("open world: {error:?}"))?;
+    let world = match &viewer {
+        None => GpuWorld::open(gpu).map_err(|error| format!("open world: {error:?}"))?,
+        Some(viewer) => {
+            let mut viewer = viewer.borrow_mut();
+            viewer.detach();
+            let (mut world, surface) = GpuWorld::open_presenting(gpu, viewer.target()?)
+                .map_err(|error| format!("open world: {error:?}"))?;
+            viewer.attach(&mut world, surface)?;
+            world
+        }
+    };
     let faults = world
         .fault_controller()
         .ok_or("the world was opened without fault injection")?;
@@ -153,10 +181,43 @@ pub fn open(
         session,
         faults,
         next_command: 1,
+        viewer,
     })
 }
 
 impl Live {
+    /// One frame owing `ticks` ticks, presented in the viewer's window when there is one.
+    pub fn frame_ticks(&mut self, ticks: u32) {
+        self.session.frame_ticks(ticks);
+        if let Some(viewer) = &self.viewer
+            && let Err(error) = viewer.borrow_mut().present(&mut self.session)
+        {
+            eprintln!("viewer: {error}");
+        }
+    }
+
+    /// Releases the viewer's hold on this session's device before the session ends.
+    pub fn detach(&self) {
+        if let Some(viewer) = &self.viewer {
+            viewer.borrow_mut().detach();
+        }
+    }
+
+    pub fn set_caption(&self, caption: &str) {
+        if let Some(viewer) = &self.viewer {
+            viewer.borrow_mut().set_caption(caption);
+        }
+    }
+
+    /// The viewer's next frame, written as `path` (a maintenance readback).
+    pub fn capture(&mut self, path: &Path) -> Result<(), String> {
+        let Some(viewer) = self.viewer.clone() else {
+            return Ok(());
+        };
+        let capture = viewer.borrow_mut().capture(&mut self.session)?;
+        crate::native::write_png(path, &capture)
+    }
+
     /// Runs frames of one tick until `done` holds.
     pub fn until(
         &mut self,
@@ -166,7 +227,7 @@ impl Live {
         let started = Instant::now();
         let mut frames = 0;
         loop {
-            self.session.frame_ticks(1);
+            self.frame_ticks(1);
             frames += 1;
             if done(&self.session) {
                 return Ok(frames);
@@ -184,7 +245,7 @@ impl Live {
     /// Runs `frames` frames of one tick.
     pub fn frames(&mut self, frames: u32) {
         for _ in 0..frames {
-            self.session.frame_ticks(1);
+            self.frame_ticks(1);
             std::thread::sleep(Duration::from_micros(100));
         }
     }
@@ -214,7 +275,7 @@ impl Live {
             if started.elapsed() > DEVICE_PATIENCE {
                 return Err(format!("{id:?} never completed"));
             }
-            self.session.frame_ticks(1);
+            self.frame_ticks(1);
             std::thread::sleep(Duration::from_micros(100));
         }
     }

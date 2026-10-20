@@ -19,7 +19,9 @@ commands:
   test gpu --suite NAME --adapter ID GPU suite on an explicit adapter
                                      (suites: cells, transfers, bodies, streaming, render, all)
   inspect-adapter                    enumerate adapters with their identifiers and limits
-  run --scenario NAME --adapter ID   connected scenario through the production runtime
+  run --scenario NAME --adapter ID [--consumer headless|native]
+                                     connected scenario through the production runtime; native
+                                     shows every session in the client's window
   session --store PATH --adapter ID  open a saved world headless, run it and close it in order
         [--ticks N] [--center X,Y]   (saving its last tick); run again to reopen it. --ticks
         [--radius R] [--edit T,X,Y]... (default 600), a new window, edits after it settles
@@ -43,11 +45,21 @@ pub enum Command {
     Help,
     CheckDocs,
     CheckStatic,
-    CheckAll { adapter: String },
+    CheckAll {
+        adapter: String,
+    },
     TestCpu,
-    TestGpu { suite: GpuSuite, adapter: String },
+    TestGpu {
+        suite: GpuSuite,
+        adapter: String,
+    },
     InspectAdapter,
-    Run { scenario: String, adapter: String },
+    /// `native`: the scenario's sessions are shown in the native client's window.
+    Run {
+        scenario: String,
+        adapter: String,
+        native: bool,
+    },
     Session(SessionRequest),
     Bench(BenchRequest),
 }
@@ -322,6 +334,15 @@ where
         ["run"] => Command::Run {
             scenario: options.require("scenario")?,
             adapter: options.require("adapter")?,
+            native: match options.take_single("consumer")?.as_deref() {
+                None | Some("headless") => false,
+                Some("native") => true,
+                Some(other) => {
+                    return Err(UsageError(format!(
+                        "--consumer must be headless or native, not `{other}`"
+                    )));
+                }
+            },
         },
         ["session"] => Command::Session(session_request(&mut options)?),
         ["bench"] => {
@@ -413,7 +434,24 @@ mod tests {
             command(&["run", "--scenario", "resident-world", "--adapter", "a"]),
             Ok(Command::Run {
                 scenario: "resident-world".into(),
-                adapter: "a".into()
+                adapter: "a".into(),
+                native: false,
+            })
+        );
+        assert_eq!(
+            command(&[
+                "run",
+                "--scenario",
+                "resident-world",
+                "--adapter",
+                "a",
+                "--consumer",
+                "native"
+            ]),
+            Ok(Command::Run {
+                scenario: "resident-world".into(),
+                adapter: "a".into(),
+                native: true,
             })
         );
         assert_eq!(

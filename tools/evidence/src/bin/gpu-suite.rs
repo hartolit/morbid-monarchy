@@ -6,7 +6,7 @@
 //! gpu-suite --suite transfers --list
 //! gpu-suite --suite transfers --adapter vulkan-10de-2c05 --case empty-batches --result out.json
 //!           [--allow-software]
-//! gpu-suite --scenario resident-world --adapter vulkan-10de-2c05 --result out.json
+//! gpu-suite --scenario resident-world --adapter vulkan-10de-2c05 --result out.json [--native]
 //! gpu-suite --session --store world.redb --adapter vulkan-10de-2c05 --result out.json
 //!           [--ticks N] [--center X,Y --radius R] [--edit TOOL,X,Y]... [--autosave TICKS|off]
 //! ```
@@ -96,7 +96,26 @@ fn run_scenario(
         return ExitCode::from(2);
     };
     suites::set_allow_software(args.iter().any(|arg| arg == "--allow-software"));
-    let Some(result) = suites::scenarios::run(scenario, &adapter) else {
+    // `--native`: every session of the scenario is shown in the native client's window, and a
+    // frame per step is written beside the result.
+    let viewer = if args.iter().any(|arg| arg == "--native") {
+        match morbid_app::viewer::Viewer::open([1600, 900]) {
+            Ok(viewer) => Some(std::rc::Rc::new(std::cell::RefCell::new(viewer))),
+            Err(error) => {
+                eprintln!("gpu-suite: the native window could not open: {error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+    let captures = viewer.as_ref().and_then(|_| {
+        std::path::Path::new(&result_path)
+            .parent()
+            .map(std::path::Path::to_path_buf)
+    });
+    let Some(result) = suites::scenarios::run_viewed(scenario, &adapter, viewer.clone(), captures)
+    else {
         eprintln!("gpu-suite: unknown scenario `{scenario}`");
         return ExitCode::from(2);
     };

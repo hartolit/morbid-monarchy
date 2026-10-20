@@ -509,6 +509,7 @@ pub fn scenario_items(
     scenario: &str,
     adapter: &AdapterRecord,
     lane: &LaneContext<'_>,
+    native: bool,
 ) -> Vec<Item> {
     let id = format!("scenario.{scenario}");
     if scenario != "resident-world" {
@@ -529,6 +530,9 @@ pub fn scenario_items(
         .timeout(SCENARIO_TIME_LIMIT);
     if adapter.software {
         step = step.arg("--allow-software");
+    }
+    if native {
+        step = step.arg("--native");
     }
     let outcome = run_logged(&step, lane.run_dir, scenario);
     let parsed = std::fs::read_to_string(&result_path)
@@ -620,7 +624,7 @@ mod tests {
             assert_eq!(items[0].state, State::Failed, "{}", items[0].id);
         }
         assert_eq!(
-            scenario_items("resident-world", &adapter, &lane)[0].state,
+            scenario_items("resident-world", &adapter, &lane, false)[0].state,
             State::Failed
         );
         let missing = resolve(&[adapter], "gl-0000-0000").expect_err("unknown adapter");
