@@ -468,8 +468,8 @@ bounce uses the ground's settle threshold, so resting bodies do not bounce on ea
 (`dense-cluster`, `pair-collision`); pairs and terrain are swept, and speed is capped at 600
 (`fast-bodies`, `fixed-tick-substeps`); several bodies on the same cells share them by claims
 instead of overwriting each other (`shared-deformation`); a body at missing terrain is suspended
-instead of meeting an empty grid (`residency-edge`). The baseline's sphere tuning is unchanged and
-shared: `monarch-engine` reads it from `world_model::body::tuning`.
+instead of meeting an empty grid (`residency-edge`). The baseline's sphere tuning is unchanged in
+`world_model::body::tuning`, which the removed CPU engine also read until 06.
 
 *Preflight and faults.* A tick's command, staging, sample and readback reservations are taken
 before any command is encoded, and the CPU body table changes only once the tick is accepted,
@@ -576,8 +576,20 @@ allocation is a typed error and requested bytes and their peak are counted. Subm
 its one timeline: at most `max_in_flight` (3) uncompleted submissions, each tracked by serial;
 completion is observed from `on_submitted_work_done` without waiting. Pipelines are compiled once
 per session from the assembled source; a new device compiles them again. Other consumers on the
-same device (the renderer in 06, layout probes now) read through `GpuWorld::view` and encode on the
-same timeline with `submit_external`.
+same device (the layout probes) read through `GpuWorld::view` and encode on the same timeline with
+`submit_external`.
+
+*Presentation (06).* `GpuWorld::open_presenting` opens the session on an instance of the
+adapter's backend only and creates the window's surface on it, refusing an adapter that cannot
+present to it; a lost surface is created again with `create_surface`, and only the primary
+backends are offered for presenting (`presentable_adapters`). The renderer and the overlay
+encode a frame through `submit_presentation`, on the same timeline after the frame's ticks, with
+their own bound of two uncompleted presentation submissions apart from the world's
+`max_in_flight`; `presentation_ready` refuses a frame while both are in flight, and the client
+then draws nothing that iteration rather than wait. The renderer reads the cells, the window map
+and body state through the view and replaces its bind groups only when the view's buffer
+generation changes (a resize); it derives visibility and the follow camera on the device and
+never reads physical state back.
 
 The radius-32 decision: the plan requests a larger storage binding. On a device that cannot
 grant it (as with WebGPU's default 128 MiB), a window whose cell array exceeds the granted binding

@@ -4,34 +4,43 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
-## 06 in progress (not closed)
+## 06 boundary (closed)
 
-**State (2026-10-19):** 06 assigned and under way on `experimental`; checkpoints A–C have a first
-pass, D and E are not done. Resume here.
+**State:** 06 complete (2026-10-20), assigned on 2026-10-19. Checkpoints A–E are committed on
+`experimental`; every lane passed on the nominated hardware except `resident-world`'s step 6,
+which 07 completes. The checks row names the commits.
 
-- **Done:** `1afad00` and the commit after it. `apps/morbid` is `morbid-app` (winit pumped loop,
-  egui overlay, world catalog, settings, explicit adapter choice, open/close/save feedback,
-  device-loss report and recovery, every inventory tool as commands at GPU-resolved rays);
-  `crates/world-render` draws the cells and bodies from the GPU owner's buffers on its device and
-  timeline (camera follow computed on the device, heightfield shadows/AO, sphere shadow map, fog,
-  bloom, AgX tone map, optional pass timestamps, CPU `project`); gpu-world presents through
-  `open_presenting`/`submit_presentation`; the Bevy app is renamed `bevy-baseline`. The
-  `native-client script features` run passed 41 checks in the real window on vulkan-10de-2c05
-  (scratch world under `target/drafts/06/run1`); `transfers` and `streaming` lanes passed on
-  `1afad00` (`target/evidence/06a-*`).
-- **Next:** write and register the `render` GPU suite (`tools/evidence/src/suites/render.rs`:
-  formats, zero size, terrain materials, missing-chunk gap and seams, edit visible next frame,
-  sphere at GPU pose, follow camera without readback, bind groups only on buffer replacement,
-  activity overlay, device loss, frame cost at radius 6 and 16 with timestamps), then decide
-  culling from that measurement; loss/recovery and start-screen scripts; `resident-world`
-  visibly (viewer hook in `streaming::world::Live`); native frame measurement replacing the
-  `legacy-baseline` driver; D (delete `bevy-baseline`, `monarch-engine`, `spatial-lib`, the
-  legacy feature, re-point the 23 baseline registry ids to their GPU cases, deny.toml, CI apt
-  list, lint baseline); full lanes; status, architecture, workflow, acceptance, budgets.
-- **Known:** windows on KWin Wayland report neither minimization nor resize for
-  `request_inner_size` (the client applies the returned size); the zero-size path is exercised
-  through the client's resize handling. Not yet run on the current tree: `check static`,
-  `test cpu`, `cells`, `bodies`.
+## 06 record
+
+| Field | Record |
+| --- | --- |
+| Assigned stage / checkpoint | 06 — Native client and Bevy removal. A–E complete. |
+| Source state | `experimental`: `1afad00` (A–C first pass), `199f25c`, `f57d42a` (B: culling, the `render` suite), `22be809` (C, E: start screen and device loss scripted), `6f3b1a4` (E: `resident-world` in the window), `9a3230c` (E: the native benchmark), `a70ce1c` (D: removal), `5bf7b44` (fixes the lanes found), `da1c3ba` (the script cursor), then this record. Work began at `d174e0f` (05's record); this record's tree has no other uncommitted changes. |
+| Actual adoption | **A:** `apps/morbid` is `morbid-app` (library `morbid_app`, executable `morbid`): a winit 0.30 window driven by `pump_app_events`, an egui 0.35 overlay, the world catalog (create, import, list), settings and options outside the working directory, explicit adapter choice among adapters that can present, `WorldSession` over `world-store` with open, save, autosave interval, orderly close, loss report and recovery under a later epoch, every inventory tool as runtime commands at GPU-resolved rays and column queries. `gpu-world`: `open_presenting`, presentation submissions on the world's timeline with their own bound of two, presentable adapters, a session instance of the adapter's backend only. `world-runtime`: `PhysicalWorld: Any` and `Runtime::port_as`, `ticks_due`, clock settings, a settable autosave interval. **B:** `world-render`: the baseline's landscape layers ported and drawn from the device cells, instanced spheres from device body state, the follow camera computed on the device, heightfield shadows and occlusion, a sphere shadow map, fog, bloom, AgX; GPU visibility (bounds, frustum culling, ordered compaction, indirect draws), optional pass timestamps. **C:** the start screen's create, import, open, close and reopen; device loss and recovery in the window; one surface per window. **D:** deleted the Bevy baseline application (with its persistence, plugins, materials and shaders), `monarch-engine`, `spatial-lib`, the `legacy-baseline` driver and feature and the CPU reference's test against the engine; dropped bevy, bevy_egui, lru, rayon, flume and rustc-hash; re-pointed the 23 engine-backed baseline ids to their GPU cases (and the clock's to the runtime's clock test); emptied the lint baseline; retired the lru, ruzstd and ttf-parser advisory exceptions (winit's no-title decorations drop ttf-parser); CI installs no Bevy headers. **E:** the `render` suite (12 cases); `native-client` scripts (`features`, `loss`, `worlds`, `capture`); `resident-world --consumer native` through `morbid_app::viewer`; `cargo evidence bench` measures the native client (`native-client bench`, one sample per presented frame). |
+| Decisions / deviations | The client is one window with one surface at a time: a session's instance holds only its adapter's backend, opening a world is refused while another closes, and a closing world's frames finish before its surface goes (KWin's Wayland refuses a second surface's tearing control and drops the connection). Presentation never waits for the device: with both presentation slots busy the client skips drawing that iteration, and the timeline keeps running. Without vsync the client prefers mailbox to immediate (measured: immediate waited 10.09 ms in image acquisition on every presented frame, mailbox on about 15%). Tone mapping is AgX (TonyMcMapface needs a lookup texture); culling was added after measuring the unculled renderer (1.81 ms at radius 6, 11.75 ms at radius 16) and is pixel-identical to it. The benchmark samples presented frames; loop iterations that present nothing belong to the next sample. A drive action possesses the body whose spawn outcome is nearest the camera at its first tick (deterministic), where the baseline driver used the bodies' current positions. The CPU reference's agreement with the deleted engine can no longer run; the reference stays as the `cells` suite's oracle. Found and fixed: a refused adapter id listed only its own backend's adapters; a session test (05) raced with autosaves during settling (10 failures in 300 runs before, none after); scripted cursors could be moved by the person's real pointer over the window. |
+| Checks | `a70ce1c`'s tree (2026-10-20 12:11–12:15 UTC): `check static` failed on one rustdoc link, `test cpu` on the registry and the racing session test, `transfers` on `adapter-selection`; `cells`, `bodies`, `streaming` and `render` passed; fixed in `5bf7b44`. `5bf7b44`'s tree (12:17–12:36 UTC): `check docs`, `check static`, `test cpu` (232 tests; 177 CPU behaviors, 57 runner tests), `test gpu --suite transfers`, `cells`, `bodies`, `streaming`, `render` passed; `run --scenario resident-world` headless and `--consumer native` passed steps 1–5 and failed step 6 only on its "07 completes this" check; `native-client script features` (41) and `worlds` (4) passed, `loss` failed 3 of 6 (fixed in `da1c3ba`); the benchmark below. `da1c3ba`'s tree (12:37–12:45 UTC): the same lanes with the same results, all three scripts passed (51 checks), and the benchmark's three remaining cases. Reports in `target/evidence/06-*`, `06f-*` and `06g-*`; script reports in `target/drafts/06/final*/`. Each tree was tested as committed, with `CARGO_BUILD_JOBS=4`. This record changes documentation only; `check docs` on it is in its commit message. |
+| Hardware / measurements | RTX 5070 Ti (`vulkan-10de-2c05`, NVIDIA 615.78.08), Ryzen 9 5950X, Linux 7.2.11, KDE Wayland. Renderer offscreen at 1920×1080 from the qualification camera: scene passes 0.84 ms at radius 6 (66 of 169 chunks a layer), 4.20 ms at radius 16 (355 of 1,089), 1.81 ms and 11.75 ms unculled; post 0.09–0.10 ms; encoding 0.18 ms and 0.26 ms of CPU; 400 B of uniforms a frame, one world bind group. The native client in its window, one valid run per qualification case (idle, streaming, coupled at `5bf7b44`; flow, body-contact, mixed at `da1c3ba` after KWin shrank all three attempts of each to 1920×1052 in the first run): frame medians 1.06–1.23 ms, p95 10.63–10.74 ms, p99 10.85–10.99 ms, no frame over 16.67 ms, 60 ticks/s, CPU about 0.46 ms a frame, tick device time 0.19–0.88 ms (body pass 0.64–0.66 ms with 64 bodies), RSS 291–365 MiB, GPU memory 241 MiB. Every case meets the qualification budget in that run; p95 is set by 10.09 ms waits in swapchain image acquisition on about 15% of frames. Details: [performance budgets](../../../reference/performance-budgets.md#native-client-06). |
+| Acceptance | **A10 satisfied:** the renderer draws the GPU owner's buffers on its device and timeline (`render` suite: formats, zero size, terrain, missing chunks, edits next frame without new resources, spheres and the follow camera at their device pose, bind groups only on buffer replacement, device loss, culling against the unculled path, frame cost), the real surface runs (`features`: resize, zero size and restore; `loss`), `resident-world` in the window, startup with no assets on disk. **A11 satisfied:** every inventory group through the real input path with its command outcome (`features`), save, recovery and pressure feedback (`loss`, `worlds`, the world and outcome panels), no CPU edit path. **A12 satisfied:** the native closure has no Bevy engine crate (`check static`'s dependency rules, `the_native_client_closure_has_no_bevy_engine_crate`), the baseline application, CPU engine and chunk manager are deleted with no fallback, and the CPU reference is development-only. A13–A15 are 07's. |
+| Data safety | Every case, script, scenario and benchmark used temporary stores under `target/`; the legacy fixture was copied before the `worlds` script imported it. No 06 command opened `world_data/save.redb` (the user said on 2026-10-19 that it is a generated save with nothing important). The client keeps its worlds in the XDG data directory. |
+| Blockers | None for 07. |
+| Next action / stop | Stopped at the end of 06. Assign 07. |
+
+### Carried into later stages (06)
+
+1. **Acquisition waits** (07): on KWin Wayland with the NVIDIA driver, about 15% of presented
+   frames wait a constant 10.09 ms in `get_current_texture` (mailbox), which sets the native
+   frame's p95 near 10.7 ms in every case; the display intervals here are 4.2 and 6.9 ms, so it is
+   not refresh pacing. Find out whether the compositor or the driver holds the images, and
+   measure on X11 or another compositor.
+2. **The full native qualification** (07): five or more runs per case and profile, the
+   comparison with the baseline's measurements (the baseline sampled its main schedule, the
+   client samples presented frames), and the scale and capacity profiles in the window.
+3. **`resident-world` step 6** (07), unchanged from 05: delayed consumers, dense body work at
+   chunk seams with phase changes, a negative-coordinate rebase, in both consumers.
+4. **The client's loop** iterates without presenting while both presentation slots are busy
+   (about four iterations per presented frame in the idle benchmark); it does no blocking wait,
+   but each iteration lays out the overlay. Judge its CPU cost in 07.
+5. **Frame cost of saving and streaming** (from 05): still not broken down by source.
 
 ## 05 boundary (closed)
 
@@ -248,7 +257,7 @@ engineering choices, not measured outcomes.
 | --- | --- |
 | Assigned stage / checkpoint | 00 — first execution: adopt and reconcile. Complete; no partial checkpoint remains. |
 | Source state | `experimental` at `a9c1539` before 00. There was no uncommitted or unrelated work; local untracked state is limited to the ignored `Cargo.lock`, `target/` and `world_data/`, all left untouched. |
-| Actual adoption | Architecture now separates the target from a [current baseline](../../../architecture.md#current-baseline) table, and the package map stays proposed. ADR, decision-index and budget states distinguish requested direction, adopted policy and proposed values. The [source audit](source-audit.md) has a checkout reconciliation, corrected rows and dispositions for the retired rule files. The implementation practice gained explicit naming, typed-error, `// SAFETY:` and cold-path rules carried over from those files. [Acceptance](acceptance.md) has a source-reconciled feature inventory, an open conflict and the native-client wording for `resident-world`. Status, the development guide, workflow, world format, roadmap and the office/sprint indexes reflect the checkout. |
+| Actual adoption | Architecture now separates the target from a [current baseline](../../../architecture.md#current-implementation) table, and the package map stays proposed. ADR, decision-index and budget states distinguish requested direction, adopted policy and proposed values. The [source audit](source-audit.md) has a checkout reconciliation, corrected rows and dispositions for the retired rule files. The implementation practice gained explicit naming, typed-error, `// SAFETY:` and cold-path rules carried over from those files. [Acceptance](acceptance.md) has a source-reconciled feature inventory, an open conflict and the native-client wording for `resident-world`. Status, the development guide, workflow, world format, roadmap and the office/sprint indexes reflect the checkout. |
 | Decisions / deviations | The retired `docs/persona.md`, `docs/rules.md` and `docs/knowledge/rust_knowledge.md` had already been deleted in `a9c1539`. 00 verified the mapping of their intent instead of deleting them. The audit's "four layer entities" was corrected to four per active chunk. Items for 01 are listed below. |
 | Checks | See [checks run in 00](#checks-run-in-00). |
 | Hardware / measurements | None. No adapter was enumerated; the GPU and performance lanes are not run. |
@@ -267,7 +276,7 @@ engineering choices, not measured outcomes.
 2. **Save safety.** The baseline opens or creates `world_data/save.redb` relative to the working
    directory at startup. Launch the baseline only from a scratch working directory, and capture
    old-writer fixtures into temporary stores (see the
-   [development guide](../../../guides/development.md#baseline-versus-target)).
+   [development guide](../../../guides/development.md#the-application)).
 3. **Persistence baseline failures** that 01 records but does not fix: chunks are saved only on
    LRU eviction, without a dirty flag; a chunk reloaded while its save is pending reads stale or
    absent data; the exit flush leaves out active and cached chunks and in-flight saves. These

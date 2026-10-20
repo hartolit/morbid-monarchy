@@ -50,6 +50,9 @@ checkpoints; never a wait), reads the commands' outcomes, and submits the render
 overlay's passes on the world's timeline (`GpuWorld::submit_presentation`). Targets are
 GPU-resolved rays; walking reads the floor from column queries; possession follows the sphere's
 GPU pose in the renderer's camera pass and its latest sample on the CPU. A minimized window
-draws nothing and the loop sleeps until the next tick. Closing saves the last completed tick
+draws nothing and the loop sleeps until the next tick. With `--vsync` the window presents in
+FIFO mode; without it in mailbox mode (immediate only where mailbox is missing), and an
+iteration whose two presentation slots are both busy runs the session's frame and draws
+nothing rather than wait for the device. Closing saves the last completed tick
 and reports whether everything was saved; a device loss shows the latest complete checkpoint
 and what was lost, and recovery opens a new session from it on a new device.

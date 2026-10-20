@@ -77,6 +77,29 @@ scenarios with these defaults, at 1920×1080 with the overlay shown:
 [`tools/evidence/baselines/legacy-visual/`](../../../../tools/evidence/baselines/legacy-visual/README.md).
 06 compares the native client with them; pixel identity is not required.
 
+**Native presentation (06).** The client keeps the defaults above (the lighting panel's ranges and
+values, the sun, sky, ground and horizon colours, the glow, the fog fitted to the window edge and
+the camera altitude, the four layers over one cell buffer, the overlay's panels and compass), with
+these recorded differences:
+
+- Tone mapping is AgX in the post pass, where the baseline used Bevy's TonyMcMapface, which
+  samples a lookup texture the client does not ship.
+- Lighting is the baseline's landscape material ported to `world-render` (sun, sky ambient,
+  heightfield shadows and occlusion, a 2048² shadow map for the spheres), not Bevy's PBR
+  pipeline; bloom follows `Bloom::NATURAL`'s chain (a 13-tap downsample with a Karis average, a
+  tent upsample).
+- Landscape chunks are culled on the device against the view frustum; culled frames are
+  pixel-identical to the unculled path (`render` `culling-matches-unculled`).
+- Without vsync the client presents in mailbox mode (immediate only when mailbox is missing): it
+  does not tear, and on the nominated desktop it waited less in image acquisition (see
+  [performance budgets](../../../reference/performance-budgets.md#native-client-06)).
+
+Compared on 2026-10-20 at the idle reference's camera (seed 69, cell (200, 230), height 150, yaw
+30°, pitch −40°, 1920×1080, overlay shown), captured through the client with `native-client
+capture` about 140 ticks after a new world opened (the idle case has no actions): the terrain, its four layers, the lake and shoreline, the fog band and the compass match
+the reference frame; the client's sand and grass are paler (not measured; the tone mapping is the
+likely cause), and its overlay adds the World and Outcomes toggles with the World panel open.
+
 ### Resolved conflicts with existing behavior
 
 **Live elevation scale — decided in 01.** Source (`runtime/dev_tools/ui.rs`) shows the UI

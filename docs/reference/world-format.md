@@ -4,7 +4,7 @@ This document owns the physical value representation and snapshot/storage lifecy
 format is described separately from the target envelope. 01 captured legacy fixtures and moved the
 cell definition into `world-model`; 05 implemented the new format, its store and the import
 ([version 1](#saved-world-format-version-1-05)), and the residency and checkpoint owners that use
-them. The baseline application still saves in the legacy format until 06.
+them. 06 removed the baseline application; the legacy format is now only read, by the import.
 
 ## Existing packed cell
 
@@ -41,12 +41,12 @@ surface, and the renderer draws the same surface, so the scale is not a display 
 store integer units and never change when it does. The target applies a change at a tick
 boundary, as a configuration command, and records the scale with the configuration in every
 checkpoint; a world reopened with another scale is a different physical world, not a restyle.
-The baseline writes `GlobalPhysicsConfig::elevation_scale` immediately from the developer UI and
-does not save it.
-Chunks have 64×64 cells. CPU world keys in the baseline have three signed components, and the
-active 2.5D view uses a planar mapping. Source at `a9c1539` shows that mapping. A grid-attached
-observer sets the focus to `(x, −z, 0)` from its Bevy translation (`sync_world_focus`), so keys
-written through the normal path have `z = 0`. A cell's `y` is the renderer's `−z` (also used by
+The removed baseline wrote `GlobalPhysicsConfig::elevation_scale` immediately from its developer
+UI and did not save it; the native client sends the change as a command (06).
+Chunks have 64×64 cells. World keys have three signed components, and the active 2.5D view uses a
+planar mapping. Source at `a9c1539` shows that mapping: the baseline's grid-attached observer set
+the focus to `(x, −z, 0)` from its Bevy translation (`sync_world_focus`), so keys it wrote have
+`z = 0`, as the native client's observer does (`morbid-app` `observer`). A cell's `y` is the renderer's `−z` (also used by
 `spherical.rs` and the render chunk transforms). The redb key and the generator seed still include
 `z`. `ChunkKey::to_ivec2` returns `(x, y)`; the misleading "XZ plane" comment was corrected when
 the key moved to `world_model::spatial` in 01. The two render-to-cell conversions are named there:
@@ -61,19 +61,18 @@ rejected at the owning input boundary.
 
 ## Legacy storage facts
 
-The baseline redb table is `spatial_chunks`, keyed by `[i32; 3]`. Its values are the derived
-bitcode encoding of `CellChunk { cells, metadata: { last_simulated: f64, theme: u8 } }`. Since 01
-the model types carry no codec; since 05 `world_store::legacy` is the one owner of those bytes and
-the table (the baseline converts its `CellChunk` through `morbid-app` `legacy_format`), tested to
-re-encode the [old-writer fixtures](../../adapters/world-store/tests/fixtures/legacy-v0/README.md)
-byte for byte. Since 05 the baseline leaves a row it cannot read unloaded instead of generating
-over it; its other persistence failures below remain until 06 replaces it. There is no complete versioned world/checkpoint envelope. The application uses startup seed
-69 in code. Existing `last_simulated` metadata holds session-relative elapsed seconds at load time.
-It is not proof of a consistent world snapshot or a portable simulation-clock contract. Only
-chunks evicted from the LRU cache are ever written, either by the periodic save batch or by the
-exit flush, and there is no dirty flag. A legacy store therefore mixes modified chunks with
-unmodified generated ones, and it can be missing changes that were still resident or cached when
-the process stopped. Preserve original bytes for any import investigation.
+The baseline's redb table is `spatial_chunks`, keyed by `[i32; 3]`. Its values are the derived
+bitcode encoding of `CellChunk { cells, metadata: { last_simulated: f64, theme: u8 } }`. Since 05
+`world_store::legacy` is the one owner of those bytes and the table, tested to re-encode the
+[old-writer fixtures](../../adapters/world-store/tests/fixtures/legacy-v0/README.md) byte for
+byte; since 06 it only reads them, for the import, because the writer was removed with the
+baseline. A legacy file has no versioned world or checkpoint envelope. The baseline used seed 69
+in code. Its `last_simulated` metadata holds session-relative elapsed seconds at load time, not
+proof of a consistent world snapshot or a portable clock. It wrote only chunks evicted from its
+LRU cache, by the periodic save batch or the exit flush, with no dirty flag, so a legacy store
+mixes modified chunks with unmodified generated ones and can miss changes that were still
+resident or cached when the process stopped. Preserve original bytes for any import
+investigation.
 
 A database/table error or undecodable existing row is different from a key that does not exist.
 Only a genuine absent key permits deterministic terrain generation. A corrupt/unsupported row must
@@ -159,9 +158,9 @@ incomplete store that opening refuses. The original is never written.
 
 ### Operating a saved world (05)
 
-Since 05 these commands work on version-1 stores. The application still reads and writes the
-legacy `world_data/save.redb` until prompt 06 composes the runtime's session over `world-store`;
-nothing in the application opens a version-1 store yet.
+Since 05 these commands work on version-1 stores. Since 06 the native client opens, creates and
+imports the same stores from its start screen (`<name>.world` in its worlds directory; see the
+[package README](../../apps/morbid/README.md)); these commands remain for scripts and inspection.
 
 ```bash
 cargo run --locked --release -p world-store -- create --store WORLD.redb --seed 7 --radius 2

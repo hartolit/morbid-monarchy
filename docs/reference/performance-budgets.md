@@ -1,7 +1,8 @@
 # Performance budgets
 
 **Frozen qualification contract, the measured baseline (01), the measured transfer lifecycle
-(02) and the material phases' resources and measurement (03).** 00 adopted the evidence policy in
+(02), the material phases (03), bodies (04), streaming and checkpoints (05), and the native
+client's renderer and frame (06).** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -404,13 +405,79 @@ peaked at 3,145,728 B. No frame or maintenance wait occurred.
 
 Saving and walking add about 0.4 ms at the 95th percentile to a frame's CPU time and 190–350
 allocations per frame; the allocations are not yet broken down by source. One resident frame
-took 2.01 ms. 06–07 judge these against the frame budget.
+took 2.01 ms. 06 measured the native frame with saving off (streaming moves the window, no
+autosave runs); 07 judges these against the frame budget.
 
 *Under faults*: with writes failing, retention stops at its budget and the window waits
 (65,536 B, the two payloads `retention-budget` allows;
 65,536 B through 3 failed writes in
 `failed-commits-retained`). A world snapshot draining while the window grows from radius 1 to 2
 peaks at 8,616,352 requested device bytes, exactly the plan's overlap bound.
+
+## Native client (06)
+
+**Renderer.** The `render` suite's `frame-cost` case draws generated terrain (seed 69, every rule
+on) offscreen at 1920×1080 from the qualification camera with the renderer's pass timestamps, on
+the tree committed as «RENDER_COMMIT» (RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux 7.2.11). The
+scene passes are the shadow map, the landscape layers and the spheres; post is bloom and tone
+mapping. Medians of the measured frames:
+
+| Window | Chunks drawn per layer | Scene (p95) | Scene unculled | Post | Encode (CPU, p95) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Radius 6, 169 chunks | 66, 66, 59, 66 | 0.84 ms (0.85) | 1.81 ms | 0.09 ms | 0.18 ms (0.25) |
+| Radius 16, 1,089 chunks | 355, 354, 321, 348 | 4.20 ms (4.21) | 11.75 ms | 0.10 ms | 0.26 ms (0.34) |
+
+Drawing every window chunk's four layers cost 1.81 ms and 11.75 ms; visibility derived on the
+device every frame (chunk bounds, frustum test, ordered compaction into indirect draws) cut that
+to 0.84 ms and 4.20 ms with pixel-identical frames (`culling-matches-unculled`). The renderer
+holds 17.0 MB of static buffers and 29.9 MB of 1920×1080 targets, writes 400 B of uniforms a
+frame and keeps one world bind group until the GPU owner's buffers are replaced.
+
+**The native frame.** `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --runs 1`
+runs each frozen case once in the client's real window (`native-client bench`: a new world made
+to the scenario, its commands through the client's command path for their exact ticks, the
+camera on its path by tick, the overlay shown, no vsync, mailbox presentation), plus one
+diagnostic run with tick timestamps. A sample is one presented frame; its CPU time is the
+presenting iteration's (input, overlay, intent, the session's frame, encoding, acquisition and
+submission). Idle, streaming and coupled ran on `5bf7b44` (2026-10-20 12:21 UTC); flow,
+body-contact and mixed on `da1c3ba` (12:41 UTC), whose changes since `5bf7b44` are a test, the
+runner's registry and a script's cursor, not the client or the benchmark. In the first run all
+three attempts of flow, body-contact and mixed were rejected because KWin gave the window
+1920×1052 (the 1080p display minus its panel); both reports keep every attempt. One valid run per
+case: below the five the protocol asks for, so these are prequalification figures, not
+qualification.
+
+| Case | Median | p95 | p99 | Max | Presented frames | CPU median | Tick device time, median (p95) | Body pass | Upload | RSS | Baseline median / p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 1.08 | 10.74 | 10.99 | 11.96 | 14,634 | 0.47 | 0.27 (0.55)\* | – | 16.6 kB/s | 291 MiB | 3.58 / 6.20 |
+| flow | 1.11 | 10.68 | 10.87 | 12.94 | 15,426 | 0.46 | 0.23 (0.38) | – | 26.6 kB/s | 292 MiB | 11.04 / 14.56 |
+| body-contact | 1.13 | 10.69 | 10.89 | 11.44 | 15,085 | 0.48 | 0.83 (1.08) | 0.64 (0.83) | 54.0 kB/s | 293 MiB | 14.68 / 18.68 |
+| mixed | 1.06 | 10.69 | 10.85 | 12.41 | 14,839 | 0.45 | 0.21 (0.36) | – | 21.6 kB/s | 291 MiB | 4.59 / 12.22 |
+| streaming | 1.14 | 10.69 | 10.88 | 11.61 | 14,372 | 0.47 | 0.19 (0.37) | – | 1,244 kB/s | 365 MiB | 3.57 / 6.07 |
+| coupled | 1.23 | 10.63 | 10.88 | 11.93 | 16,378 | 0.45 | 0.88 (1.20) | 0.66 (0.96) | 169 kB/s | 342 MiB | 17.12 / 28.64 |
+
+Frame times are milliseconds over the 1,800 measured ticks; every run kept 60 ticks/s and had no
+frame over 16.67 ms, and the process's GPU memory peaked at 241 MiB in each. \*Idle's diagnostic
+run was rejected for its window size; its tick times are shown anyway. Upload is every byte the
+runtime sent to the device (commands, tick parameters, chunks entering the window); what comes
+back is command results, events and selected body samples, never cells. The baseline column is the Bevy application's five-run medians
+([above](#measured-legacy-baseline-01)), which sampled its main schedule rather than presented
+frames.
+
+Every case meets the qualification frame budget (p95 ≤ 16.67 ms, p99 ≤ 25 ms) in this run. The
+median frame is 1.1–1.2 ms in every case, where the baseline's was 3.6–17.1 ms; the CPU's share
+is about 0.46 ms, and the device's ticks cost 0.2–0.9 ms. The 95th percentile is about 10.7 ms in
+every case, above the baseline's in idle and streaming (6.2 and 6.1 ms): it is set by the
+acquisition waits below, not by the world's work.
+
+**Presentation.** On this desktop (KDE Plasma, KWin Wayland, displays at 240 and 144 Hz), the
+client's acquisition of a swapchain image waits a constant 10.09 ms on some presented frames:
+measured around `get_current_texture` in a short idle run, on every presented frame with the
+immediate present mode (about 94 frames a second) and on 369 of about 2,400 with mailbox (about
+400 frames a second); submission took 0.3 ms and the present call 0.06 ms. The interval matches
+no display's refresh, so it is not pacing by the compositor's frame rate; the client now prefers
+mailbox. These waits are the 10.6–11 ms frames that set every case's p95; 07 investigates their
+source.
 
 ## Structural gates
 

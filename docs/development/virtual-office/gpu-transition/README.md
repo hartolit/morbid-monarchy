@@ -1,12 +1,16 @@
 # GPU transition sprint
 
 **00 executed on 2026-10-10; 01 on 2026-10-10 to 2026-10-12; 02 on 2026-10-13; 03 on 2026-10-17;
-04 on 2026-10-17 to 2026-10-18; 05 on 2026-10-18 to 2026-10-19.** 01 measured and preserved the baseline, extracted `world-model`
+04 on 2026-10-17 to 2026-10-18; 05 on 2026-10-18 to 2026-10-19; 06 on 2026-10-19 to 2026-10-20.**
+01 measured and preserved the baseline, extracted `world-model`
 and delivered the evidence runner. 02 built the GPU boundary (`world-runtime`, `gpu-world`, the
 `transfers` suite). 03 put every material rule family on the GPU with sparse scheduling (the
 `cells` suite). 04 put bodies, rays and body observations on the GPU (the `bodies` suite and
 `resident-world`'s first three steps). 05 added the versioned store, residency, checkpoints and
-recovery (the `streaming` suite, steps 4–5). 06–07 have not started. Deliver GPU-authoritative material/body simulation and an independently
+recovery (the `streaming` suite, steps 4–5). 06 made the native client (`morbid-app`, with
+`world-render`) the application, ran `resident-world` in its window, measured its frame, and
+removed the Bevy baseline (the `render` suite). 07 has not started. Deliver GPU-authoritative
+material/body simulation and an independently
 usable native application, retaining `bevy_ecs` for CPU orchestration. This is an implementation
 sprint, not a planning-only program or an instruction to port one shader.
 
@@ -14,8 +18,8 @@ sprint, not a planning-only program or an instruction to port one shader.
 
 [00](00-first-execution-prompt.md), [01](01-baseline-contracts-and-seams.md),
 [02](02-gpu-runtime-and-transfer-lifecycle.md), [03](03-gpu-cell-simulation.md),
-[04](04-gpu-bodies-and-interaction.md) and [05](05-streaming-checkpoints-and-recovery.md) are
-complete. Assign the remaining stages individually, starting with 06. Read the
+[04](04-gpu-bodies-and-interaction.md), [05](05-streaming-checkpoints-and-recovery.md) and
+[06](06-native-client-and-bevy-removal.md) are complete. Assign 07 individually. Read the
 [source audit](source-audit.md), [acceptance](acceptance.md) and the current [handoff](handoff.md)
 before continuing a stage.
 
@@ -48,8 +52,8 @@ save/recovery failures as part of the transition. Do not add generic 3D physics,
 scripting language, a custom shader language, or a generic workflow system. Do not alter the user's
 hardware/services or saved worlds without explicit authority.
 
-The legacy app is an isolated baseline through 05, not a second fallback in the new runtime. 06
-removes it from normal builds. The CPU reference may survive only in the evidence leaf with bounded
+The legacy app was an isolated baseline through 05, not a second fallback in the new runtime; 06
+removed it. The CPU reference may survive only in the evidence leaf with bounded
 fixtures. No per-frame GPU readback/upload bridge is an acceptable intermediate “GPU authority” demo.
 
 ## Verification schedule

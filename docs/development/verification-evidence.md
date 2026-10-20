@@ -4,9 +4,10 @@ This document owns how evidence is collected and what it establishes. Commands a
 [workflow](workflow.md); timing/resource values are owned by
 [performance budgets](../reference/performance-budgets.md). 01 delivered the documentation,
 static and CPU lanes, adapter inspection and the baseline benchmark; 02 the shader validation
-item and the `transfers` GPU suite; 03 the `cells` GPU suite. The other GPU suites and the
-connected scenario are pending, and workflow lists each command's state. An unimplemented or unavailable suite cannot return
-success.
+item and the `transfers` GPU suite; 03 the `cells` GPU suite; 04 the `bodies` suite and
+`resident-world`; 05 the `streaming` suite; 06 the `render` suite, `resident-world` in the native
+window, scripted runs of the real client and the benchmark of the native frame. Workflow lists
+each command's state. An unimplemented or unavailable suite cannot return success.
 
 ## Evidence lanes
 
@@ -87,6 +88,10 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 | Old save revision replacing a newer one | 05 | `world-store` `store_lifecycle` `publication_refuses_missing_older_and_out_of_order_data_and_changes_nothing`; `streaming` `newest-retained-wins` (an older revision published after a newer one is refused with `Conflict::HeadNotNewer` and changes nothing) |
 | A stored row that is damaged, truncated or of a future version | 05 | `world-store` `format::tests` and `store_lifecycle` `absent_found_corrupt_and_unsupported_rows_read_differently`; `streaming` `refused-rows-stay-out` (never generated over, kept byte for byte) |
 | A save reported complete without the last tick | 05 | `world-runtime` `session::tests::a_close_after_an_earlier_save_saves_its_own_last_tick`; `streaming` `orderly-shutdown` (a close that cannot save in time reports it) |
+| GPU culling that drops a visible chunk or reorders draws | 06 | `render` `culling-matches-unculled` (culled frames equal the unculled path's pixels from four poses and after an out-of-view edit) |
+| A renderer that recreates resources for an edit, or keeps stale bind groups after a resize | 06 | `render` `edit-visible`, `bind-groups-follow-buffers` |
+| A camera that follows a body only through a CPU readback | 06 | `render` `follow-camera` (the sample on the CPU is held stale while the device pose moves) |
+| A Bevy engine crate in the native client's closure | 06 | `monarchy-evidence` `checks::contracts::tests::the_native_client_closure_has_no_bevy_engine_crate`; `check static` on the resolved closure |
 
 ## Connected scenario
 
@@ -104,7 +109,10 @@ user's only `world_data` directory.
 
 The native presentation trace must demonstrate the same scenario and actual buffers, not a video
 of unrelated CPU gameplay. The harness can drive synthetic input through the normal command
-boundary; it must not patch GPU buffers behind the production owners to force a result.
+boundary; it must not patch GPU buffers behind the production owners to force a result. Since 06
+`--consumer native` runs the same scenario with every session presented in the client's window
+(`morbid_app::viewer`), captioned and captured per step, and the `native-client` scripts drive the
+real client's input, overlay and command path and check each tool against its command outcome.
 
 ## Measurement outputs
 
@@ -119,7 +127,9 @@ rejected admissions; CPU payload retention; GPU allocations and their peaks. GPU
 are not labelled physical VRAM residency if that is not observable.
 
 Per-pass timestamps diagnose GPU work. End-to-end frame samples and completed-tick throughput
-establish the complete workload. Measure an idle case, each physical family, streaming/save
+establish the complete workload. Since 06 a native frame sample is one presented frame: the
+client's loop may run iterations that present nothing (both presentation slots busy) and still
+advance the timeline, and they belong to the next presented frame's sample. Measure an idle case, each physical family, streaming/save
 pressure and the coupled case. Keep dense and clustered populations. Record both allocated capacity
 and occupied items; unused preallocation still costs memory.
 

@@ -1,99 +1,89 @@
 # Current status
 
-**Snapshot:** prompt 05, 2026-10-19, branch `experimental`. The baseline application still owns the
-world on the CPU; 01 measured it, pinned its build, extracted the framework-free model it now
-uses and added the evidence runner. 02 added the GPU boundary: a runtime and a GPU owner that
-execute ordered brush edits, column queries and chunk transfers on the device. 03 runs every
-material rule family on the GPU owner, with exact accounting and sparse tile scheduling. 04 puts
-bodies on the GPU owner on the same fixed clock, coupled to its terrain and liquids, with
-GPU-resolved rays, every body command and a CPU consumer of body observations, all tested
-headlessly on the RTX 5070 Ti. 05 adds the saved world: a versioned store (`world-store`),
-residency and checkpoint owners in the runtime that keep metadata, not cells, and a session that
-opens, saves, closes and recovers a world over the GPU owner, with legacy import. The baseline
-application uses none of it except the legacy row owner.
-Update this page when implementation produces evidence; do not convert target architecture into
-past-tense claims.
+**Snapshot:** prompt 06, 2026-10-20, branch `experimental`. The native client (`morbid-app`,
+`apps/morbid`) is the application: a winit window with an egui overlay over the runtime's
+`WorldSession`, the saved world in `world-store`, the GPU owner `gpu-world` and the renderer
+`world-render`, all on one device. The GPU owns cells and bodies (03–04); the CPU issues intent,
+manages residency and saves (05). 06 removed the Bevy baseline, its CPU engine (`monarch-engine`)
+and its chunk manager (`spatial-lib`); `9a3230c` is the last commit that builds them. 07 qualifies
+the whole. Update this page when implementation produces evidence; do not convert target
+architecture into past-tense claims.
 
 ## Current implementation
 
 | Area | Observed implementation | Qualification |
 | --- | --- | --- |
-| Workspace | `crates/{monarch-engine,morbid-app,spatial-lib,world-model,world-runtime}`, `adapters/{gpu-world,world-store}` and `tools/evidence`. Rust 1.99.0 is pinned in `rust-toolchain.toml`; `Cargo.lock` is tracked (Bevy 0.19.0, `bevy_egui` 0.41.0, egui 0.35.0, wgpu 29.0.4, winit 0.30.13, redb 4.1.0, bitcode 0.6.9). | Builds with `--locked`; `check static` passes, with 3 recorded Clippy exceptions (7 diagnostics in `morbid-app`, removed in 06). Six locked crates were updated past RustSec advisories after the baseline was measured; four advisories without a compatible fix are accepted in `deny.toml` with reasons. |
-| World model | `world-model` owns packed cells and their column rules, materials, the automaton's rules (`rules`: switches, cadences, tuning constants, wake levels, keyed hashes and shuffles), chunk keys, units, supported settings, body presets, descriptions and tuning (since 04 the baseline engine reads its sphere constants from `world_model::body::tuning`), commands (including rays and targets, the column query, configuration and totals), observations (body samples and counters, ray hits) and generation. Engine, application, runtime, GPU owner and runner import it. Since 03 the quench converts only what fits under the elevation ceiling. | 41 tests, including hand-written layout goldens, the baseline hash written out by hand, independent ceiling fixtures, the substep and apportionment rules, and since 05 the pinned layout and physics fingerprints a saved world records. |
-| Runtime | `world-runtime`: session, command and tick identities; the `PhysicalWorld` port with per-tick material and body accounting; bounded receipts (retry applies once, reuse conflicts, acknowledged identities expire); the outcome ledger separating important results from counted cosmetic drops and counting unbalanced ticks; the body monitor (since 04: sample selection, per-body watermarks, a bounded event ring that defers instead of overwriting); the fixed, reconfigurable clock passed to the live world; tick-scheduled commands; a standalone `bevy_ecs` runtime. Since 05: the storage port, bounded load and write workers, the residency owner (per-key phases, request generations, newest retained and durable revisions, byte budgets, visible pressure), the checkpoint owner (one world snapshot at a completed tick, durable revisions, bodies, atomic publication, retries, receipts) and `WorldSession` (open, save, orderly close, loss report). Used headlessly by the GPU suites, `resident-world` and `cargo evidence session`; the baseline does not use it. | 44 tests of its rules, since 05 including the residency, checkpoint and session owners against a model port and an in-memory store; exercised with the GPU owner in the `transfers`, `cells`, `bodies` and `streaming` suites. |
-| GPU world | `gpu-world`: explicit adapter selection, requested limits, one submission timeline (≤ 3 in flight), checked resource plans up to radius 32, generated layouts, material tables and rule constants, assembled WGSL validated offline, chunk slots, ordered brush edits, column queries, configuration and totals commands, pooled upload/readback staging, resize with device-to-device migration, loss, fault and stop handling. Since 03 every tick runs the material phases (propose, resolve, react, commit) over the tiles its activity scheduling selects on the device, sparse or dense. Since 04 it owns bodies: a generation-checked slot table, device-resident state, substeps on the tick's clock, complete hashed bins, a per-body workgroup Jacobi solver, terrain contact and shared deformation under per-cell claims, buoyancy and displacement, suspension at the residency edge, GPU-resolved rays and every body command, and selected body samples. Since 05 every cell writer marks its slot changed; a fixed chunk snapshot image and an on-demand world image within the plan copy chunks out at a completed tick and read back only the changed ones; transfer-only submissions, body export and restore, and resize preflight. | 34 tests. `transfers` (28 cases), `cells` (31 cases), `bodies` (32 cases) and `streaming` (19 cases) pass on the RTX 5070 Ti at 05. Measured: an idle radius-6 window costs 27 µs of device time per tick, a fully active one 280 µs ([material phases](../reference/performance-budgets.md#material-phases-03)); the legacy qualification body workload's body pass takes 0.63 ms ([bodies](../reference/performance-budgets.md#bodies-04)). |
-| Terrain | Baseline: eight-byte packed columns, double-buffered CPU automaton, wake/halo tracking, Rayon traversal; since 03 it reads its constants and hashes from `world_model::rules`, with identical results. GPU (03): the same rules over the same cells as WGSL kernels, every transfer proposed once and accepted against the receiver's capacity; idle tiles are neither visited nor copied. | 10 baseline simulation tests pass. The CPU reference in `monarchy-evidence` equals the baseline engine cell for cell on its fixtures, and the GPU equals the reference tick for tick in the `cells` suite on the RTX 5070 Ti. Measured: the baseline still copies the whole array every tick; the GPU path visits no tile in an idle world. |
-| Bodies | Baseline: CPU sphere integration, terrain contact/deformation, fluid displacement, all-pairs sphere checks. GPU (04): the same behavior on the device in fixed substeps, with hashed bins instead of all pairs, swept contacts, a speed cap of 600 units/s and exact material accounting. | 12 baseline body tests pass, and their 12 intentions pass as GPU cases. Measured on the frozen legacy workloads: body time per tick 5.32 ms (CPU, 64 spheres) and 16.99 ms (256) in the baseline, 0.63 ms and 0.98 ms of device time on the GPU owner. |
-| Material contracts | Column mixing, phase changes and capacity helpers in `world-model`; the per-operation conservation, sinks and capacity policy in the [GPU contract](../reference/gpu-contract.md#material-accounting-03); since 04 the bodies' accounting and the compaction sink ([bodies](../reference/gpu-contract.md#bodies-04)). | 5 baseline cell tests, 3 ceiling tests and 1 apportionment test pass; the WGSL rules equal them on 15,488 boundary columns on the device, and the GPU apportionment equals `world-model`'s. Every GPU tick reports exact 64-bit accounting of cells and bodies that the ledger checks. |
-| Rendering | Bevy material shaders. Four layer entities per active chunk (676 at radius 6, counted from the measured active chunks, not from draw calls) share one cell buffer; a dirty grid uploads the whole array. | Measured GPU passes and frame times (see the baseline below); visual reference frames and the lighting/quality defaults are recorded for 06. |
-| Streaming/storage | Baseline: toroidal CPU grid; departing chunks wait in an LRU cache and are saved only when evicted, with no dirty tracking; since 05 `world_store::legacy` owns its rows and a row that cannot be read stays unloaded instead of being generated over. New path (05): `world-store` format version 1 (CRC-32C rows, immutable chunk and body revisions, atomic publication, stale-save refusal, reclaim after an unclean session), legacy import, and the runtime's residency, checkpoint and session owners over the GPU owner; the `world-store` command and the headless `cargo evidence session`. | The `streaming` suite (19 cases) on the RTX 5070 Ti with real temporary stores, injected I/O errors and process interruption; `world-store`'s 36 tests of the format, the store, imports and the command against real files, and the old writer's fixtures, which decode and re-encode byte for byte. Measured: the ordinary resident simulation moves no world data, a save reads back only changed chunks ([streaming and checkpoints](../reference/performance-budgets.md#streaming-and-checkpoints-05)). Not yet used by an application (06). |
-| Interaction | Baseline: brushes, metal/wood sphere spawning, possession, attract/lift, observer walk/noclip, camera, and simulation/lighting/resize UI. UI ranges come from `world_model::config`. GPU (04): every brush, spawn, removal, drive, jump, attract and lift as commands, at a column or at a GPU-resolved ray, through the runtime's receipts. | Baseline exercised through scripted scenarios. GPU commands, rays and retries tested headlessly; no interactive session was qualified. |
-| Event path | In the baseline, event types and an unbounded queue exist; nothing consumes them. The GPU path has the bounded replacement: command outcomes and residency results with reserved storage, a per-tick cosmetic event buffer whose drops are counted, and since 04 body samples and per-body counters consumed by `world-runtime`'s body monitor, whose events are deferred, never dropped, under pressure. Contacts, landings, craters, splashes and immersion are the producers. | Delivery under a saturated ring, delayed and reordered samples and slot reuse is tested on the GPU (`observation-delivery`), and `resident-world`'s consumer reacts to it; not yet a gameplay notification system. |
+| Workspace | `apps/morbid` (`morbid-app`), `crates/{world-model,world-render,world-runtime}`, `adapters/{gpu-world,world-store}` and `tools/evidence`. Rust 1.99.0 is pinned in `rust-toolchain.toml`; `Cargo.lock` is tracked (wgpu 29.0.4, winit 0.30.13, egui, egui-wgpu and egui-winit 0.35.0, standalone `bevy_ecs` 0.19.0, redb 4.1.0, bitcode 0.6.9). The native client's resolved closure has no Bevy engine crate. | Builds with `--locked`; `check static` passes with an empty lint baseline. One advisory without a compatible fix (quick-xml, build-time only, through wayland-scanner) is accepted in `deny.toml` with its reason. |
+| World model | `world-model` owns packed cells and their column rules, materials, the automaton's rules (`rules`), chunk keys, units, supported settings, body presets and tuning, commands (rays, targets, queries, configuration, totals), observations, the layout and physics fingerprints (`identity`), body resume records (`resume`) and generation. The runtime, GPU owner (through generated declarations), renderer, client and runner import it. | 41 tests, including hand-written layout goldens, the baseline hash written out by hand, independent ceiling fixtures, the substep and apportionment rules and the pinned fingerprints. |
+| Runtime | `world-runtime`: identities, the `PhysicalWorld` port with per-tick accounting, bounded receipts, the outcome ledger, the body monitor, the fixed reconfigurable clock, tick-scheduled commands, the storage port and workers, the residency and checkpoint owners and `WorldSession` (open, save, autosave, orderly close, loss report), in a standalone `bevy_ecs` world. Its consumers are the native client, the GPU suites, `resident-world` and `cargo evidence session`. | 44 tests, including the residency, checkpoint and session owners against a model port and an in-memory store; exercised with the GPU owner in every GPU suite and the scenario. |
+| GPU world | `gpu-world`: explicit adapter selection, requested limits, one submission timeline (≤ 3 world submissions in flight), checked resource plans up to radius 32, generated layouts, assembled WGSL validated offline, chunk slots, the material phases with sparse tile scheduling (03), bodies, rays and every body command (04), change words, chunk and world snapshots and resize (05). Since 06 it opens a session presenting to a window (`open_presenting`, the adapter's backend only) and takes the renderer's frames on the same timeline with their own bound of two (`submit_presentation`). | 34 tests. `transfers` (28 cases), `cells` (31), `bodies` (32) and `streaming` (19) pass on the RTX 5070 Ti at `da1c3ba`. Measured: an idle radius-6 window costs 27 µs of device time per tick, a fully active one 280 µs ([material phases](../reference/performance-budgets.md#material-phases-03)); the legacy qualification body workload's body pass takes 0.63 ms ([bodies](../reference/performance-budgets.md#bodies-04)). |
+| Terrain | GPU only: the column rules as WGSL kernels over the device cells, every transfer proposed once and accepted against the receiver's capacity; idle tiles are neither visited nor copied. The CPU automaton was removed in 06; its ten simulation tests run as `cells` cases. | The CPU reference in `monarchy-evidence` matched the baseline engine cell for cell on its fixtures until the engine was removed, and the GPU equals the reference tick for tick in the `cells` suite. |
+| Bodies | GPU only: fixed substeps of the tick, hashed bins, swept contacts, a speed cap of 600 units/s, shared deformation and exact material accounting. The CPU sphere integration was removed in 06; its twelve tests and the apportionment test run as `bodies` cases. | Measured on the frozen legacy workloads: the baseline's body time per tick was 5.32 ms (CPU, 64 spheres) and 16.99 ms (256); the GPU owner takes 0.63 ms and 0.98 ms of device time. |
+| Material contracts | Column mixing, phase changes and capacity helpers in `world-model`; the per-operation conservation, sinks and capacity policy in the [GPU contract](../reference/gpu-contract.md#material-accounting-03), and the bodies' accounting ([bodies](../reference/gpu-contract.md#bodies-04)). | 5 baseline cell tests and 3 ceiling tests pass on the CPU; the WGSL rules equal them on 15,488 boundary columns on the device. Every GPU tick reports exact 64-bit accounting of cells and bodies that the ledger checks. |
+| Rendering | `world-render` (06): the four landscape layers drawn per window chunk from the device cells (the baseline's landscape material, ported), spheres instanced from the device body state, GPU visibility (chunk bounds, frustum culling and ordered compaction into indirect draws), a camera that follows a body from its device pose, heightfield shadows and occlusion, a sphere shadow map, fog with sun glow, bloom and AgX tone mapping. It writes no physical state and keeps no copy of it. | 12 tests; the `render` suite's 12 cases pass offscreen on the RTX 5070 Ti at `da1c3ba`. Measured at 1920×1080 from the qualification camera: scene passes 0.84 ms at radius 6 and 4.20 ms at radius 16 (1.81 ms and 11.75 ms unculled), post 0.09–0.10 ms ([rendering](../reference/performance-budgets.md#native-client-06)). |
+| Streaming/storage | `world-store` format version 1 (CRC-32C rows, immutable chunk and body revisions, atomic publication, stale-save refusal, reclaim after an unclean session), the legacy import, and the runtime's residency, checkpoint and session owners over the GPU owner; the client creates, opens, imports, saves, autosaves and closes worlds through them; the `world-store` command and `cargo evidence session` remain for scripts. | The `streaming` suite (19 cases) with real temporary stores, injected I/O errors and process interruption; `world-store`'s 36 tests of the format, the store, imports and the command against real files and the old writer's fixtures. Measured: the ordinary resident simulation moves no world data, a save reads back only changed chunks ([streaming and checkpoints](../reference/performance-budgets.md#streaming-and-checkpoints-05)). |
+| Native client | `morbid-app` (06): a pumped winit loop, an egui overlay (tool bar, simulation, lighting, statistics, world, outcome and pressure panels, compass), the world catalog and settings outside the working directory, explicit adapter choice, open/close/save feedback, device-loss report and recovery under a later epoch, every inventory tool as runtime commands at GPU-resolved rays and column queries. | 8 tests; in its real window on `da1c3ba` the `features` script passed 41 checks (every inventory group through the input path), `loss` 6 (save, loss, recovery from the latest checkpoint, the report on screen) and `worlds` 4 (create, import, close with save, reopen). |
+| Interaction | Every brush, sphere preset, drive, jump, attract and lift as commands at a column or a GPU-resolved ray, through the runtime's receipts; walking on column queries; statistics from GPU totals. | The `features` script checks each tool against its command outcome in the real window; GPU commands, rays and retries are also tested headlessly. |
+| Event path | Command outcomes and residency results with reserved storage, a per-tick cosmetic event buffer whose drops are counted, body samples and per-body counters consumed by the runtime's body monitor, whose events are deferred, never dropped, under pressure; the client logs them. The baseline's unconsumed event queue went with it. | Delivery under a saturated ring, delayed and reordered samples and slot reuse is tested on the GPU (`observation-delivery`), and `resident-world`'s consumer reacts to it; not yet a gameplay notification system. |
 
 The sprint's [source audit](../development/virtual-office/gpu-transition/source-audit.md) records
-the exact symbols and what 01 found while measuring.
+the baseline's symbols and what 01 found while measuring.
 
-## Measured baseline
+## Measured baseline and native frame
 
-On the nominated machine (Ryzen 9 5950X, RTX 5070 Ti, Vulkan, NVIDIA 615.71.09, KDE Wayland) at
-`6e108d6`, five valid runs per case: the qualification profile (radius 6, 64 bodies, 1920×1080)
-misses its p95 and p99 targets in body-contact (p95 18.7 ms) and coupled (p95 28.6 ms, p99
-32.1 ms) and meets them in idle, flow, mixed and streaming. The scale profile (radius 16, 256
-bodies) falls behind real time in every active case (17–30 ticks/s). The tables, conditions and
-conclusions are in [performance budgets](../reference/performance-budgets.md#measured-legacy-baseline-01).
+The Bevy baseline, measured at `6e108d6` on the nominated machine (Ryzen 9 5950X, RTX 5070 Ti,
+Vulkan, NVIDIA 615.71.09, KDE Wayland), five valid runs per case: the qualification profile
+(radius 6, 64 bodies, 1920×1080) missed its p95 and p99 targets in body-contact (p95 18.7 ms) and
+coupled (p95 28.6 ms, p99 32.1 ms) and met them in idle, flow, mixed and streaming; the scale
+profile fell behind real time in every active case (17–30 ticks/s). The tables are in
+[performance budgets](../reference/performance-budgets.md#measured-legacy-baseline-01).
 
-## Established transition gaps
+The native client, measured on 2026-10-20 in its window on the same machine (NVIDIA 615.78.08,
+Linux 7.2.11), one valid run per qualification case (prequalification, not the five-run
+protocol): frame medians 1.06–1.23 ms, p95 10.63–10.74 ms, p99 10.85–10.99 ms, no frame over
+16.67 ms, 60 ticks/s, about 0.46 ms of CPU and 0.2–0.9 ms of device time per tick. Every case
+meets the qualification budget in that run; the p95 in idle and streaming is above the
+baseline's because of waits in swapchain image acquisition. The table and conditions are in
+[performance budgets](../reference/performance-budgets.md#native-client-06).
 
-The CPU copies and traverses the complete active grid despite sleeping cells and keeps additional
-active-chunk and render payload copies (30.9 MiB retained at radius 6, 163 MiB at radius 16).
-In the baseline, terrain advances on a fixed clock while bodies subdivide frame time separately,
-and their registration defines no terrain/body order (the GPU owner runs both on the tick, bodies
-after the material commit). Save tasks log failed writes without retaining their
-payload. A chunk requested again while its save is queued or in flight is read from the store
-without checking the pending payload. The exit flush covers only the save queue, not active or
-cached chunks or in-flight saves. Chunks that stream in after startup are not woken. (Read and
-decode errors fell through to generation until 05, which leaves such a row unloaded.) These are
-source observations and measurements on scratch worlds, not claims about incidents in the user's
-world. The GPU owner (03) does not have the first or the last of these gaps — it visits no tile of
-an idle world and wakes chunks as they activate — and since 05 its session, residency and
-checkpoint owners do not have the save gaps, but no application uses them yet.
+## Known gaps
+
+- `resident-world` step 6 runs 05's faults and recovery and fails until 07 adds delayed
+  consumers, dense body work at chunk seams and the integrated run.
+- On KWin Wayland with the NVIDIA driver about 15% of presented frames wait a constant 10.09 ms to acquire a swapchain image, which sets the native frame's p95 near 10.7 ms; the source (compositor or driver) is not yet known.
+- Saving and streaming add about 0.4 ms at p95 and 190–350 allocations to a frame (05), not yet
+  broken down by source.
+- No command journal: changes after the last checkpoint are lost on a crash or device loss, and
+  the loss report says how many ticks. A world whose layout, physics or generator identity
+  differs is refused, not converted.
+- Presentation is qualified on Vulkan on Linux (KWin Wayland) only.
 
 ## User data
 
-`world_data/save.redb` (git-ignored) is the user's only world database: 8,074,563,584 bytes at
-00, and 8,237,617,152 bytes, modified 2026-10-11 14:24 local time, when 01 finished. That write
-happened while no 01 work was running; 01 never opened the file. It was unchanged when 02 and 03
-finished (same size, same modification time); neither opened it. Between the end of 03
-(2026-10-17 17:59 local time) and the start of 04 (18:41) it was written again outside the
-sprint's work: 8,266,977,280 bytes, modified 2026-10-17 18:39:53 local time, which is what 04
-found; no 04 command opened it, and it was unchanged when 04 finished, and when 05 finished: no
-05 command opened it (every case, the scenario and the session runs used temporary stores or
-scratch copies, and since 05 a store opened for writing refuses a file that is not a version-1
-world before opening it for writing). On startup the baseline opens or
-creates it relative to the working directory. Experiments, fixtures and benchmarks use temporary
-stores and a scratch working directory. See the
-[development guide](../guides/development.md#baseline-versus-target).
+`world_data/save.redb` (git-ignored) at the repository root is a save the baseline generated; the
+user said on 2026-10-19 that it holds nothing important. The native client never opens it: its
+worlds live in the data directory, and the start screen can import a new world from a legacy
+save. Experiments, fixtures, scripts and benchmarks use temporary stores, for reproducibility. See
+the [development guide](../guides/development.md#the-application).
 
 ## Target work not yet implemented
 
-The native renderer and client (06), which will compose the session over `world-store`, are
-pending; until then the application keeps its baseline streaming and saves. `resident-world`
-runs five steps and fails its adversarial repeat until 07. The GPU owner, its transfers and shader validation exist since
-02; the GPU material phases, their accounting and sparse scheduling since 03; bodies, rays and
-body observations since 04.
+07: the integrated qualification (repeated benchmark runs of every profile, the comparison with
+the baseline's measurements, `resident-world` step 6 and the whole trace in the native client,
+adversarial load) and the sprint's closure.
 
 ## Evidence ledger
 
 | Lane | State | Evidence |
 | --- | --- | --- |
-| Documentation | Passed (01) | `cargo evidence check docs`: links and anchors, owners, sprint structure, retired rules, package READMEs and their naming in the architecture. |
-| Rust compilation, linting and dependency policy | Passed (02) | `cargo evidence check static`: rustfmt, three feature combinations, Clippy against 3 recorded exceptions (7 diagnostics, removal in 06), rustdoc with warnings denied, naga validation of the assembled shaders, `cargo deny`, `cargo machete`, dependency-direction rules per package, pins and CI. |
-| CPU tests | Passed (05) | `cargo evidence test cpu`: 235 tests passed, checked against the registry's 183 CPU behaviors (28 baseline) and 57 runner tests. |
-| GPU correctness and buffer layout | Passed (05, `transfers`, `cells`, `bodies` and `streaming`) | `cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05` (28 cases), `--suite cells` (31 cases), `--suite bodies` (32 cases) and `--suite streaming` (19 cases) on the RTX 5070 Ti, NVIDIA 615.78.08, Linux 7.2.11, at `6f6297c`. The `render` suite belongs to 06 and fails until registered. |
-| Connected scenario | Partial (05) | `cargo evidence run --scenario resident-world --adapter vulkan-10de-2c05`, over a temporary store: known terrain, the sphere into water, a GPU-ray edit and its consumer, the window leaving and returning while a write is held, and a checkpoint reopened by a new store and session pass; the adversarial repeat runs 05's faults and recovery and fails until 07 adds delayed consumers, dense seam work and the native consumer. |
-| Primary hardware performance | Measured baseline (01); GPU physics measured (03, 04) | Legacy application: summaries in `tools/evidence/baselines/legacy-6e108d6/`. The GPU material phases' device times at radius 6 ([budgets](../reference/performance-budgets.md#material-phases-03)) and the bodies at 64–4,096 bodies, on the legacy body workloads and paced at 60 Hz ([budgets](../reference/performance-budgets.md#bodies-04)) are measured headlessly; physics only, not a native frame time. |
-| Native interactive scenario | Not run | Current and target applications both unqualified. |
-| Fault recovery and legacy save import | Passed (05, headless) | `streaming` cases for failed and retried commits, retention pressure, delayed mapping, orderly close and timeout, device loss before and after capture, and process interruption at the publication's barriers, each reopened from the file; `world-store` tests for interruption inside redb's commits and for importing the old writer's rows (corrupt, unclean, interrupted and failing). No application uses them before 06. |
+| Documentation | Passed (06) | `cargo evidence check docs`: links and anchors, owners, sprint structure, retired rules, package READMEs and their naming in the architecture. |
+| Rust compilation, linting and dependency policy | Passed (06) | `cargo evidence check static`: rustfmt, two feature combinations, Clippy with no exceptions, rustdoc with warnings denied, naga validation of the assembled `gpu-world` and `world-render` shaders, `cargo deny`, `cargo machete`, dependency-direction rules per package (the native client's closure has no Bevy engine crate), pins and CI. |
+| CPU tests | Passed (06) | `cargo evidence test cpu`: 232 tests passed, checked against the registry's 177 CPU behaviors and 57 runner tests; the 28 baseline behaviors stay registered, 23 of them as GPU cases since 06. |
+| GPU correctness and buffer layout | Passed (06, every suite) | `cargo evidence test gpu --suite transfers --adapter vulkan-10de-2c05` (28 cases), `--suite cells` (31), `--suite bodies` (32), `--suite streaming` (19) and `--suite render` (12) on the RTX 5070 Ti, NVIDIA 615.78.08, Linux 7.2.11, at `da1c3ba`. |
+| Connected scenario | Partial (05; visible since 06) | `cargo evidence run --scenario resident-world --adapter vulkan-10de-2c05`, headless and with `--consumer native` in the client's window: steps 1–5 pass; the adversarial repeat runs 05's faults and recovery and fails until 07. |
+| Native interactive client | Passed (06, scripted in the real window) | `native-client script features` (41 checks), `loss` (6) and `worlds` (4) in the real window on `vulkan-10de-2c05` at `da1c3ba`; `resident-world --consumer native` (steps 1–5); a frame captured at the idle reference camera compared with the baseline's ([acceptance](../development/virtual-office/gpu-transition/acceptance.md#baseline-presentation-and-tuning-reference-01)). |
+| Primary hardware performance | Measured baseline (01); GPU physics (03–05); native frame (06, prequalification) | Legacy application: summaries in `tools/evidence/baselines/legacy-6e108d6/`. GPU material phases, bodies, streaming and the renderer's passes in [budgets](../reference/performance-budgets.md). The native frame: `cargo evidence bench --profile qualification --adapter vulkan-10de-2c05 --runs 1` at `5bf7b44` and, for the three cases whose windows the desktop shrank there, at `da1c3ba`; every case within the qualification budget in one run ([budgets](../reference/performance-budgets.md#native-client-06)). |
+| Fault recovery and legacy save import | Passed (05 headless; 06 in the client) | `streaming` cases for failed and retried commits, retention pressure, delayed mapping, orderly close and timeout, device loss before and after capture, and process interruption; `world-store` tests for interruption and import; the client's `loss` and `worlds` scripts. |
 | Secondary GPU / Windows / other platforms | Unqualified | No compatibility claim. Hosted CI runs the CPU and static lanes on Linux only. |
 
 After each completed stage, replace affected rows with the tested commit, command, environment and

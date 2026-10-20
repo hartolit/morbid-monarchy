@@ -84,6 +84,22 @@ consumer, not an app.
   chunk manager serve only the baseline until 06.
 - **Not created.** `world-render` waits for 06.
 
+## 06 package check
+
+- **`world-render` — created** under `crates/`, consumed by the native client and the evidence
+  runner's `render` suite and visible scenario. It reads `gpu-world`'s view and records into the
+  GPU owner's encoders on its timeline; it imports `world-runtime` only for identities and the
+  resident window. `check static` refuses windows, UI, stores, engines and the baseline in its
+  closure.
+- **`morbid-app` — moved and replaced.** The package name now belongs to the native client at
+  `apps/morbid` (library `morbid_app`, executable `morbid`): winit 0.30.13, egui, egui-wgpu and
+  egui-winit 0.35.0 over the one wgpu 29.0.4 device the GPU owner opens, as the 01 check
+  foresaw. Its closure has no Bevy engine crate; the standalone ECS arrives only through
+  `world-runtime`.
+- **Removed.** The Bevy baseline application, `monarch-engine` and `spatial-lib` (its grid and
+  chunk manager, superseded by the residency owner), with no fallback flag; `9a3230c` is the last
+  commit that builds them. The CPU reference of the cell rules stays in `monarchy-evidence`.
+
 If a proposed package has no actual boundary/consumer, use a module before creating it. A dependency
 cycle, duplicate wgpu device family or interface forcing world copies is evidence that the chosen
 boundary needs correction.
