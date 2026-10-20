@@ -444,6 +444,12 @@ fn a_close_during_an_autosave_of_its_last_tick_is_saved() {
     until(&mut session, "settle", |session| {
         session.residency().settled()
     });
+    // Autosaves run while the window settles. Let the last of them finish, so the autosave
+    // awaited below is one that starts after the edit: an earlier one still in flight holds an
+    // older tick, and the close would rightly save again.
+    until(&mut session, "no save in progress", |session| {
+        !session.checkpoints().busy()
+    });
     port.model().edit(key(-1, -1), 6);
     store.state().hold_writes = true;
     until(&mut session, "an autosave", |session| {

@@ -402,8 +402,20 @@ impl GpuContext {
         max_in_flight: u32,
         surface: Option<wgpu::SurfaceTarget<'static>>,
     ) -> Result<(Self, Option<wgpu::Surface<'static>>), ContextError> {
-        let selected = AdapterInventory::enumerate_backends(backends_of(adapter_id))
-            .take(adapter_id, allow_software)?;
+        let selected = match AdapterInventory::enumerate_backends(backends_of(adapter_id))
+            .take(adapter_id, allow_software)
+        {
+            // The session's instance holds the identifier's backend only; the refusal still
+            // names every adapter the machine has, so the person can choose another.
+            Err(ContextError::AdapterNotFound { id, .. }) => {
+                let available = AdapterInventory::enumerate()
+                    .records()
+                    .map(|record| record.id.clone())
+                    .collect();
+                return Err(ContextError::AdapterNotFound { id, available });
+            }
+            selected => selected?,
+        };
         let surface = match surface {
             None => None,
             Some(target) => {

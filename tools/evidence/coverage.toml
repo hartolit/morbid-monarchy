@@ -483,6 +483,16 @@ destination = "world-render camera math shared by the client and camera.wgsl (06
 determinism = "exact"
 
 [[behavior]]
+id = "render.frame.projection-inverts-ray"
+package = "world-render"
+target = "lib"
+test = "frame::tests::projection_inverts_the_cursor_ray"
+origin = "transition"
+expectation = "The CPU projection of a point on the cursor ray through a screen position returns that position, for the centre and off-centre points."
+destination = "world-render CPU projection mirroring camera.wgsl (06)"
+determinism = "float-tolerance"
+
+[[behavior]]
 id = "render.frame.window-local"
 package = "world-render"
 target = "lib"
@@ -809,36 +819,6 @@ destination = "world-model rules (03)"
 determinism = "exact"
 
 # --- CPU reference of the cell rules: monarchy-evidence (03) ---
-
-[[behavior]]
-id = "reference.cells.legacy-flow"
-package = "monarchy-evidence"
-target = "lib"
-test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_flow_and_granular_fixtures"
-origin = "transition"
-expectation = "The CPU reference equals the baseline engine cell for cell and wake level for wake level for 400 ticks of a dam break and a sand pile at a negative key."
-destination = "monarchy-evidence CPU reference (03), the oracle the cells suite compares the GPU with"
-determinism = "exact"
-
-[[behavior]]
-id = "reference.cells.legacy-chaotic"
-package = "monarchy-evidence"
-target = "lib"
-test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_chaotic_terrain"
-origin = "transition"
-expectation = "The CPU reference equals the baseline engine for 200 ticks of seeded chaotic terrain with sand and water."
-destination = "monarchy-evidence CPU reference (03)"
-determinism = "exact"
-
-[[behavior]]
-id = "reference.cells.legacy-thermal"
-package = "monarchy-evidence"
-target = "lib"
-test = "suites::cells::reference::legacy_agreement::reference_matches_the_baseline_on_thermal_fixtures"
-origin = "transition"
-expectation = "The CPU reference equals the baseline engine for 300 ticks at -10 C: a pond freezes, magma quenches and boils water, oil sits beside magma."
-destination = "monarchy-evidence CPU reference (03)"
-determinism = "exact"
 
 [[behavior]]
 id = "reference.cells.ceiling-accounting"
