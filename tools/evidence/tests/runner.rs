@@ -61,8 +61,9 @@ fn a_gpu_suite_on_a_missing_adapter_is_not_a_pass() {
 }
 
 #[test]
-fn an_unimplemented_scenario_fails_on_every_available_adapter() {
+fn an_unregistered_scenario_fails_on_every_available_adapter() {
     // Enumerating adapters is safe on any host; with none, the request is unavailable instead.
+    // A scenario the runner does not register is a failed item, never a pass or a skip.
     let dir = scratch("inspect");
     let _ = run(&[
         "inspect-adapter",
@@ -79,7 +80,7 @@ fn an_unimplemented_scenario_fails_on_every_available_adapter() {
         let output = run(&[
             "run",
             "--scenario",
-            "resident-world",
+            "not-registered",
             "--adapter",
             id,
             "--output",

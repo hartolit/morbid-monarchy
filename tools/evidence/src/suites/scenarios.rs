@@ -1,9 +1,8 @@
 //! Connected scenarios: one story through the production runtime and live world, step by step.
 //!
-//! `resident-world` is delivered incrementally (verification evidence, "Connected scenario").
-//! Each step reports on its own; a step a later stage owns is reported as not implemented, which
-//! fails the scenario until that stage delivers it. A step two stages share runs the earlier
-//! stage's part, reports its checks, and stays failed until the later stage completes it.
+//! `resident-world` (verification evidence, "Connected scenario") was delivered stage by stage
+//! (04–07) and is complete since 07. Each step reports on its own; a step reported as not
+//! implemented fails the scenario. Step 6, the adversarial repeat, is in `adversarial`.
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -20,13 +19,13 @@ use world_model::{
 };
 use world_runtime::{
     bodies::BodyEvent,
-    checkpoint::{SaveFailure, SaveState},
+    checkpoint::SaveState,
     ids::{ChunkRevision, CommandId, SessionEpoch, Tick},
-    port::{AbandonReason, CommandResult, Refusal, ResidentWindow},
+    port::{CommandResult, ResidentWindow},
     receipts::ReceiptState,
     runtime::Runtime,
     session::{CloseReport, SessionConfig, WorldSession},
-    store::{ChunkPayload, ChunkRow, Publication, WorldStore},
+    store::{CheckpointManifest, ChunkPayload, ChunkRow, Publication, WorldStore},
     workers::WorkerConfig,
 };
 use world_store::{
@@ -39,6 +38,8 @@ use super::{
     bodies::scene,
     streaming::world::{self, Live, Scratch, open_store, session_config},
 };
+
+mod adversarial;
 
 /// One step of a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +100,7 @@ pub const RESIDENT_WORLD_STEPS: [(&str, &str, &str); 6] = [
     (
         "adversarial-recovery",
         "05, 07",
-        "the trace again with delayed mapping and consumers, reordered loads, a failed write, an overlapping resize and an interruption, recovering from the last complete checkpoint",
+        "the trace again under load: dense bodies at a chunk and tile seam with brush edits and phase changes while the event consumer, readbacks and spawn outcomes are delayed, stale handles and a full body table; a rebase across negative coordinates with a held write and reversed deliveries; held deliveries under an overlapping resize, reordered loads, failed writes and a failed and retried save; device loss, process interruption before and after publication, orderly close and a fresh reopen, each recovering the last complete checkpoint with its bodies and configuration",
     ),
 ];
 
@@ -116,7 +117,10 @@ pub fn run_viewed(
     captures: Option<std::path::PathBuf>,
 ) -> Option<ScenarioResult> {
     match scenario {
-        "resident-world" => Some(resident_world_viewed(adapter, viewer, captures)),
+        "resident-world" => Some(match std::env::var(adversarial::INTERRUPT) {
+            Ok(spec) => adversarial::interruption_child(adapter, &spec),
+            Err(_) => resident_world_viewed(adapter, viewer, captures),
+        }),
         _ => None,
     }
 }
@@ -312,6 +316,37 @@ impl Story {
         self.live.until(what, done)
     }
 
+    /// Saves the world before its first tick and waits for the save to commit: in a reopened
+    /// session, a checkpoint of exactly what the session restored.
+    fn save_first_boundary(&mut self) -> Result<CheckpointManifest, String> {
+        self.live.session.save();
+        let started = std::time::Instant::now();
+        while !self
+            .session()
+            .checkpoints()
+            .receipt()
+            .is_some_and(|receipt| receipt.finished())
+        {
+            if started.elapsed() > super::driver::DEVICE_PATIENCE {
+                return Err("the first-boundary save never finished".to_owned());
+            }
+            self.live.frame_ticks(0);
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        let receipt = self.session().checkpoints().receipt().cloned();
+        let committed = receipt
+            .as_ref()
+            .and_then(|receipt| receipt.committed())
+            .ok_or_else(|| format!("the first-boundary save did not commit: {receipt:?}"))?;
+        let latest = self.store.latest().map_err(|error| error.to_string())?;
+        if latest.id != committed {
+            return Err(format!(
+                "the first-boundary save {committed:?} is not the latest: {latest:?}"
+            ));
+        }
+        Ok(latest)
+    }
+
     /// Closes this session in order, lets the store go, and opens the file again with a new
     /// store object and a new session under `epoch`: nothing but the file connects them.
     fn reopen(self, adapter: &str, epoch: SessionEpoch) -> Result<(Story, CloseReport), String> {
@@ -451,24 +486,19 @@ pub fn resident_world_viewed(
     );
     steps.push(step("checkpoint-and-reopen", check, true));
 
-    // 05 runs its part of the adversarial repeat; 07 completes it, so the step stays failed.
     let mut check = Check::default();
     caption(&story, "adversarial-recovery");
     match (story.take(), sphere, probes) {
         (Some(current), Some(body), Some(probes)) => {
-            if let Err(error) =
-                adversarial_recovery_step(adapter, current, body, probes, &mut check, captures)
-            {
+            if let Err(error) = adversarial::adversarial_recovery_step(
+                adapter, current, body, probes, &mut check, captures,
+            ) {
                 check.fail(format!("stopped early: {error}"));
             }
         }
         _ => check.fail("an earlier step did not complete"),
     }
-    check.fail(
-        "not complete: 07 adds delayed consumers, dense body work at chunk seams with phase changes, \
-         a negative-coordinate rebase and the native consumer; the checks above are 05's part",
-    );
-    steps.push(step("adversarial-recovery", check, false));
+    steps.push(step("adversarial-recovery", check, true));
     ScenarioResult {
         scenario: "resident-world".to_owned(),
         adapter: adapter.to_owned(),
@@ -1162,27 +1192,12 @@ fn checkpoint_and_reopen_step(
         .collect();
 
     // Before any tick: save the restored world as it is.
-    story.live.session.save();
-    let started = std::time::Instant::now();
-    while !story
-        .session()
-        .checkpoints()
-        .receipt()
-        .is_some_and(|receipt| receipt.finished())
-    {
-        if started.elapsed() > super::driver::DEVICE_PATIENCE {
-            return Err("the first-boundary save never finished".to_owned());
-        }
-        story.live.frame_ticks(0);
-        std::thread::sleep(Duration::from_micros(200));
-    }
-    let again = story.store.latest().map_err(|error| error.to_string())?;
-    check.that(again.id.value() == closed.id.value() + 1, || {
-        format!(
-            "the first-boundary save did not commit: {again:?}, {:?}",
-            story.session().checkpoints().receipt()
-        )
-    });
+    let again = story.save_first_boundary()?;
+    check.equal(
+        "the first-boundary save",
+        again.id.value(),
+        closed.id.value() + 1,
+    );
     check.equal("reopened tick", again.tick, closed.tick);
     check.equal("reopened configuration", again.config, closed.config);
     check.equal(
@@ -1247,203 +1262,4 @@ fn reopen_file(path: &std::path::Path) -> Result<Arc<RedbWorldStore>, String> {
             Err(error) => return Err(error),
         }
     }
-}
-
-/// Step 6, 05's part: the reopened trace under faults. Map deliveries are held while a save and
-/// a growth of the window overlap, eviction writes fail and are retried, loads may answer out of
-/// order, and the window comes back; a complete checkpoint follows. A later change and its save
-/// are then lost with the device before the save's payloads reach the CPU, and a new store and
-/// session recover exactly that checkpoint, refusing the lost session's slots.
-fn adversarial_recovery_step(
-    adapter: &str,
-    mut story: Story,
-    body: BodyHandle,
-    probes: Probes,
-    check: &mut Check,
-    captures: Option<&std::path::Path>,
-) -> Result<(), String> {
-    let bank = IVec2::new(-90, -40);
-    let edit = MaterialEdit::new(EditTool::Raise, bank, 2, 3).map_err(|e| e.to_string())?;
-    let at = story.next();
-    let stroke = story.submit(Command::EditMaterial(edit), at)?;
-    story.await_result(stroke)?;
-    let bank_column = story.column(bank)?;
-    let summary_before = *story.session().residency().summary();
-
-    // A save whose deliveries are held, and the window growing away while it drains.
-    story.live.faults.hold_deliveries(true);
-    story.faults.fail_writes(2);
-    story.live.session.save();
-    let grown = ResidentWindow::new(ChunkKey::new(4, 0, 0), 3, 3).map_err(|e| format!("{e:?}"))?;
-    story.live.session.set_window(grown);
-    story.live.frames(30);
-    let receipt = story.session().checkpoints().receipt().cloned();
-    check.that(
-        receipt
-            .as_ref()
-            .is_some_and(|receipt| matches!(receipt.state, SaveState::Capturing { .. })),
-        || format!("the save got ahead of held deliveries: {receipt:?}"),
-    );
-    story.live.faults.hold_deliveries(false);
-    story.until("the grown window and the save", |session| {
-        session.residency().window() == grown
-            && session.residency().settled()
-            && !session.residency().busy()
-            && session
-                .checkpoints()
-                .receipt()
-                .is_some_and(|receipt| receipt.finished())
-    })?;
-    let summary = *story.session().residency().summary();
-    check.that(
-        story
-            .session()
-            .checkpoints()
-            .receipt()
-            .is_some_and(|receipt| receipt.committed().is_some()),
-        || format!("{:?}", story.session().checkpoints().receipt()),
-    );
-    check.that(
-        summary.write_failures > summary_before.write_failures,
-        || "no eviction write failed".to_owned(),
-    );
-    let (_, _, injected) = story.faults.io_counts();
-    check.metric("injected_io_errors", injected);
-    check.metric(
-        "write_failures",
-        summary.write_failures - summary_before.write_failures,
-    );
-    check.metric("loads_out_of_order", summary.loads_out_of_order);
-    check.metric("stale_loads", summary.stale_loads);
-    check.metric(
-        "peak_requested_bytes",
-        story.session().runtime().counters().peak_requested_bytes,
-    );
-
-    story.live.move_to(home())?;
-    let columns = story.columns(&probes.cells)?;
-    compare(check, "after the faults", &probes, &columns);
-    check.equal(
-        "the bank edit after the faults",
-        story.column(bank)?,
-        bank_column,
-    );
-    let complete = story.live.save()?;
-
-    // A change after the checkpoint, and its save lost with the device before the readback.
-    let lost_cell = IVec2::new(20, -90);
-    let lost_before = story.column(lost_cell)?;
-    let edit = MaterialEdit::new(EditTool::Raise, lost_cell, 2, 3).map_err(|e| e.to_string())?;
-    let at = story.next();
-    let stroke = story.submit(Command::EditMaterial(edit), at)?;
-    story.await_result(stroke)?;
-    let stale_slot = story
-        .session()
-        .residency()
-        .slot(chunk_of(lost_cell))
-        .ok_or("no slot for the changed chunk")?;
-    story.live.faults.hold_deliveries(true);
-    story.live.session.save();
-    story.live.frames(10);
-    story.live.faults.lose_device();
-    story.until("the loss", |session| session.loss().is_some())?;
-    let loss = story.session().loss().ok_or("no loss report")?;
-    check.equal("loss reason", loss.reason, AbandonReason::DeviceLost);
-    check.equal(
-        "the latest complete checkpoint",
-        loss.last_complete,
-        complete,
-    );
-    let receipt = story.session().checkpoints().receipt().cloned();
-    check.that(
-        receipt.as_ref().is_some_and(|receipt| {
-            matches!(
-                receipt.state,
-                SaveState::Failed {
-                    failure: SaveFailure::Abandoned(AbandonReason::DeviceLost),
-                    retrying: false
-                }
-            )
-        }),
-        || format!("the uncaptured save: {receipt:?}"),
-    );
-    check.metric("ticks_lost", loss.ticks_lost);
-    let complete_bodies = story
-        .store
-        .read_bodies(complete)
-        .map_err(|error| error.to_string())?;
-
-    // Everything of the lost session goes; the file is opened again.
-    let Story {
-        live,
-        store,
-        path,
-        _scratch,
-        ..
-    } = story;
-    let viewer = live.viewer.clone();
-    live.detach();
-    let (shared, loss) = live.session.finish_after_loss(Duration::from_secs(20));
-    check.that(!loss.finished_captured_save, || format!("{loss:?}"));
-    drop(shared);
-    drop(store);
-    let store = reopen_file(&path)?;
-    let faults = store.faults().clone();
-    let live = world::open_viewed(
-        adapter,
-        Arc::clone(&store),
-        SessionEpoch::new(4),
-        trace_config(),
-        |_| {},
-        viewer,
-    )?;
-    let mut story = Story {
-        live,
-        store,
-        faults,
-        path,
-        id: 0,
-        stroke: None,
-        _scratch,
-    };
-    let start = story.session().start();
-    check.that(start.previous_unclean, || {
-        "the lost session's store was not recorded unclean".to_owned()
-    });
-    check.metric(
-        "reclaimed_rows",
-        start.reclaimed.chunk_rows + start.reclaimed.body_sets,
-    );
-    check.equal(
-        "recovered checkpoint",
-        story.store.latest().map_err(|error| error.to_string())?.id,
-        complete,
-    );
-    story.runtime().set_controlled(Some(body));
-    story.live.settle()?;
-    let columns = story.columns(&probes.cells)?;
-    compare(check, "recovered", &probes, &columns);
-    check.equal("the bank edit recovered", story.column(bank)?, bank_column);
-    check.equal(
-        "the change after the checkpoint is gone",
-        story.column(lost_cell)?,
-        lost_before,
-    );
-    check.that(
-        matches!(
-            story.runtime().retire_slot(stale_slot),
-            Err(Refusal::StaleSession { .. })
-        ),
-        || "the lost session's slot was accepted by the new one".to_owned(),
-    );
-    check.equal(
-        "recovered bodies",
-        story.session().runtime().bodies().bodies().count(),
-        complete_bodies.live(),
-    );
-    show_step(Some(&mut story), "adversarial-recovery", captures, check);
-    story.live.detach();
-    let report = story.live.session.close(Duration::from_secs(60));
-    check.that(report.saved, || format!("{report:?}"));
-    Ok(())
 }

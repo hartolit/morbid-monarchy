@@ -703,6 +703,37 @@ impl CellReport {
     pub fn consistent(&self) -> bool {
         self.imbalance() == (0, 0) && self.stale_flow == 0 && self.receive_mismatches == 0
     }
+
+    /// Adds a later tick's report: sums of the quantities and of the counts (32-bit counts
+    /// saturate). The sums say what the material phases and the tools did over a span of
+    /// ticks, which a world totals reduction at each end can be checked against.
+    pub fn add(&mut self, tick: &CellReport) {
+        self.fluid_in += tick.fluid_in;
+        self.fluid_out += tick.fluid_out;
+        self.solid_in += tick.solid_in;
+        self.solid_out += tick.solid_out;
+        self.quench += tick.quench;
+        self.boil += tick.boil;
+        self.burn += tick.burn;
+        self.uptake += tick.uptake;
+        self.erosion += tick.erosion;
+        self.tool_fluid_in += tick.tool_fluid_in;
+        self.tool_solid_in += tick.tool_solid_in;
+        self.tool_solid_out += tick.tool_solid_out;
+        self.candidate_tiles = self.candidate_tiles.saturating_add(tick.candidate_tiles);
+        self.process_tiles = self.process_tiles.saturating_add(tick.process_tiles);
+        self.active_tiles = self.active_tiles.saturating_add(tick.active_tiles);
+        self.awake_cells = self.awake_cells.saturating_add(tick.awake_cells);
+        self.active_cells = self.active_cells.saturating_add(tick.active_cells);
+        self.changed_cells = self.changed_cells.saturating_add(tick.changed_cells);
+        self.rejected_transfers = self
+            .rejected_transfers
+            .saturating_add(tick.rejected_transfers);
+        self.stale_flow = self.stale_flow.saturating_add(tick.stale_flow);
+        self.receive_mismatches = self
+            .receive_mismatches
+            .saturating_add(tick.receive_mismatches);
+    }
 }
 
 /// A tick's body substeps: their work, their solver's convergence and their material

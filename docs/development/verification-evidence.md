@@ -65,7 +65,7 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 | Specimen | Stage | Where it is detected |
 | --- | --- | --- |
 | Wrong packed-field offset | 01 | `world-model` `cell::layout_tests::a_shifted_field_is_detected` |
-| A required GPU suite or adapter unavailable | 01 | `monarchy-evidence` `tests/runner.rs`: a missing adapter is `unavailable`, an unimplemented suite or scenario `failed` |
+| A required GPU suite or adapter unavailable | 01 | `monarchy-evidence` `tests/runner.rs`: a missing adapter is `unavailable`, an unimplemented suite or an unregistered scenario `failed` |
 | An empty, shrunk or unregistered test selection | 01 | `monarchy-evidence` `tests_cpu::tests` |
 | A new warning, or a fixed one still excepted | 01 | `monarchy-evidence` `checks::lints::tests` |
 | A forbidden dependency reached indirectly | 01 | `monarchy-evidence` `checks::contracts::tests` |

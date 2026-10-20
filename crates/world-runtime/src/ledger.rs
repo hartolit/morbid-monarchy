@@ -115,6 +115,9 @@ pub struct LedgerSummary {
     pub inconsistent_ticks: u64,
     pub last_inconsistent_tick: Option<Tick>,
     pub body_inconsistent_ticks: u64,
+    /// Every tick's cell report so far, added up: what the material phases converted and the
+    /// tools added or removed (`CellReport::add`).
+    pub cells: crate::port::CellReport,
     /// Every body report so far, added up: what the bodies did and moved (`BodyReport::add`).
     pub bodies: crate::port::BodyReport,
     /// Device time of the body substeps, in milliseconds, when timestamps are available.
@@ -290,6 +293,7 @@ impl OutcomeLedger {
                 {
                     self.summary.body_time_ms.add(millis(phases.bodies));
                 }
+                self.summary.cells.add(&report.cells);
                 if !report.cells.consistent() {
                     self.inconsistent(report.tick);
                 }
@@ -464,6 +468,13 @@ mod tests {
         }
         assert_eq!(ledger.summary().inconsistent_ticks, 2);
         assert_eq!(ledger.summary().last_inconsistent_tick, Some(Tick::new(3)));
+        // Every tick's report is added up, the inconsistent ones included.
+        let cells = ledger.summary().cells;
+        assert_eq!(
+            (cells.fluid_in, cells.fluid_out, cells.boil, cells.solid_in),
+            (20, 29, 8, 6)
+        );
+        assert_eq!(cells.stale_flow, 1);
     }
 
     #[test]
