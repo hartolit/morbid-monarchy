@@ -250,6 +250,10 @@ pub struct ScriptDriver {
     tail: u64,
     /// Held until the world settles, so the window settles where the script starts.
     start_pose: Option<Pose>,
+    /// The pointer position the script set last, applied again before every frame: the window
+    /// also delivers the person's own pointer events (a mouse passing over it, or leaving it),
+    /// which must not move the script's cursor.
+    cursor: Option<InputEvent>,
 }
 
 impl ScriptDriver {
@@ -266,6 +270,7 @@ impl ScriptDriver {
             settled: None,
             opened: false,
             pending_capture: None,
+            cursor: None,
             fault_injection: false,
             recover: false,
             tail: 30,
@@ -343,7 +348,12 @@ impl Driver for ScriptDriver {
         let mut control = Control::Continue;
         for cue in self.cues.iter().filter(|cue| cue.at == offset) {
             match &cue.act {
-                Act::Input(event) => frame.events.push(*event),
+                Act::Input(event) => {
+                    if matches!(event, InputEvent::Cursor { .. } | InputEvent::CursorLeft) {
+                        self.cursor = Some(*event);
+                    }
+                    frame.events.push(*event);
+                }
                 Act::Pose(pose) => {
                     let observer = &mut running.play_mut().observer;
                     observer.position = pose.position;
@@ -382,6 +392,9 @@ impl Driver for ScriptDriver {
                 },
                 Act::Close => control = Control::Close,
             }
+        }
+        if let Some(cursor) = self.cursor {
+            frame.events.push(cursor);
         }
         control
     }
