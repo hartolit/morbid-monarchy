@@ -4,6 +4,21 @@ Maintain this one current record; replace stale working notes rather than accumu
 transcript. Canonical design/status belongs in maintained docs, and raw evidence belongs in retained
 artifacts. Update after each coherent checkpoint and before stopping or changing context.
 
+## 07 (in progress)
+
+**State:** 07 assigned on 2026-10-20 and in progress. Checkpoint A's gate ran on `93774e0`
+(every lane passed except step 6, as designed). Checkpoint B's `resident-world` step 6 is
+complete and committed in `d9bffb6` (both consumers). Visible runs (scripted windows, the
+packaged fresh start, the benchmarks) are on hold until the user says go: a game was using the
+GPU on 2026-10-20 from about 20:05 local time.
+
+| Field | Record |
+| --- | --- |
+| Source state | `experimental` at `d9bffb6`, plus uncommitted work in the tree: the session's frame times by owner (`world_runtime::session::FrameTimes`), thread-local allocation counts and their use in `streaming-measure`, the surface's acquisition wait, the benchmark's whole-process account of the measured window (`native::bench`), `native-client` counting its allocations and a diagnostic `--autosave`, the `worlds` script refusing a damaged legacy save (optional default directories), and the client loop no longer laying out the overlay in iterations that cannot present. Drafts of the maintained documents, the permanent summary and the analysis scripts are under `target/drafts/07/`. |
+| Checks so far | `93774e0`: `check all` 151 of 152 (step 6 only). `d9bffb6`'s tree: `check docs`, `check static`, `test cpu` (232 tests); the tree before its last three edits: `check all` 150 of 152 (rustdoc link and runner test, fixed) and `run --scenario resident-world --consumer native` passed. Uncommitted tree: `world-runtime` tests (44), Clippy, one headless `streaming-measure`. |
+| Findings | Measured on a contended machine (indicative only): the client loop ran about 10 iterations per presented frame without vsync, each laying out the overlay (about 2 ms of main-thread CPU and 4,400 allocations per presented frame); fixed in the uncommitted tree, to be measured. Saving's extra frame cost is in the checkpoint owner and the store's worker threads, walking's in the residency owner and the workers. |
+| Next action | When the user says go: scripted window runs (`features`, `loss`, `worlds`), the packaged run (`target/drafts/07/packaged.sh`), acquisition-wait experiments; commit the instrumentation; the five-run benchmarks of qualification, scale and capacity on that commit; documents; the final gate; closure. |
+
 ## 06 boundary (closed)
 
 **State:** 06 complete (2026-10-20), assigned on 2026-10-19. Checkpoints A–E are committed on
