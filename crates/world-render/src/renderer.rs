@@ -3,6 +3,9 @@
 //!
 //! ```text
 //! place_camera (compute)  the view from the frame's rig and the live body state
+//! chunk_bounds, cull,     per window chunk: height range and layers from the cells, the
+//!   compact (compute)     frustum test, then each layer's visible chunks in chunk order and
+//!                         its indirect draw
 //! shadow pass             spheres as depth from the sun
 //! main pass               terrain, granular and surface layers; spheres; liquids (blended)
 //! bloom                   13-tap downsamples, tent upsamples blended per mip, into the frame
@@ -43,6 +46,16 @@ const BLOOM_LOW_FREQUENCY_CURVATURE: f32 = 0.95;
 const BLOOM_HIGH_PASS_FREQUENCY: f32 = 1.0;
 /// Byte stride of the post parameters: the uniform offset alignment WebGPU guarantees.
 const POST_PARAMS_STRIDE: u64 = 256;
+/// Window chunks of the largest supported window (radius 32 on both axes): the visibility
+/// buffers are sized for it once, so a window resize allocates nothing here.
+const MAX_WINDOW_CHUNKS: u64 = 65 * 65;
+/// Bytes of one chunk record (`ChunkRecord` in visibility_bindings.wgsl).
+const CHUNK_RECORD_BYTES: u64 = 32;
+/// One indexed indirect draw per landscape layer: five words each.
+const DRAW_ARGS_BYTES: u64 = 4 * 5 * 4;
+const LAYERS: u32 = 4;
+/// Pipelines a renderer creates.
+pub const PIPELINES: u32 = 14;
 
 /// Why the renderer could not be built or draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +110,8 @@ pub struct RenderCounters {
     /// Device bytes of the renderer's own buffers and textures (not the world's).
     pub static_bytes: u64,
     pub target_bytes: u64,
-    /// Instances the last frame drew: chunks per landscape layer, and body slots.
+    /// The last frame's candidates: window chunks (each layer draws the visible ones among
+    /// them; the counts stay on the device), and body slots.
     pub chunk_instances: u32,
     pub body_instances: u32,
 }
@@ -120,6 +134,9 @@ struct Pipelines {
     spheres: wgpu::RenderPipeline,
     sphere_shadows: wgpu::RenderPipeline,
     camera: wgpu::ComputePipeline,
+    chunk_bounds: wgpu::ComputePipeline,
+    cull_chunks: wgpu::ComputePipeline,
+    compact_lists: wgpu::ComputePipeline,
     downsample_first: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
@@ -130,6 +147,7 @@ struct Layouts {
     world: wgpu::BindGroupLayout,
     shadow: wgpu::BindGroupLayout,
     camera: wgpu::BindGroupLayout,
+    visibility: wgpu::BindGroupLayout,
     post: wgpu::BindGroupLayout,
 }
 
@@ -138,6 +156,7 @@ struct WorldGroups {
     generation: u64,
     scene: wgpu::BindGroup,
     camera: wgpu::BindGroup,
+    visibility: wgpu::BindGroup,
 }
 
 /// Targets for one output size.
@@ -175,6 +194,10 @@ pub struct Renderer {
     palette: wgpu::Buffer,
     frame_uniform: wgpu::Buffer,
     view_record: wgpu::Buffer,
+    chunk_records: wgpu::Buffer,
+    layer_lists: wgpu::Buffer,
+    draw_args: wgpu::Buffer,
+    culling: bool,
     post_params: wgpu::Buffer,
     linear_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
@@ -242,6 +265,7 @@ fn layouts(device: &wgpu::Device) -> Layouts {
             read_only(4, draw),
             read_only(5, draw),
             read_only(6, draw),
+            read_only(7, wgpu::ShaderStages::VERTEX),
         ],
     });
     let shadow = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -276,6 +300,25 @@ fn layouts(device: &wgpu::Device) -> Layouts {
                 wgpu::BufferBindingType::Storage { read_only: false },
             ),
             read_only(2, compute),
+        ],
+    });
+    let writable = |binding| {
+        buffer_entry(
+            binding,
+            compute,
+            wgpu::BufferBindingType::Storage { read_only: false },
+        )
+    };
+    let visibility = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("render visibility"),
+        entries: &[
+            buffer_entry(0, compute, wgpu::BufferBindingType::Uniform),
+            read_only(1, compute),
+            read_only(2, compute),
+            read_only(3, compute),
+            writable(4),
+            writable(5),
+            writable(6),
         ],
     });
     let fragment = wgpu::ShaderStages::FRAGMENT;
@@ -314,6 +357,7 @@ fn layouts(device: &wgpu::Device) -> Layouts {
         world,
         shadow,
         camera,
+        visibility,
         post,
     }
 }
@@ -380,6 +424,7 @@ fn pipelines(
 ) -> Result<Pipelines, RenderError> {
     let scene = compile(device, &shaders::scene_assembly())?;
     let camera = compile(device, &shaders::camera_assembly())?;
+    let visibility = compile(device, &shaders::visibility_assembly())?;
     let post = compile(device, &shaders::post_assembly())?;
     let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -394,6 +439,7 @@ fn pipelines(
     );
     let shadow_layout = layout("render sphere shadows", &[Some(&layouts.world)]);
     let camera_layout = layout("render camera", &[Some(&layouts.camera)]);
+    let visibility_layout = layout("render visibility", &[Some(&layouts.visibility)]);
     let post_layout = layout("render post", &[Some(&layouts.post)]);
 
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -477,14 +523,35 @@ fn pipelines(
             cull: Some(wgpu::Face::Back),
         },
     );
-    let camera = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("place camera"),
-        layout: Some(&camera_layout),
-        module: &camera,
-        entry_point: Some("place_camera"),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    });
+    let compute = |label, layout: &wgpu::PipelineLayout, module, entry| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            module,
+            entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    };
+    let camera = compute("place camera", &camera_layout, &camera, "place_camera");
+    let chunk_bounds = compute(
+        "chunk bounds",
+        &visibility_layout,
+        &visibility,
+        "chunk_bounds",
+    );
+    let cull_chunks = compute(
+        "cull chunks",
+        &visibility_layout,
+        &visibility,
+        "cull_chunks",
+    );
+    let compact_lists = compute(
+        "compact layer lists",
+        &visibility_layout,
+        &visibility,
+        "compact_lists",
+    );
     let fullscreen = |label, fragment, format, blend| {
         render_pipeline(
             device,
@@ -539,6 +606,9 @@ fn pipelines(
         spheres,
         sphere_shadows,
         camera,
+        chunk_bounds,
+        cull_chunks,
+        compact_lists,
         downsample_first,
         downsample,
         upsample,
@@ -622,6 +692,25 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let storage = |label, size| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let chunk_records = storage("chunk records", MAX_WINDOW_CHUNKS * CHUNK_RECORD_BYTES);
+        let layer_lists = storage("layer lists", MAX_WINDOW_CHUNKS * u64::from(LAYERS) * 4);
+        let draw_args = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("layer draws"),
+            size: DRAW_ARGS_BYTES,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         // One parameter block per post source: the HDR frame and up to the largest mip count.
         let post_sources = 1 + u64::from(BLOOM_MAX_MIP_DIMENSION.ilog2());
         let post_params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -684,6 +773,9 @@ impl Renderer {
             + palette.size()
             + frame_uniform.size()
             + view_record.size()
+            + chunk_records.size()
+            + layer_lists.size()
+            + draw_args.size()
             + post_params.size()
             + u64::from(SHADOW_MAP_SIZE) * u64::from(SHADOW_MAP_SIZE) * 4;
         Ok(Self {
@@ -699,6 +791,10 @@ impl Renderer {
             palette,
             frame_uniform,
             view_record,
+            chunk_records,
+            layer_lists,
+            draw_args,
+            culling: true,
             post_params,
             linear_sampler,
             shadow_view,
@@ -706,7 +802,7 @@ impl Renderer {
             world_groups: None,
             targets: None,
             counters: RenderCounters {
-                pipelines_created: 11,
+                pipelines_created: PIPELINES,
                 static_bytes,
                 ..RenderCounters::default()
             },
@@ -740,6 +836,18 @@ impl Renderer {
         });
         self.timestamps = Some(Timestamps { queries, resolve });
         Ok(())
+    }
+
+    /// Draws only the chunks each layer can show (the default), or every resident chunk of
+    /// every layer: the unculled comparison path the render suite checks the culling against.
+    pub fn set_culling(&mut self, culling: bool) {
+        self.culling = culling;
+    }
+
+    /// The four layers' indexed indirect draws (five `u32`s each; the second is the instance
+    /// count), for evidence of what visibility selected.
+    pub fn draw_args(&self) -> &wgpu::Buffer {
+        &self.draw_args
     }
 
     pub fn timestamp_buffer(&self) -> Option<&wgpu::Buffer> {
@@ -911,6 +1019,7 @@ impl Renderer {
                 whole(4, &self.palette),
                 whole(5, view.bodies),
                 whole(6, view.activity),
+                whole(7, &self.layer_lists),
             ],
         });
         let camera = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -922,11 +1031,25 @@ impl Renderer {
                 whole(2, view.bodies),
             ],
         });
+        let visibility = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render visibility"),
+            layout: &self.layouts.visibility,
+            entries: &[
+                whole(0, &self.frame_uniform),
+                whole(1, &self.view_record),
+                whole(2, view.cells),
+                whole(3, view.window_map),
+                whole(4, &self.chunk_records),
+                whole(5, &self.layer_lists),
+                whole(6, &self.draw_args),
+            ],
+        });
         self.counters.world_bind_groups_created += 1;
         self.world_groups = Some(WorldGroups {
             generation: view.buffers_generation,
             scene,
             camera,
+            visibility,
         });
     }
 
@@ -949,16 +1072,26 @@ impl Renderer {
             return Err(RenderError::ZeroSize);
         };
         let aspect = size[0] as f32 / size[1] as f32;
-        let uniform = FrameUniform::pack(view, request, aspect);
+        let uniform = FrameUniform::pack(view, request, aspect, self.culling);
         view.queue
             .write_buffer(&self.frame_uniform, 0, bytemuck::bytes_of(&uniform));
-        self.counters.uniform_bytes_written += std::mem::size_of::<FrameUniform>() as u64;
+        let chunks = view.window.chunk_count();
+        // On the culled path the compaction writes each layer's instance count.
+        let instances = if self.culling { 0 } else { chunks };
+        let mut args = [0u32; 20];
+        for layer in 0..LAYERS as usize {
+            args[layer * 5] = TERRAIN_INDEX_COUNT;
+            args[layer * 5 + 1] = instances;
+        }
+        view.queue
+            .write_buffer(&self.draw_args, 0, bytemuck::cast_slice(&args));
+        self.counters.uniform_bytes_written +=
+            std::mem::size_of::<FrameUniform>() as u64 + DRAW_ARGS_BYTES;
         self.bind_world(view);
         let (Some(groups), Some(targets)) = (self.world_groups.as_ref(), self.targets.as_ref())
         else {
             return Err(RenderError::ZeroSize);
         };
-        let chunks = view.window.chunk_count();
         let bodies = view.body_extent;
 
         let stamp = |begin: Option<u32>, end: Option<u32>| {
@@ -981,6 +1114,17 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.camera);
             pass.set_bind_group(0, &groups.camera, &[]);
             pass.dispatch_workgroups(1, 1, 1);
+            if self.culling {
+                // Dispatches of one pass see each other's writes in order: bounds read the
+                // cells, the cull reads the bounds and the camera's view.
+                pass.set_bind_group(0, &groups.visibility, &[]);
+                pass.set_pipeline(&self.pipelines.chunk_bounds);
+                pass.dispatch_workgroups(chunks, 1, 1);
+                pass.set_pipeline(&self.pipelines.cull_chunks);
+                pass.dispatch_workgroups(chunks.div_ceil(64), 1, 1);
+                pass.set_pipeline(&self.pipelines.compact_lists);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1045,13 +1189,14 @@ impl Renderer {
             pass.set_bind_group(0, &groups.scene, &[]);
             pass.set_bind_group(1, &self.shadow_group, &[]);
             pass.set_index_buffer(self.terrain_indices.slice(..), wgpu::IndexFormat::Uint16);
-            for pipeline in [
-                &self.pipelines.terrain,
-                &self.pipelines.granular,
-                &self.pipelines.surface,
+            let layer_draw = |layer: u64| layer * 20;
+            for (layer, pipeline) in [
+                (0, &self.pipelines.terrain),
+                (1, &self.pipelines.granular),
+                (3, &self.pipelines.surface),
             ] {
                 pass.set_pipeline(pipeline);
-                pass.draw_indexed(0..TERRAIN_INDEX_COUNT, 0, 0..chunks);
+                pass.draw_indexed_indirect(&self.draw_args, layer_draw(layer));
             }
             if bodies > 0 {
                 pass.set_pipeline(&self.pipelines.spheres);
@@ -1061,7 +1206,7 @@ impl Renderer {
                 pass.set_index_buffer(self.terrain_indices.slice(..), wgpu::IndexFormat::Uint16);
             }
             pass.set_pipeline(&self.pipelines.fluid);
-            pass.draw_indexed(0..TERRAIN_INDEX_COUNT, 0, 0..chunks);
+            pass.draw_indexed_indirect(&self.draw_args, layer_draw(2));
         }
         let post_start = stamp(Some(2), None);
         let bloomed = self.encode_bloom(

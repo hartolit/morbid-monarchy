@@ -3168,3 +3168,125 @@ origin = "transition"
 expectation = "Missing, unknown, repeated, unparsable and out-of-range options exit 2 with the usage before any store is opened; a missing store exits 1."
 destination = "world-store command line (05); the native client's world options (06)"
 determinism = "exact"
+
+# --- The render GPU suite (06) ---
+
+[[behavior]]
+id = "gpu.render.formats"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "formats"
+origin = "transition"
+expectation = "The renderer builds its 14 pipelines for every surface format the client may get, the shader's sRGB encoding equals the hardware's within one level, and an unwritable format is refused."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.zero-size"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "zero-size"
+origin = "transition"
+expectation = "A zero-sized output is refused without allocating targets or drawing; a later size draws again."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.terrain-materials"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "terrain-materials"
+origin = "transition"
+expectation = "Stone, sand, a water pool and grass drawn from resident cells have their materials' looks."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.missing-chunks"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "missing-chunks"
+origin = "transition"
+expectation = "Non-resident chunks at a positive and a negative key show only the uniform clear colour; resident chunks meet without a gap."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.edit-visible"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "edit-visible"
+origin = "transition"
+expectation = "A stroke applied by a tick is drawn by the next frame from the same buffers with no new pipeline, bind group or target."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.sphere-at-gpu-pose"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "sphere-at-gpu-pose"
+origin = "transition"
+expectation = "A sphere is drawn at the position the device holds for it, and the ground beside it is unchanged."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.follow-camera"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "follow-camera"
+origin = "transition"
+expectation = "A driven, followed sphere stays at one screen position for 40 frames from its device pose while the CPU sample is stale; a camera placed from that sample loses it."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.bind-groups-follow-buffers"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "bind-groups-follow-buffers"
+origin = "transition"
+expectation = "Thirty frames of changing cells create no bind group; a window resize creates exactly one and the moved chunks draw."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.activity-overlay"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "activity-overlay"
+origin = "transition"
+expectation = "The activity overlay tints the tiles the last tick scheduled and leaves idle tiles unchanged."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.device-loss"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "device-loss"
+origin = "transition"
+expectation = "After a device loss presentation is refused before encoding and the renderer drops without touching the device."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.culling-matches-unculled"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "culling-matches-unculled"
+origin = "transition"
+expectation = "Culled frames equal unculled frames pixel for pixel from four poses over generated terrain with water across a chunk corner, draw fewer chunks, and an edit out of view shows when the camera turns to it."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.frame-cost"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "frame-cost"
+origin = "transition"
+expectation = "Device time of the scene and post passes (culled and unculled), CPU encode time and renderer memory at radius 6 and 16 (measurement)."
+destination = "world-render on gpu-world's device (06)"
+determinism = "exact"

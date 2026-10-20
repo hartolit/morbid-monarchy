@@ -210,7 +210,12 @@ pub(crate) struct FrameUniform {
 pub(crate) const VIEW_RECORD_BYTES: u64 = 16 * 4 + 3 * 16;
 
 impl FrameUniform {
-    pub(crate) fn pack(view: &WorldView<'_>, request: &FrameRequest, aspect: f32) -> Self {
+    pub(crate) fn pack(
+        view: &WorldView<'_>,
+        request: &FrameRequest,
+        aspect: f32,
+        culling: bool,
+    ) -> Self {
         let window = view.window;
         let min = window.min_key().to_ivec2();
         let chunks = [window.width() as i32, window.height() as i32];
@@ -304,7 +309,12 @@ impl FrameUniform {
                 view.body_extent,
                 request.overlay.bits(),
             ],
-            offsets: [view.plan.bodies.config, view.plan.activity.records, 0, 0],
+            offsets: [
+                view.plan.bodies.config,
+                view.plan.activity.records,
+                u32::from(!culling),
+                0,
+            ],
             shadow_view_proj: shadow.to_cols_array_2d(),
             shadow: [
                 1.0 / SHADOW_MAP_SIZE as f32,

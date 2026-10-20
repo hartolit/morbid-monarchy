@@ -35,7 +35,8 @@ struct Frame {
     projection: vec4<f32>,
     // x: followed body slot, y: its generation, z: body slots in use (extent), w: overlay bits.
     follow: vec4<u32>,
-    // x: word offset of the body configurations, y: word offset of the activity tile records.
+    // x: word offset of the body configurations, y: word offset of the activity tile records,
+    // z: 1 to draw every resident chunk (the unculled comparison path), 0 to draw the visible.
     offsets: vec4<u32>,
     // The sun's orthographic view-projection for the sphere shadow map.
     shadow_view_proj: mat4x4<f32>,

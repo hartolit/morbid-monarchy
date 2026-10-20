@@ -185,24 +185,34 @@ fn landscape_vertex(vertex_index: u32, chunk_index: u32, layer: u32) -> LayerOut
     return out;
 }
 
-@vertex
-fn terrain_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) chunk: u32) -> LayerOut {
-    return landscape_vertex(vertex, chunk, LAYER_TERRAIN);
+// The window chunk of a layer's instance: from the layer's visible list, or every chunk in
+// order on the unculled comparison path.
+fn layer_chunk(layer: u32, instance: u32) -> u32 {
+    if (frame.offsets.z != 0u) {
+        return instance;
+    }
+    let chunks = u32(frame.window.z * frame.window.w);
+    return layer_lists[layer * chunks + instance];
 }
 
 @vertex
-fn granular_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) chunk: u32) -> LayerOut {
-    return landscape_vertex(vertex, chunk, LAYER_GRANULAR);
+fn terrain_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> LayerOut {
+    return landscape_vertex(vertex, layer_chunk(LAYER_TERRAIN, instance), LAYER_TERRAIN);
 }
 
 @vertex
-fn fluid_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) chunk: u32) -> LayerOut {
-    return landscape_vertex(vertex, chunk, LAYER_FLUID);
+fn granular_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> LayerOut {
+    return landscape_vertex(vertex, layer_chunk(LAYER_GRANULAR, instance), LAYER_GRANULAR);
 }
 
 @vertex
-fn surface_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) chunk: u32) -> LayerOut {
-    return landscape_vertex(vertex, chunk, LAYER_SURFACE);
+fn fluid_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> LayerOut {
+    return landscape_vertex(vertex, layer_chunk(LAYER_FLUID, instance), LAYER_FLUID);
+}
+
+@vertex
+fn surface_vertex(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> LayerOut {
+    return landscape_vertex(vertex, layer_chunk(LAYER_SURFACE, instance), LAYER_SURFACE);
 }
 
 // Light reaching a surface under a liquid is tinted and dimmed by the column above it.

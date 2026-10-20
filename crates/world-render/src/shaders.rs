@@ -71,6 +71,24 @@ pub fn camera_assembly() -> Assembly {
     Assembly::new("render camera", &modules)
 }
 
+/// The visibility passes (`chunk_bounds`, `cull_chunks`).
+pub fn visibility_assembly() -> Assembly {
+    let mut modules = shader::shared_modules();
+    modules.extend([
+        constants(),
+        types(),
+        module(
+            "render/visibility_bindings.wgsl",
+            include_str!("../shaders/visibility_bindings.wgsl"),
+        ),
+        module(
+            "render/visibility.wgsl",
+            include_str!("../shaders/visibility.wgsl"),
+        ),
+    ]);
+    Assembly::new("render visibility", &modules)
+}
+
 /// Bloom and tone mapping.
 pub fn post_assembly() -> Assembly {
     Assembly::new(
@@ -84,7 +102,12 @@ pub fn post_assembly() -> Assembly {
 
 /// Every assembly the renderer compiles, for offline validation (`cargo evidence check static`).
 pub fn production_assemblies() -> Vec<Assembly> {
-    vec![scene_assembly(), camera_assembly(), post_assembly()]
+    vec![
+        scene_assembly(),
+        camera_assembly(),
+        visibility_assembly(),
+        post_assembly(),
+    ]
 }
 
 #[cfg(test)]

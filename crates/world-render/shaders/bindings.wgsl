@@ -9,6 +9,8 @@
 @group(0) @binding(4) var<storage, read> palette: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> bodies: array<u32>;
 @group(0) @binding(6) var<storage, read> activity: array<u32>;
+// The window chunks each layer draws this frame (visibility.wgsl), one list per layer.
+@group(0) @binding(7) var<storage, read> layer_lists: array<u32>;
 
 @group(1) @binding(0) var shadow_map: texture_depth_2d;
 @group(1) @binding(1) var shadow_sampler: sampler_comparison;

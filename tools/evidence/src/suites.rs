@@ -11,6 +11,7 @@ pub mod bodies;
 pub mod cells;
 pub mod driver;
 pub mod probe;
+pub mod render;
 pub mod scenarios;
 pub mod session;
 pub mod streaming;
@@ -107,6 +108,7 @@ pub fn cases(suite: GpuSuite) -> Option<&'static [Case]> {
         GpuSuite::Cells => Some(cells::CASES),
         GpuSuite::Bodies => Some(bodies::CASES),
         GpuSuite::Streaming => Some(streaming::CASES),
+        GpuSuite::Render => Some(render::CASES),
         _ => None,
     }
 }
