@@ -1,11 +1,12 @@
 //! `bench`: repeated release measurements of a frozen profile.
 //!
-//! In this baseline stage the measured application is the Bevy baseline, driven by the
-//! `legacy-baseline` binary. Each run gets a fresh directory and an empty world store, so every
-//! chunk is generated from the same seed and the user's world is never touched. A run counts
-//! only if the driver completed the timeline on the requested adapter at the requested window
-//! size with every frame sampled. One extra run per case enables GPU pass timestamps; it is
-//! labelled diagnostic because timestamp queries and their readback add work to the frame.
+//! The measured application is the native client (`morbid-app`) in its real window, driven by
+//! `native-client bench` (see `native::bench`). Each run gets a fresh directory and a new world
+//! made to the scenario, so every chunk is generated from the same seed and the person's worlds
+//! are never touched. A run counts only if the driver completed the timeline on the requested
+//! adapter at the requested window size with every frame sampled. One extra run per case
+//! measures the ticks' device time with timestamp queries; it is labelled diagnostic because
+//! the queries and their resolution add work to the frame.
 
 use std::{
     fs,
@@ -27,7 +28,7 @@ use crate::{
     scenario::{self, LoadedScenario, RunPlan},
 };
 
-const DRIVER_BINARY: &str = "legacy-baseline";
+const DRIVER_BINARY: &str = "native-client";
 /// Interval between checks of a running driver.
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Interval between GPU memory samples of a running driver.
@@ -112,8 +113,6 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
             "--release",
             "-p",
             "monarchy-evidence",
-            "--features",
-            "legacy-baseline",
             "--bin",
             DRIVER_BINARY,
         ]),
@@ -149,7 +148,6 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
                     profile.name
                 );
                 let result = execute_run(
-                    root,
                     run_dir,
                     &driver,
                     loaded,
@@ -172,22 +170,13 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
             "bench {} {case}: diagnostic run with GPU timestamps",
             profile.name
         );
-        let mut diagnostic =
-            execute_run(root, run_dir, &driver, loaded, &adapter, "diagnostic", true);
+        let mut diagnostic = execute_run(run_dir, &driver, loaded, &adapter, "diagnostic", true);
         if diagnostic.presentation_only_rejection() {
             println!(
                 "bench {} {case}: diagnostic run again after a presentation rejection",
                 profile.name
             );
-            diagnostic = execute_run(
-                root,
-                run_dir,
-                &driver,
-                loaded,
-                &adapter,
-                "diagnostic-2",
-                true,
-            );
+            diagnostic = execute_run(run_dir, &driver, loaded, &adapter, "diagnostic-2", true);
         }
 
         let contended = results.iter().filter(|result| result.contended).count();
@@ -271,7 +260,7 @@ pub fn run(request: &BenchRequest, root: &Path, run_dir: &Path) -> (Vec<Item>, V
         },
         "adapter": adapter,
         "driver": driver,
-        "measured_application": "Bevy baseline (morbid-app) in scripted input mode",
+        "measured_application": "native client (morbid-app) under native-client bench",
         "percentile_method": "nearest rank",
         "cases": cases_data,
     });
@@ -375,7 +364,6 @@ impl RunResult {
 }
 
 fn execute_run(
-    root: &Path,
     run_dir: &Path,
     driver: &Path,
     loaded: &LoadedScenario,
@@ -429,18 +417,19 @@ fn execute_run(
     let mut command = Command::new(driver);
     command
         .current_dir(&directory)
+        .arg("bench")
         .arg("--scenario")
         .arg(&loaded.path)
-        .arg("--world-dir")
-        .arg(directory.join("world"))
+        .arg("--worlds")
+        .arg(directory.join("worlds"))
         .arg("--samples")
         .arg(&samples_path)
         .arg("--summary")
         .arg(&summary_path)
-        .arg("--asset-dir")
-        .arg(root.join("crates/morbid-app/assets"))
-        .env("WGPU_BACKEND", &adapter.backend)
-        .env("WGPU_ADAPTER_NAME", &adapter.name)
+        .arg("--adapter")
+        .arg(&adapter.id)
+        .arg("--settings")
+        .arg(directory.join("settings.toml"))
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
@@ -496,7 +485,7 @@ fn execute_run(
 
     validate_run(&mut result, &summary_path, &samples_path, loaded, adapter);
     // The scratch world is only the run's input and side effect; the samples are the evidence.
-    let _ = fs::remove_dir_all(directory.join("world"));
+    let _ = fs::remove_dir_all(directory.join("worlds"));
     result
 }
 

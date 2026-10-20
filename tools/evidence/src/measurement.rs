@@ -1,5 +1,5 @@
-//! Per-frame samples shared by the baseline driver (writer) and the bench runner (reader), and
-//! the statistics computed from them.
+//! Per-frame samples shared by the native bench driver (writer) and the bench runner (reader),
+//! and the statistics computed from them.
 //!
 //! Counter columns hold the work done during that frame (deltas), not running totals. Optional
 //! columns are sampled periodically and empty otherwise, because reading them has a cost.
@@ -20,7 +20,7 @@ pub struct FrameSample {
     pub measured: bool,
     /// Wall time from this frame's start to the next frame's start.
     pub frame_ms: f64,
-    /// Main-world schedule time, from `First` to `Last`.
+    /// The client's frame on the CPU, from the frame's start to the end of its submission.
     pub main_cpu_us: f64,
     /// Simulation ticks completed during the frame, and the logical tick after it.
     pub ticks: u64,

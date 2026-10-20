@@ -4,6 +4,9 @@
 //! ```text
 //! native-client capture --worlds DIR --world NAME --adapter ID --settings PATH --out DIR
 //!               [--pose X,Y,Z,YAW_DEG,PITCH_DEG] [--frames N,N...] [--window WxH]
+//! native-client script features|loss|worlds ...
+//! native-client bench --scenario FILE --worlds NEW_DIR --samples FILE --summary FILE
+//!               --adapter ID --settings PATH [--gpu-timestamps]
 //! ```
 
 use std::{path::PathBuf, process::ExitCode};
@@ -23,6 +26,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("script") {
         return script(&args);
+    }
+    if args.first().map(String::as_str) == Some("bench") {
+        return bench(&args);
     }
     if args.first().map(String::as_str) != Some("capture") {
         eprintln!(
@@ -263,6 +269,83 @@ fn worlds_script(args: &[String], size: [u32; 2]) -> ExitCode {
         println!("FAIL {failure}");
     }
     if report.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// `native-client bench`: one measured run of a frozen scenario (see
+/// [`monarchy_evidence::native::bench`]). Succeeds when the timeline completed.
+fn bench(args: &[String]) -> ExitCode {
+    use monarchy_evidence::native::bench::{BenchDriver, create_world};
+    let (Some(scenario), Some(worlds), Some(samples), Some(summary), Some(adapter), Some(settings)) = (
+        value(args, "--scenario"),
+        value(args, "--worlds"),
+        value(args, "--samples"),
+        value(args, "--summary"),
+        value(args, "--adapter"),
+        value(args, "--settings"),
+    ) else {
+        eprintln!(
+            "native-client: --scenario, --worlds, --samples, --summary, --adapter and --settings are required"
+        );
+        return ExitCode::from(2);
+    };
+    let loaded = match monarchy_evidence::scenario::load(std::path::Path::new(&scenario)) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            eprintln!("native-client: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    // Every run starts from a new world, so every chunk is generated identically.
+    let worlds = PathBuf::from(worlds);
+    if worlds.exists() {
+        eprintln!(
+            "native-client: {} already exists; each run needs a new worlds directory",
+            worlds.display()
+        );
+        return ExitCode::from(2);
+    }
+    if let Err(error) = create_world(&worlds, &loaded.scenario.case, &loaded.scenario) {
+        eprintln!("native-client: {error}");
+        return ExitCode::FAILURE;
+    }
+    let options = ClientOptions {
+        adapter: Some(adapter.clone()),
+        worlds: worlds.clone(),
+        settings: PathBuf::from(settings),
+        open: None,
+        window_size: Some(loaded.scenario.presentation.resolution),
+        vsync: BenchDriver::vsync(&loaded.scenario),
+        autosave: Autosave::Off,
+    };
+    let summary_path = PathBuf::from(summary);
+    let driver = BenchDriver::new(
+        loaded,
+        worlds,
+        PathBuf::from(samples),
+        summary_path.clone(),
+        args.iter().any(|arg| arg == "--gpu-timestamps"),
+        adapter,
+    );
+    let outcome = morbid_app::client::run(options, Some(Box::new(driver)));
+    match &outcome {
+        Ok(run) => {
+            for error in &run.errors {
+                eprintln!("native-client: {error}");
+            }
+        }
+        Err(error) => eprintln!("native-client: {error}"),
+    }
+    // The summary exists once the timeline finished or timed out; closing the window early
+    // leaves none, which the bench reports as a failed run.
+    let completed = std::fs::read_to_string(&summary_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .is_some_and(|summary| summary["status"] == "completed");
+    if completed && outcome.is_ok_and(|run| run.errors.is_empty()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

@@ -58,6 +58,11 @@ pub trait Driver {
         false
     }
 
+    /// Whether sessions this driver opens measure their ticks' device time.
+    fn timestamps(&self) -> bool {
+        false
+    }
+
     fn before_frame(&mut self, frame: DriverFrame<'_>) -> Control;
 
     /// After the frame; `true` ends the run (an open world is closed in order first).

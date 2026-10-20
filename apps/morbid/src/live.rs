@@ -37,6 +37,8 @@ pub struct SessionRequest {
     /// Hand out a fault controller (device loss injection) for conformance runs; never set by
     /// the interactive client.
     pub fault_injection: bool,
+    /// Measure the ticks' device time with timestamp queries (diagnostic measurement runs).
+    pub timestamps: bool,
 }
 
 /// What opening a world found.
@@ -114,6 +116,7 @@ impl LiveWorld {
         let mut config = GpuWorldConfig::resume(&plan, &request.adapter, epoch)
             .ok_or(OpenFailure::Exhausted("ticks"))?;
         config.fault_injection = request.fault_injection;
+        config.timestamps = request.timestamps;
         let opened = Opened {
             checkpoint: plan.manifest,
             epoch,

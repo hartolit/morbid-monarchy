@@ -82,6 +82,7 @@ pub struct SurfaceReport {
     pub size: Option<[u32; 2]>,
     pub reconfigurations: u64,
     pub skipped_frames: u64,
+    pub presented_frames: u64,
     pub busy_frames: u64,
 }
 
@@ -156,6 +157,7 @@ impl Running {
             size: self.surface.size(),
             reconfigurations: self.surface.reconfigurations,
             skipped_frames: self.surface.skipped_frames,
+            presented_frames: self.surface.presented_frames,
             busy_frames: self.busy_frames,
         }
     }
@@ -204,6 +206,8 @@ pub struct Client {
     summary: RunSummary,
     /// Set by scripted runs: conformance fault injection on the sessions they open.
     fault_injection: bool,
+    /// Set by measurement runs: tick timestamps on the sessions they open.
+    timestamps: bool,
 }
 
 impl Client {
@@ -211,6 +215,7 @@ impl Client {
         let fault_injection = driver
             .as_ref()
             .is_some_and(|driver| driver.fault_injection());
+        let timestamps = driver.as_ref().is_some_and(|driver| driver.timestamps());
         let start = StartScreen {
             worlds: Vec::new(),
             worlds_dir: options.worlds.clone(),
@@ -243,6 +248,7 @@ impl Client {
             driven_start: None,
             summary: RunSummary::default(),
             fault_injection,
+            timestamps,
         }
     }
 
@@ -303,6 +309,7 @@ impl Client {
             adapter,
             autosave: self.options.autosave.clone(),
             fault_injection: self.fault_injection,
+            timestamps: self.timestamps,
         }
     }
 
@@ -848,6 +855,7 @@ impl Client {
         if submitted.is_ok() {
             window.pre_present_notify();
             texture.present();
+            running.surface.presented_frames += 1;
         }
         running.overlay.finish();
     }

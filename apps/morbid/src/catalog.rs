@@ -157,6 +157,18 @@ fn home_window() -> Result<ResidentWindow, String> {
 /// Creates a new world `name` in `worlds`, generated from `seed`: its first checkpoint has run
 /// no tick, and every chunk is generated when it first becomes resident.
 pub fn create(worlds: &Path, name: &str, seed: u32) -> Result<PathBuf, String> {
+    create_with(worlds, name, seed, default_config()?, home_window()?)
+}
+
+/// [`create`] with the physical configuration and resident window the first checkpoint
+/// records, for a world made to a specification (a measurement scenario's).
+pub fn create_with(
+    worlds: &Path,
+    name: &str,
+    seed: u32,
+    config: PhysicalConfig,
+    window: ResidentWindow,
+) -> Result<PathBuf, String> {
     if !valid_name(name) {
         return Err(format!(
             "`{name}` is not a world name: use 1 to 64 letters, digits, spaces, - or _"
@@ -182,8 +194,8 @@ pub fn create(worlds: &Path, name: &str, seed: u32) -> Result<PathBuf, String> {
         &Publication {
             id: CheckpointId::FIRST,
             tick: None,
-            config: default_config()?,
-            window: home_window()?,
+            config,
+            window,
             epoch: SessionEpoch::FIRST,
             heads: &[],
             bodies: 0,

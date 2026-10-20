@@ -25,6 +25,8 @@ pub struct Surface {
     stale: bool,
     pub reconfigurations: u64,
     pub skipped_frames: u64,
+    /// Frames handed to the presentation engine.
+    pub presented_frames: u64,
 }
 
 /// A frame to draw into, or why there is none.
@@ -39,8 +41,10 @@ pub enum Acquired {
 }
 
 impl Surface {
-    /// Chooses an sRGB format when the surface offers one, and FIFO (vsync) or the lowest-latency
-    /// mode without it.
+    /// Chooses an sRGB format when the surface offers one, and FIFO (vsync) or, without it,
+    /// mailbox before immediate: mailbox never tears, and on KWin's Wayland session with the
+    /// NVIDIA driver acquiring an immediate-mode image waited 10 ms on every presented frame,
+    /// where mailbox waited on about 15% of them (06 measurement).
     pub fn new(
         surface: wgpu::Surface<'static>,
         capabilities: &wgpu::SurfaceCapabilities,
@@ -68,10 +72,10 @@ impl Surface {
         let modes = &capabilities.present_modes;
         let present_mode = if vsync {
             wgpu::PresentMode::Fifo
-        } else if modes.contains(&wgpu::PresentMode::Immediate) {
-            wgpu::PresentMode::Immediate
         } else if modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
+        } else if modes.contains(&wgpu::PresentMode::Immediate) {
+            wgpu::PresentMode::Immediate
         } else {
             wgpu::PresentMode::Fifo
         };
@@ -89,6 +93,7 @@ impl Surface {
             stale: false,
             reconfigurations: 0,
             skipped_frames: 0,
+            presented_frames: 0,
         })
     }
 

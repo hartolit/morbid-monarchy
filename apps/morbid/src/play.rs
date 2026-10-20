@@ -131,6 +131,25 @@ impl Purpose {
         }
     }
 
+    /// The purpose a command serves when it is issued directly (a scripted run's timeline).
+    pub fn of(command: &Command) -> Self {
+        match command {
+            Command::EditMaterial(_) => Self::Stroke,
+            Command::SpawnBody(_) => Self::Spawn,
+            Command::RemoveBody { .. } => Self::Remove,
+            Command::DriveBody { .. } => Self::Drive,
+            Command::JumpBody { .. } => Self::Jump,
+            Command::AttractBodies { .. } => Self::Attract,
+            Command::LiftBodies { .. } => Self::Lift,
+            Command::SetAmbientTemperature(_) => Self::Climate,
+            Command::SetSimulationRules(_) => Self::Rules,
+            Command::SetElevationScale(_) => Self::Scale,
+            Command::QueryColumn { .. } => Self::Floor,
+            Command::QueryRay { .. } => Self::CursorRay,
+            Command::MeasureTotals => Self::Totals,
+        }
+    }
+
     /// Frequent purposes are counted, not logged one by one.
     fn logged(self) -> bool {
         !matches!(
@@ -327,6 +346,22 @@ impl Play {
                 None
             }
         }
+    }
+
+    /// Submits a scripted run's command for tick `at` under the client's own identities, so its
+    /// outcome is read, counted and released like any other; the admission error when refused.
+    pub fn submit_scripted(
+        &mut self,
+        session: &mut WorldSession,
+        command: Command,
+        at: Tick,
+    ) -> Result<CommandId, AdmissionError> {
+        let id = CommandId::new(self.next_command);
+        session.runtime_mut().submit_at(id, command, at)?;
+        self.next_command += 1;
+        self.pending.push_back((id, Purpose::of(&command)));
+        self.counts.accepted += 1;
+        Ok(id)
     }
 
     /// Submits a query unless the previous one of its purpose is unanswered.

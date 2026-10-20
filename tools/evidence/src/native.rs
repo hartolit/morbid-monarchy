@@ -1,7 +1,9 @@
 //! Scripted runs of the native client (`morbid-app`) in its real window: the same composition,
 //! event handling, renderer and overlay a person uses, driven through `morbid_app::driver`.
 //! The `native-client` binary runs them; each writes a JSON result and, where asked, PNG frames
-//! captured through the client.
+//! captured through the client. [`bench`] is the measured run of a frozen scenario.
+
+pub mod bench;
 
 use std::{
     fs::File,
