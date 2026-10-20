@@ -106,6 +106,15 @@ fn main() -> ExitCode {
 fn script(args: &[String]) -> ExitCode {
     use monarchy_evidence::native::{ScriptDriver, features};
     let name = args.get(1).cloned().unwrap_or_default();
+    if name == "worlds" {
+        let size = value(args, "--window")
+            .and_then(|text| {
+                let (w, h) = text.split_once('x')?;
+                Some([w.parse().ok()?, h.parse().ok()?])
+            })
+            .unwrap_or([1600, 900]);
+        return worlds_script(args, size);
+    }
     let (Some(worlds), Some(world), Some(adapter), Some(settings), Some(out)) = (
         value(args, "--worlds"),
         value(args, "--world"),
@@ -124,6 +133,7 @@ fn script(args: &[String]) -> ExitCode {
         .unwrap_or([1600, 900]);
     let cues = match name.as_str() {
         "features" => features(size),
+        "loss" => monarchy_evidence::native::loss_and_recovery(size),
         other => {
             eprintln!("native-client: unknown script `{other}`");
             return ExitCode::from(2);
@@ -132,8 +142,11 @@ fn script(args: &[String]) -> ExitCode {
     let out = PathBuf::from(out);
     let worlds = PathBuf::from(worlds);
     let path = worlds.join(format!("{world}.world"));
-    let driver = ScriptDriver::new(&name, world, path, out.clone(), cues)
+    let mut driver = ScriptDriver::new(&name, world, path, out.clone(), cues)
         .starting_at(monarchy_evidence::native::SHORE_POSE);
+    if name == "loss" {
+        driver = driver.with_faults();
+    }
     let report = std::rc::Rc::clone(&driver.report);
     let options = ClientOptions {
         adapter: Some(adapter),
@@ -158,6 +171,86 @@ fn script(args: &[String]) -> ExitCode {
     let _ = std::fs::create_dir_all(&out);
     let text = serde_json::to_string_pretty(&report).unwrap_or_default();
     let _ = std::fs::write(out.join("report.json"), text);
+    for check in &report.checks {
+        println!(
+            "{} {:<48} {}",
+            if check.passed { "pass" } else { "FAIL" },
+            check.name,
+            check.detail
+        );
+    }
+    if name == "loss" {
+        let reported = report
+            .messages
+            .iter()
+            .find(|message| message.contains("device was lost"))
+            .cloned();
+        println!(
+            "{} the loss is reported to the person: {reported:?}",
+            if reported.is_some() { "pass" } else { "FAIL" },
+        );
+        if reported.is_none() {
+            report
+                .failures
+                .push("the loss was not reported on screen".to_owned());
+        }
+        let text = serde_json::to_string_pretty(&report).unwrap_or_default();
+        let _ = std::fs::write(out.join("report.json"), text);
+    }
+    for failure in &report.failures {
+        println!("FAIL {failure}");
+    }
+    if report.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// `native-client script worlds --worlds DIR --legacy FILE --adapter ID --settings PATH --out DIR`:
+/// the start screen's create, import, open, close and reopen through the client's handlers.
+fn worlds_script(args: &[String], size: [u32; 2]) -> ExitCode {
+    use monarchy_evidence::native::WorldsDriver;
+    let (Some(worlds), Some(legacy), Some(adapter), Some(settings), Some(out)) = (
+        value(args, "--worlds"),
+        value(args, "--legacy"),
+        value(args, "--adapter"),
+        value(args, "--settings"),
+        value(args, "--out"),
+    ) else {
+        eprintln!(
+            "native-client: --worlds, --legacy, --adapter, --settings and --out are required"
+        );
+        return ExitCode::from(2);
+    };
+    let driver = WorldsDriver::new(PathBuf::from(legacy));
+    let report = std::rc::Rc::clone(&driver.report);
+    let options = ClientOptions {
+        adapter: Some(adapter),
+        worlds: PathBuf::from(worlds),
+        settings: PathBuf::from(settings),
+        open: None,
+        window_size: Some(size),
+        vsync: true,
+        autosave: Autosave::Off,
+    };
+    let summary = morbid_app::client::run(options, Some(Box::new(driver)));
+    let mut report = report.borrow().clone();
+    match summary {
+        Ok(summary) => report.failures.extend(summary.errors),
+        Err(error) => report.failures.push(error),
+    }
+    if report.checks.len() != 4 {
+        report
+            .failures
+            .push(format!("{} of 4 steps ran", report.checks.len()));
+    }
+    let out = PathBuf::from(out);
+    let _ = std::fs::create_dir_all(&out);
+    let _ = std::fs::write(
+        out.join("report.json"),
+        serde_json::to_string_pretty(&report).unwrap_or_default(),
+    );
     for check in &report.checks {
         println!(
             "{} {:<48} {}",

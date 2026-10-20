@@ -294,6 +294,17 @@ pub struct MenuGfx {
     pub adapter_name: String,
 }
 
+impl Drop for MenuGfx {
+    /// Lets the device finish its last frames before the surface goes, so the window's next
+    /// surface (a world's) does not meet a swapchain that still exists.
+    fn drop(&mut self) {
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(2)),
+        });
+    }
+}
+
 impl MenuGfx {
     /// Opens the first hardware adapter that can present to `window`: any will do for menus,
     /// which hold no world. The world's adapter is the user's explicit choice instead.
@@ -302,14 +313,17 @@ impl MenuGfx {
         preferred: Option<&str>,
         vsync: bool,
     ) -> Result<Self, String> {
+        // The primary backends only (as the world's adapters are offered): a GL surface of the
+        // window would outlive this one and collide with the world's.
+        let backends = wgpu::Backends::PRIMARY;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = instance
             .create_surface(Arc::clone(window))
             .map_err(|error| format!("the window has no surface: {error}"))?;
-        let adapters = block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let adapters = block_on(instance.enumerate_adapters(backends));
         let presentable = |adapter: &wgpu::Adapter| {
             adapter.get_info().device_type != wgpu::DeviceType::Cpu
                 && adapter.is_surface_supported(&surface)

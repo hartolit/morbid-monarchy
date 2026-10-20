@@ -219,6 +219,8 @@ pub struct ScriptReport {
     pub settled_at: Option<u64>,
     pub remembered: std::collections::BTreeMap<String, f64>,
     pub opened_worlds: u32,
+    /// The start screen's messages as the run ended (closes, losses, refusals).
+    pub messages: Vec<String>,
 }
 
 impl ScriptReport {
@@ -299,6 +301,9 @@ impl Driver for ScriptDriver {
     fn before_frame(&mut self, frame: DriverFrame<'_>) -> Control {
         let mut report = self.report.borrow_mut();
         report.frames = frame.frame;
+        if report.messages != frame.start.messages {
+            report.messages = frame.start.messages.clone();
+        }
         let Some(running) = frame.running else {
             if !self.opened {
                 self.opened = true;
@@ -1009,5 +1014,294 @@ fn totals_marker(tool: EditTool) -> impl Fn(&world_model::observation::WorldTota
         EditTool::Sand => totals.granular as f64,
         EditTool::Raise | EditTool::Lower => totals.elevation as f64,
         EditTool::Fire => -1.0,
+    }
+}
+
+/// Device loss and recovery in the real window: a sphere and a save, a change after the save,
+/// an injected loss, then the client's recovery from the latest complete checkpoint under a
+/// later epoch (the driver answers the loss dialog's Recover).
+pub fn loss_and_recovery(size: [u32; 2]) -> Vec<Cue> {
+    let mut s = Script::new();
+    s.act(Act::Pose(SHORE_POSE)).input(InputEvent::Cursor {
+        x: size[0] as f32 * 0.66,
+        y: size[1] as f32 * 0.5,
+    });
+    s.wait(2)
+        .tap(Key::Digit(digit_for(Tool::Sphere(BodyPreset::Metal))));
+    s.wait(5).hold(Button::Left, 2).wait(150);
+    s.check("a sphere before the save", |running| {
+        let tracked = running.session().runtime().bodies().summary().tracked;
+        if tracked == 1 {
+            Ok("1 tracked".to_owned())
+        } else {
+            Err(format!("{tracked} tracked"))
+        }
+    });
+    s.tap(Key::F5).wait(240);
+    s.check("the save committed", |running| {
+        match running.session().checkpoints().receipt() {
+            Some(receipt) if receipt.committed().is_some() => Ok(format!("{:?}", receipt.state)),
+            other => Err(format!("{other:?}")),
+        }
+    });
+    s.remember("saved_tick", |running| {
+        running
+            .session()
+            .checkpoints()
+            .latest()
+            .tick
+            .map_or(-1.0, |tick| tick.value() as f64)
+    });
+    s.remember("saved_checkpoint", |running| {
+        running.session().checkpoints().latest().id.value() as f64
+    });
+    s.remember("epoch", |running| {
+        f64::from(running.live().opened.epoch.value())
+    });
+    // A change after the save, which the loss takes with it.
+    s.input(InputEvent::Cursor {
+        x: size[0] as f32 * 0.5,
+        y: size[1] as f32 * 0.5,
+    });
+    s.tap(Key::Digit(digit_for(Tool::Brush(EditTool::Water))));
+    s.hold(Button::Left, 30).wait(60);
+    s.check("a stroke after the save", |running| {
+        let strokes = running.play().applied(Purpose::Stroke);
+        if strokes > 0 {
+            Ok(format!("{strokes} strokes"))
+        } else {
+            Err("no stroke applied".to_owned())
+        }
+    });
+    s.tap(Key::Escape);
+    s.act(Act::LoseDevice);
+    s.wait(400).check_with("recovered from the latest complete checkpoint under a later epoch", |running, memory| {
+        let opened = &running.live().opened;
+        let epoch = f64::from(opened.epoch.value());
+        let tick = opened.checkpoint.tick.map_or(-1.0, |tick| tick.value() as f64);
+        let checkpoint = opened.checkpoint.id.value() as f64;
+        let text = format!(
+            "epoch {} -> {epoch}; reopened checkpoint {checkpoint} at tick {tick} (saved {} at {})",
+            memory["epoch"], memory["saved_checkpoint"], memory["saved_tick"]
+        );
+        if epoch > memory["epoch"] && tick == memory["saved_tick"] && checkpoint == memory["saved_checkpoint"] {
+            Ok(text)
+        } else {
+            Err(text)
+        }
+    });
+    s.wait(120).check(
+        "the saved sphere is back, the later stroke is not",
+        |running| {
+            let tracked = running.session().runtime().bodies().summary().tracked;
+            let strokes = running.play().applied(Purpose::Stroke);
+            if tracked == 1 && strokes == 0 {
+                Ok(format!(
+                    "{tracked} sphere restored; the recovered session has applied {strokes} strokes"
+                ))
+            } else {
+                Err(format!("{tracked} tracked, {strokes} strokes"))
+            }
+        },
+    );
+    s.capture("recovered");
+    s.wait(5).act(Act::Close);
+    s.cues
+}
+
+/// The start screen through the client's own handlers: create a world, import a baseline save
+/// (from a copy), open the new world, close it with its save, and reopen it at the saved tick.
+pub struct WorldsDriver {
+    pub report: Rc<RefCell<ScriptReport>>,
+    legacy: PathBuf,
+    step: u32,
+    wait_until: u64,
+    saved_tick: Option<u64>,
+    opened_once: bool,
+}
+
+impl WorldsDriver {
+    pub fn new(legacy: PathBuf) -> Self {
+        Self {
+            report: Rc::new(RefCell::new(ScriptReport {
+                script: "worlds".to_owned(),
+                ..ScriptReport::default()
+            })),
+            legacy,
+            step: 0,
+            wait_until: 10,
+            saved_tick: None,
+            opened_once: false,
+        }
+    }
+
+    fn record(&self, frame: u64, name: &str, result: Result<String, String>) {
+        let (passed, detail) = match result {
+            Ok(detail) => (true, detail),
+            Err(detail) => (false, detail),
+        };
+        self.report.borrow_mut().checks.push(CheckResult {
+            name: name.to_owned(),
+            frame,
+            tick: None,
+            passed,
+            detail,
+        });
+    }
+}
+
+impl Driver for WorldsDriver {
+    fn before_frame(&mut self, frame: DriverFrame<'_>) -> Control {
+        use morbid_app::{catalog::EntryState, ui::StartAction};
+        {
+            let mut report = self.report.borrow_mut();
+            report.frames = frame.frame;
+            report.messages = frame.start.messages.clone();
+        }
+        if frame.frame < self.wait_until {
+            return Control::Continue;
+        }
+        let find = |name: &str| {
+            frame
+                .start
+                .worlds
+                .iter()
+                .find(|entry| entry.name == name)
+                .cloned()
+        };
+        let now = frame.frame;
+        match self.step {
+            0 => {
+                self.step = 1;
+                self.wait_until = now + 5;
+                Control::Start(StartAction::Create {
+                    name: "Scripted".to_owned(),
+                    seed: 69,
+                })
+            }
+            1 => {
+                let entry = find("Scripted");
+                self.record(
+                    now,
+                    "create a world from the start screen",
+                    match &entry {
+                        Some(entry) => match &entry.state {
+                            EntryState::Ready {
+                                seed: 69,
+                                tick: None,
+                                imported: false,
+                                ..
+                            } => Ok(format!("{} listed, never run", entry.path.display())),
+                            other => Err(format!("{other:?}")),
+                        },
+                        None => Err(format!("not listed: {:?}", frame.start.messages.first())),
+                    },
+                );
+                self.step = 2;
+                self.wait_until = now + 5;
+                Control::Start(StartAction::Import {
+                    name: "Imported".to_owned(),
+                    legacy: self.legacy.clone(),
+                    seed: 69,
+                    scale: 0.5,
+                })
+            }
+            2 => {
+                let entry = find("Imported");
+                self.record(
+                    now,
+                    "import a baseline save from the start screen",
+                    match &entry {
+                        Some(entry) => match &entry.state {
+                            EntryState::Ready {
+                                imported: true,
+                                chunks,
+                                ..
+                            } if *chunks > 0 => Ok(format!(
+                                "{chunks} chunks imported; {:?}",
+                                frame.start.messages.first()
+                            )),
+                            other => Err(format!("{other:?}")),
+                        },
+                        None => Err(format!("not listed: {:?}", frame.start.messages.first())),
+                    },
+                );
+                self.step = 3;
+                let path = find("Scripted").map(|entry| entry.path).unwrap_or_default();
+                Control::Open {
+                    name: "Scripted".to_owned(),
+                    path,
+                }
+            }
+            3 => {
+                let Some(running) = frame.running else {
+                    return Control::Continue;
+                };
+                if !running.session().residency().settled()
+                    || running
+                        .session()
+                        .runtime()
+                        .last_submitted_tick()
+                        .is_none_or(|tick| tick.value() < 120)
+                {
+                    return Control::Continue;
+                }
+                self.saved_tick = running
+                    .session()
+                    .runtime()
+                    .last_submitted_tick()
+                    .map(|tick| tick.value());
+                self.opened_once = true;
+                self.step = 4;
+                Control::Close
+            }
+            4 => {
+                if frame.phase != morbid_app::driver::PhaseKind::Start {
+                    return Control::Continue;
+                }
+                let message = frame.start.messages.first().cloned().unwrap_or_default();
+                self.record(
+                    now,
+                    "close with its save",
+                    if message.contains("closed and saved") {
+                        Ok(message)
+                    } else {
+                        Err(message)
+                    },
+                );
+                self.step = 5;
+                let path = find("Scripted").map(|entry| entry.path).unwrap_or_default();
+                Control::Open {
+                    name: "Scripted".to_owned(),
+                    path,
+                }
+            }
+            5 => {
+                let Some(running) = frame.running else {
+                    return Control::Continue;
+                };
+                let opened = running
+                    .live()
+                    .opened
+                    .checkpoint
+                    .tick
+                    .map(|tick| tick.value());
+                let at_close = self.saved_tick;
+                self.record(now, "reopen at the closed tick", match (opened, at_close) {
+                    (Some(opened), Some(closed)) if opened >= closed => Ok(format!(
+                        "reopened at tick {opened}; {closed} was the last submitted tick when the close began"
+                    )),
+                    other => Err(format!("{other:?}")),
+                });
+                self.step = 6;
+                Control::Quit
+            }
+            _ => Control::Continue,
+        }
+    }
+
+    fn after_frame(&mut self, _running: Option<&mut Running>, _input: &InputState) -> bool {
+        let report = self.report.borrow();
+        report.frames > 20_000
     }
 }

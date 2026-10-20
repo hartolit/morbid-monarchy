@@ -91,12 +91,14 @@ impl Running {
     /// recovered session's) must not be created while this one still exists.
     fn into_live(self: Box<Self>) -> LiveWorld {
         let Running {
-            live,
+            mut live,
             surface,
             renderer,
             overlay,
             ..
         } = *self;
+        // The last frames finish before the surface goes (a maintenance wait).
+        live.gpu().wait_idle(Duration::from_secs(2));
         drop(overlay);
         drop(renderer);
         drop(surface);
@@ -176,6 +178,8 @@ enum Phase {
 pub struct RunSummary {
     pub frames: u64,
     pub closes: Vec<String>,
+    /// Device losses, each with what it cost (reported, not a failure of the client).
+    pub losses: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -195,6 +199,8 @@ pub struct Client {
     occluded: bool,
     grabbed: bool,
     driver: Option<Box<dyn Driver>>,
+    /// A start-screen action a driver submitted, handled on the next start-screen frame.
+    driven_start: Option<StartAction>,
     summary: RunSummary,
     /// Set by scripted runs: conformance fault injection on the sessions they open.
     fault_injection: bool,
@@ -234,6 +240,7 @@ impl Client {
             occluded: false,
             grabbed: false,
             driver,
+            driven_start: None,
             summary: RunSummary::default(),
             fault_injection,
         }
@@ -315,6 +322,13 @@ impl Client {
             self.start.message("Choose an adapter first.");
             return;
         };
+        if !matches!(self.phase, Phase::Start | Phase::Lost(_)) {
+            // One world at a time: the open one is closed first (its surface must go before
+            // another is made for the window).
+            self.start
+                .message(format!("{name}: close the open world first."));
+            return;
+        }
         self.menu = None;
         let store = match store.map_or_else(|| live::open_store(&path), Ok) {
             Ok(store) => store,
@@ -336,6 +350,7 @@ impl Client {
         let (mut live, surface) = match opened {
             Ok(opened) => opened,
             Err(error) => {
+                eprintln!("morbid: {name} could not be opened: {error}");
                 self.start.message(format!("{name}: {error}"));
                 self.summary.errors.push(error.to_string());
                 self.open_menu();
@@ -451,12 +466,19 @@ impl Client {
         self.summary.frames += 1;
         if let Some(driver) = self.driver.as_mut() {
             let mut events = Vec::new();
+            let phase = match &self.phase {
+                Phase::Start => crate::driver::PhaseKind::Start,
+                Phase::Running(_) => crate::driver::PhaseKind::Running,
+                Phase::Closing { .. } => crate::driver::PhaseKind::Closing,
+                Phase::Lost(_) => crate::driver::PhaseKind::Lost,
+            };
             let running = match &mut self.phase {
                 Phase::Running(running) => Some(running.as_mut()),
                 _ => None,
             };
             let control = driver.before_frame(DriverFrame {
                 frame: self.summary.frames,
+                phase,
                 running,
                 events: &mut events,
                 start: &mut self.start,
@@ -483,6 +505,7 @@ impl Client {
                     }
                 }
                 crate::driver::Control::WindowSize(size) => self.pending_size = Some(size),
+                crate::driver::Control::Start(action) => self.driven_start = Some(action),
                 crate::driver::Control::Minimize(minimized) => {
                     if let Some(window) = &self.window {
                         window.set_minimized(minimized);
@@ -551,6 +574,9 @@ impl Client {
         let start = &mut self.start;
         if let Err(error) = menu.frame(&window, |ui| action = ui::start_screen(ui, start)) {
             self.summary.errors.push(error);
+        }
+        if let Some(driven) = self.driven_start.take() {
+            action = Some(driven);
         }
         match action {
             None => {}
@@ -920,7 +946,7 @@ impl Client {
             lost.report.ticks_lost
         );
         eprintln!("morbid: {text}");
-        self.summary.errors.push(text.clone());
+        self.summary.losses.push(text.clone());
         self.start.message(text);
         self.open_menu();
         Phase::Lost(Box::new(lost))

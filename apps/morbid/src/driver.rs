@@ -24,15 +24,27 @@ pub enum Control {
     Quit,
     /// Ask the window system for a new inner size.
     Resize([u32; 2]),
+    /// A start-screen action, handled exactly as the screen's own control would be.
+    Start(crate::ui::StartAction),
     /// Deliver a window size to the client's resize handling as the window system would (a
     /// zero size is what a minimized window reports on platforms that report it).
     WindowSize([u32; 2]),
     Minimize(bool),
 }
 
+/// Which phase the client is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhaseKind {
+    Start,
+    Running,
+    Closing,
+    Lost,
+}
+
 /// One frame, as a driver sees it before the client runs it.
 pub struct DriverFrame<'a> {
     pub frame: u64,
+    pub phase: PhaseKind,
     pub running: Option<&'a mut Running>,
     /// Events to apply before the frame, as if the window had delivered them.
     pub events: &'a mut Vec<InputEvent>,

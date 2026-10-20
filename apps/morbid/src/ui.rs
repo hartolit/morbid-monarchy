@@ -65,6 +65,8 @@ pub struct StartScreen {
     pub messages: Vec<String>,
 }
 
+/// What a start-screen control asked for; the client handles it (a driver may submit one).
+#[derive(Debug, Clone, PartialEq)]
 pub enum StartAction {
     ChooseAdapter(String),
     Open {

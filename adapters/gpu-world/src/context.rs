@@ -57,15 +57,34 @@ pub struct AdapterInventory {
     adapters: Vec<(AdapterRecord, wgpu::Adapter)>,
 }
 
+/// The backend an adapter identifier names (its first component), or every backend for an
+/// identifier without a known one.
+pub fn backends_of(id: &str) -> wgpu::Backends {
+    match id.split('-').next() {
+        Some("vulkan") => wgpu::Backends::VULKAN,
+        Some("metal") => wgpu::Backends::METAL,
+        Some("dx12") => wgpu::Backends::DX12,
+        Some("gl") => wgpu::Backends::GL,
+        _ => wgpu::Backends::all(),
+    }
+}
+
 impl AdapterInventory {
     /// Enumerates adapters. Shader and API validation keep wgpu's defaults; nothing here turns
     /// a check off.
     pub fn enumerate() -> Self {
+        Self::enumerate_backends(wgpu::Backends::all())
+    }
+
+    /// Enumerates the adapters of `backends` only, on an instance of those backends alone: a
+    /// surface created on it exists on those backends only, so a session presenting through
+    /// Vulkan creates no GL surface for its window.
+    pub fn enumerate_backends(backends: wgpu::Backends) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
-        let adapters = block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let adapters = block_on(instance.enumerate_adapters(backends));
         let mut entries: Vec<(AdapterRecord, wgpu::Adapter)> = adapters
             .into_iter()
             .map(|adapter| (record(&adapter), adapter))
@@ -111,8 +130,11 @@ struct SelectedAdapter {
 /// The identifiers of the hardware adapters that can present to `target`: the choices a
 /// windowed client offers. Each is tested with a surface of its own instance, which is dropped
 /// again; a session opened later creates its own.
+///
+/// Only the primary backends (Vulkan, Metal, DirectX 12) are offered: presentation is qualified
+/// on Vulkan, and a GL surface of the same window would outlive this probe's.
 pub fn presentable_adapters(target: wgpu::SurfaceTarget<'static>) -> Vec<AdapterRecord> {
-    let inventory = AdapterInventory::enumerate();
+    let inventory = AdapterInventory::enumerate_backends(wgpu::Backends::PRIMARY);
     let Ok(surface) = inventory.instance.create_surface(target) else {
         return Vec::new();
     };
@@ -380,7 +402,8 @@ impl GpuContext {
         max_in_flight: u32,
         surface: Option<wgpu::SurfaceTarget<'static>>,
     ) -> Result<(Self, Option<wgpu::Surface<'static>>), ContextError> {
-        let selected = AdapterInventory::enumerate().take(adapter_id, allow_software)?;
+        let selected = AdapterInventory::enumerate_backends(backends_of(adapter_id))
+            .take(adapter_id, allow_software)?;
         let surface = match surface {
             None => None,
             Some(target) => {
