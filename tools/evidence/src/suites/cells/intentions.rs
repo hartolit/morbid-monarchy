@@ -1,7 +1,7 @@
-//! The baseline's ten simulation intentions (`monarch-engine` `core::simulation::tests`) on the
-//! GPU, each also compared tick for tick with the CPU reference. Fixtures are one 64 × 64 chunk
-//! whose neighbours are not resident (a closed boundary, as the baseline's grid edge was), placed
-//! at keys away from the origin so the hashes see other absolute coordinates.
+//! The baseline's ten simulation intentions (`monarch-engine` `core::simulation::tests`, removed
+//! in 06) on the GPU, each also compared tick for tick with the CPU reference. Fixtures are one
+//! 64 × 64 chunk whose neighbours are not resident (a closed boundary, as the baseline's grid
+//! edge was), placed at keys away from the origin so the hashes see other absolute coordinates.
 
 use world_model::{
     cell::WorldCell,

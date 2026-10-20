@@ -7,9 +7,9 @@
 //! presets are stylized: their relative densities decide whether they float, not a calibrated
 //! material model.
 //!
-//! [`tuning`] holds every constant of the contact, deformation and displacement rules. The CPU
-//! baseline (`monarch-engine`) and the GPU body kernels (`gpu-world`, through generated
-//! declarations) both read it; neither keeps its own copy.
+//! [`tuning`] holds every constant of the contact, deformation and displacement rules. The GPU
+//! body kernels (`gpu-world`, through generated declarations) read it, as the CPU baseline
+//! (`monarch-engine`, removed in 06) did; nothing keeps its own copy.
 
 use std::{fmt, ops::RangeInclusive};
 

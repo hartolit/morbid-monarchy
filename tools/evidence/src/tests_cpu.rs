@@ -421,11 +421,11 @@ mod tests {
     fn artifacts_name_their_package_and_target() {
         let line = serde_json::json!({
             "reason": "compiler-artifact",
-            "package_id": "path+file:///w/crates/monarch-engine#0.1.0",
-            "manifest_path": "/w/crates/monarch-engine/Cargo.toml",
-            "target": {"kind": ["lib"], "name": "monarch_engine"},
+            "package_id": "path+file:///w/crates/world-model#0.1.0",
+            "manifest_path": "/w/crates/world-model/Cargo.toml",
+            "target": {"kind": ["lib"], "name": "world_model"},
             "profile": {"test": true},
-            "executable": "/w/target/debug/deps/monarch_engine-1"
+            "executable": "/w/target/debug/deps/world_model-1"
         });
         let named = serde_json::json!({
             "reason": "compiler-artifact",
@@ -444,7 +444,7 @@ mod tests {
                 executables[0].package.as_str(),
                 executables[0].target.as_str()
             ),
-            ("monarch-engine", "lib")
+            ("world-model", "lib")
         );
         assert_eq!(
             (

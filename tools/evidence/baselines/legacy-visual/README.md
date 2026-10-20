@@ -26,6 +26,9 @@ target/release/legacy-baseline --scenario tools/evidence/scenarios/qualification
     --screenshot TICK:CASE-tickTICK.png
 ```
 
+06 removed the Bevy baseline, its assets and the `legacy-baseline` driver; `9a3230c` is the last
+commit that builds them, so reproducing these frames means building that commit.
+
 Every accepted run kept its requested 1920×1080 window. A first mixed run was resized by the
 compositor (2560×1368 from frame 659) and was rejected and repeated. The PNGs the driver wrote are
 kept on the measuring machine in `target/evidence/visual-reference/`; these files are JPEG copies

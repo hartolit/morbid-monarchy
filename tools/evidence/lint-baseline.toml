@@ -5,28 +5,6 @@
 # shrink. New and migrated code gets no entry. Each entry names the owner and the stage that
 # removes the code or fixes the warning.
 #
-# Prompt 01 applied Clippy's machine-applicable fixes to the legacy crates (collapsible `if`,
-# `map_or`, a redundant cast and an explicit deref). What remains are Bevy systems whose
-# parameter lists are the system's data access; splitting them would restructure code that 06
-# deletes.
-
-[[exception]]
-file = "crates/morbid-app/src/runtime/dev_tools/brush.rs"
-lint = "clippy::too_many_arguments"
-count = 4
-owner = "morbid-app Bevy baseline: pointer tool systems"
-removal = "06 replaces the Bevy application and its tool systems"
-
-[[exception]]
-file = "crates/morbid-app/src/runtime/dev_tools/ui.rs"
-lint = "clippy::too_many_arguments"
-count = 1
-owner = "morbid-app Bevy baseline: developer UI system"
-removal = "06 replaces the Bevy application and its UI"
-
-[[exception]]
-file = "crates/morbid-app/src/runtime/render.rs"
-lint = "clippy::too_many_arguments"
-count = 2
-owner = "morbid-app Bevy baseline: renderer setup and grid sync systems"
-removal = "06 replaces the Bevy renderer"
+# Prompt 01 applied Clippy's machine-applicable fixes to the legacy crates; the remaining entries
+# were Bevy systems' parameter lists, and 06 deleted them with the Bevy baseline. The list is
+# empty: any warning fails the lane.

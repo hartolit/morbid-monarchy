@@ -18,11 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Bevy's Linux build dependencies
+      - name: Install the native client's Linux build dependencies
+        # winit and the clipboard load Wayland and xkbcommon at run time; the headers cover a
+        # build that resolves them through pkg-config. Bevy's audio and gamepad libraries left
+        # with it in 06.
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+            pkg-config libwayland-dev libxkbcommon-dev
 
       - name: Install the pinned toolchain
         # rustup reads rust-toolchain.toml.

@@ -12,10 +12,10 @@ test selection is never reported as success.
 | `check static` | rustfmt; compilation of the declared feature combinations; Clippy against [`lint-baseline.toml`](lint-baseline.toml); rustdoc with warnings denied; naga validation of every assembled `gpu-world` shader; `cargo deny` with [`deny.toml`](../../deny.toml) and `cargo machete` at their required versions; dependency direction (each package's own resolved closure); toolchain/lock/alias pins; the CI workflow's lanes and checker versions. |
 | `test cpu` | Builds and runs every test executable, then checks results against [`coverage.toml`](coverage.toml). |
 | `inspect-adapter` | Lists every adapter on every backend with the stable `--adapter` identifier `gpu-world` assigns, limits and features. |
-| `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03), `bodies` (04) and `streaming` (05) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. `render` fails explicitly until 06 registers it. |
-| `run --scenario NAME --adapter ID` | `resident-world` runs in its own `gpu-suite` process through the runtime's session, the live world and a temporary store, one item per step; steps 1–3 exist since 04 and 4–5 since 05. Step 6 runs 05's part and stays failed until 07 completes it. |
+| `test gpu --suite NAME --adapter ID` | `transfers` (02), `cells` (03), `bodies` (04), `streaming` (05) and `render` (06) run every case of the suite in its own `gpu-suite` process on the named adapter and check the cases against the registry. |
+| `run --scenario NAME --adapter ID [--consumer native]` | `resident-world` runs in its own `gpu-suite` process through the runtime's session, the live world and a temporary store, one item per step; steps 1–3 exist since 04 and 4–5 since 05. Step 6 runs 05's part and stays failed until 07 completes it. `--consumer native` shows every session in the native client's window (`morbid_app::viewer`). |
 | `session --store PATH --adapter ID` | Opens a saved world (`world-store`) headless in its own `gpu-suite` process through `world_runtime::session::WorldSession` and the live world, runs it (`--ticks`, a new window with `--center`/`--radius`, `--edit TOOL,X,Y`, `--autosave`), and closes it in order; one item each for opening, running and closing, which passes only when the close saved the last completed tick. Running it again reopens what the close saved. |
-| `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/). |
+| `bench --profile NAME --adapter ID` | Repeated release measurements of the frozen [scenarios](scenarios/) in the native client's window, one sample per presented frame. |
 | `check all --adapter ID` | Every lane above, without skipping. |
 
 The command contracts are owned by [workflow](../../docs/development/workflow.md), and what each
@@ -27,28 +27,29 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
   destination. Renaming a test changes its `test` field, not its ID. The 28 baseline tests are
   counted and must all remain. GPU suite cases are registered with `target = "gpu:<suite>"`;
   `test gpu` requires every defined case to be registered and every registered case to exist.
-- `lint-baseline.toml` lists the legacy warnings that remain, each with an owner and a removal
-  stage. A new warning fails the lane. A fixed warning whose exception is still listed also fails
-  it.
+- `lint-baseline.toml` listed the legacy warnings, each with an owner and a removal stage; it is
+  empty since 06 removed the Bevy baseline. A new warning fails the lane.
 - `scenarios/<profile>/<case>.toml` are the frozen measurement workloads. Validation rejects a file
   whose world size, resolution, tick rate or body count differs from its profile.
-- `baselines/legacy-visual/` holds the visual reference: frames the driver saved with
-  `--screenshot` from the frozen qualification scenarios, as JPEG copies with the PNG hashes.
+- `baselines/legacy-visual/` holds the visual reference: frames the removed baseline driver saved
+  from the frozen qualification scenarios, as JPEG copies with the PNG hashes.
 - `baselines/legacy-6e108d6/` holds the measured legacy baseline: each bench `report.json` with
   GPU process arguments removed and paths made relative, plus the SHA-256 of every raw file the
   run left in `target/evidence/`. The raw samples stay on the measuring machine. The conclusions
   are in [performance budgets](../../docs/reference/performance-budgets.md#measured-legacy-baseline-01).
 
-## Baseline driver
+## Native client driver
 
-`src/bin/legacy-baseline.rs` (feature `legacy-baseline`) drives the Bevy baseline application
-through `morbid_app::build_app` in scripted input mode. For every simulation tick, the scenario
-turns its actions into `world_model` commands; the driver executes them through the same tool
-functions the mouse uses, writes per-frame samples, and summarizes the driven body's
-`BodySample`s. `bench` builds
-it on demand and gives each run a new directory, so the user's `world_data/` is never opened. The
-driver, and the runner's dependency on the old application, go away with the Bevy application in
-prompt 06. Default builds of the runner do not compile Bevy; `check static` enforces that.
+`src/bin/native-client.rs` runs the native client (`morbid-app`) in its real window under a
+script (`morbid_app::driver::Driver`), with the same composition, event handling, renderer and
+overlay a person uses; `src/native.rs` holds the scripts and `src/native/bench.rs` the
+measurement driver. `capture` saves frames; `script features|loss|worlds` exercise the feature
+inventory, device loss and recovery, and the start screen, writing `report.json`; `bench` runs
+one frozen scenario on a new world made to it: the scenario's commands go through the client's
+command path for their exact ticks, the observer follows the camera path by tick, and every
+presented frame is sampled. `cargo evidence bench` builds it and gives each run a new
+directory, so no person's worlds are opened. The commands are in the
+[workflow](../../docs/development/workflow.md#scripted-runs-of-the-native-window--06).
 
 ## GPU suites
 

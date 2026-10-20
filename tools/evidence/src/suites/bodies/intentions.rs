@@ -1,5 +1,5 @@
-//! The baseline's sphere tests (`monarch-engine` `core::entities::spherical::tests`), run on the
-//! GPU body solver against the same ground, starts, controls and tolerances.
+//! The baseline's sphere tests (`monarch-engine` `core::entities::spherical::tests`, removed in
+//! 06), run on the GPU body solver against the same ground, starts, controls and tolerances.
 //!
 //! A baseline frame is one 60 Hz tick here: both split it into two substeps of 1/120 s. The
 //! baseline tests change velocity directly between frames; here every change is a command:

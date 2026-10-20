@@ -46,7 +46,7 @@ the last tested commit, uncommitted changes and exact next action in the current
 Since 01 the checkout pins its toolchain, tracks `Cargo.lock` and has the evidence runner below.
 Use its lanes rather than ad hoc commands: `cargo evidence test cpu` runs every test executable
 and checks the result against the coverage registry, which a bare `cargo test -p PACKAGE` does
-not. `spatial-lib` still has no tests of its own.
+not.
 
 ### Common entry point — delivered in 01
 
@@ -74,15 +74,34 @@ not success.
 | `cargo evidence test gpu --suite cells --adapter ADAPTER_ID` | Runnable (03) | The same for the material phases: the CPU reference, dense and sparse execution, the deliberate unmatched-transfer specimen and the activity measurement. |
 | `cargo evidence test gpu --suite bodies --adapter ADAPTER_ID` | Runnable (04) | The same for bodies, rays and body observations: the baseline sphere intentions, probes, the broadphase oracle, clusters, deformation, the residency edge, commands and consumers, and the measurements. |
 | `cargo evidence test gpu --suite streaming --adapter ADAPTER_ID` | Runnable (05) | The same for residency, snapshots, checkpoints and recovery over real temporary stores: reordered and stale loads, newest retained revisions, refused rows, autosave and periodic saves, snapshot/resize overlap, failed and retried commits, retention pressure, delayed mapping, body suspension and restore, orderly close, device loss and recovery, process interruption, the headless session, and the measurements. |
-| `cargo evidence test gpu --suite render` | Fails until 06 registers the suite | The same, for presentation. |
+| `cargo evidence test gpu --suite render --adapter ADAPTER_ID` | Runnable (06) | The same for the renderer offscreen through `world-render`: target formats and zero size, terrain materials, missing chunks, edits and spheres at their GPU state, the follow camera, buffer replacement, the activity overlay, device loss, GPU culling against the unculled path, pass times and draw counts. |
 | `cargo evidence session --store PATH --adapter ADAPTER_ID` | Runnable (05) | A saved world opened headless through the runtime's session and the live world, run (`--ticks N`, `--center X,Y --radius R`, `--edit TOOL,X,Y`, `--autosave TICKS\|off`) and closed in order, in its own `gpu-suite` process; passes only when the close saved the last completed tick. Create or import the store with `world-store` first; see [world format](../reference/world-format.md#operating-a-saved-world-05). |
-| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID` | Partial (05): steps 1–5 run; step 6 runs 05's part and fails until 07 completes it | Executes the connected scenario through the runtime's session, the live world and a temporary store, in its own `gpu-suite` process, one item per step of the acceptance's connected trace. |
-| `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01, baseline driver) | Release measurements of the frozen scenarios, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
-| `cargo evidence check all --adapter ADAPTER_ID` | Fails until every lane exists | Docs, static, CPU, all GPU suites and the connected scenario; no silent skipping. |
+| `cargo evidence run --scenario resident-world --adapter ADAPTER_ID [--consumer native]` | Partial (05): steps 1–5 run; step 6 runs 05's part and fails until 07 completes it | Executes the connected scenario through the runtime's session, the live world and a temporary store, in its own `gpu-suite` process, one item per step of the acceptance's connected trace. `--consumer native` (06) runs the same commands and state with every session shown in the native client's window and one frame captured per step. |
+| `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01; the native client since 06) | Release measurements of the frozen scenarios in the native client's real window (`native-client bench`), one sample per presented frame, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
+| `cargo evidence check all --adapter ADAPTER_ID` | Fails until 07 completes `resident-world` step 6 | Docs, static, CPU, all GPU suites and the connected scenario; no silent skipping. |
 
 The GPU suite names are `transfers` (02), `cells` (03), `bodies` (04), `streaming` (05), `render`
 (06) and `all`. A suite fails explicitly until its owner registers it. The runner never invokes
 itself recursively or hides a nested Cargo failure.
+
+### Scripted runs of the native window — 06
+
+The client's interactive evidence runs the real window, its event handling, overlay and command
+path under a script (`morbid_app::driver`). The window opens on the desktop, so keep these runs
+short and leave the window alone while they run. Build the driver once:
+
+```sh
+cargo build --locked --release -p monarchy-evidence --bin native-client
+```
+
+| Command | Contract |
+| --- | --- |
+| `target/release/native-client script features --worlds DIR --world NAME --adapter ID --settings PATH --out DIR` | The [feature inventory](virtual-office/gpu-transition/acceptance.md#feature-preservation-inventory) through the input path: GPU totals, every brush, both sphere presets at the GPU-resolved cursor, attract and lift, possession with drive, jump, tether and release, look, walking and flying, detaching the focus, rule toggles and climate, keyboard save, active-world resize, window resize and minimize; each checked against its command outcome or the client's state. Writes `report.json` and frames. `NAME` is a world in `DIR` created at seed 69. |
+| `target/release/native-client script loss ...` (same arguments) | Save, edit after the save, inject a device loss and recover through the loss dialog's path: a later epoch at the saved checkpoint, the loss shown on screen. |
+| `target/release/native-client script worlds --worlds DIR --legacy FILE --adapter ID --settings PATH --out DIR` | The start screen's create, import (a copy of `FILE`, a baseline `save.redb`), open, close with save and reopen. |
+| `target/release/native-client capture --worlds DIR --world NAME --adapter ID --settings PATH --out DIR [--pose X,Y,Z,YAW,PITCH] [--frames N,...]` | Frames of a world through the client, for visual comparison. |
+
+`cargo evidence bench` builds and runs `native-client bench` itself.
 
 ### Continuous integration
 
@@ -118,9 +137,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
 Run declared additional feature combinations separately. `check static` runs `cargo deny --locked
 check` against [`deny.toml`](../../deny.toml) and `cargo machete`, and requires the versions in
 `tools/evidence/src/checks/static_lane.rs`; a missing or different version fails the lane and is
-not printed as green. Assembled-shader validation is a required item of the same lane since 02.
-The legacy Bevy shaders under `crates/morbid-app/assets` are validated only when Bevy creates
-their pipelines; they are exempt until 06 removes them. 01
+not printed as green. Assembled-shader validation is a required item of the same lane since 02,
+and covers the renderer's assemblies (`world-render`) since 06. 01
 records the supported toolchain and resolves a compatible dependency set; the package does not
 invent its versions. Track `Cargo.lock` for this
 application workspace. CI uses the same runner/commands, not a weaker hand-maintained copy.

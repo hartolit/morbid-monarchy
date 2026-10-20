@@ -47,19 +47,13 @@ const STANDALONE_ECS: &[&str] = &[
 const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
     ForbiddenClosure {
         package: EVIDENCE_PACKAGE,
-        forbidden_prefixes: &["bevy", "monarch-engine", "spatial-lib"],
+        forbidden_prefixes: &["bevy"],
         allowed: STANDALONE_ECS,
-        reason: "default evidence builds drive the native client, never the Bevy baseline (behind `legacy-baseline` until 06 removes it)",
+        reason: "the evidence runner drives and measures the native client; it links no Bevy engine crate",
     },
     ForbiddenClosure {
         package: APPLICATION_PACKAGE,
-        forbidden_prefixes: &[
-            "bevy",
-            "monarch-engine",
-            "spatial-lib",
-            "rayon",
-            EVIDENCE_PACKAGE,
-        ],
+        forbidden_prefixes: &["bevy", "rayon", EVIDENCE_PACKAGE],
         allowed: STANDALONE_ECS,
         reason: "the native client's production closure has no Bevy engine, render, app, window, input, time or task crate and no CPU simulation; the standalone ECS arrives only through world-runtime",
     },
@@ -73,9 +67,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "bitcode",
             "rayon",
             "flume",
-            "monarch-engine",
             "morbid-app",
-            "spatial-lib",
             "world-store",
             EVIDENCE_PACKAGE,
         ],
@@ -94,9 +86,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "bitcode",
             "rayon",
             "flume",
-            "monarch-engine",
             "morbid-app",
-            "spatial-lib",
             "world-runtime",
             "gpu-world",
             "world-store",
@@ -117,9 +107,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "bitcode",
             "rayon",
             "flume",
-            "monarch-engine",
             "morbid-app",
-            "spatial-lib",
             "gpu-world",
             "world-store",
             EVIDENCE_PACKAGE,
@@ -137,9 +125,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "bitcode",
             "rayon",
             "flume",
-            "monarch-engine",
             "morbid-app",
-            "spatial-lib",
             "world-store",
             EVIDENCE_PACKAGE,
         ],
@@ -156,9 +142,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
             "egui",
             "rayon",
             "flume",
-            "monarch-engine",
             "morbid-app",
-            "spatial-lib",
             "gpu-world",
             EVIDENCE_PACKAGE,
         ],
@@ -169,7 +153,7 @@ const FORBIDDEN_CLOSURES: &[ForbiddenClosure] = &[
 
 /// `package_graph` returns the graph one package resolves when built alone with its default
 /// features ([`Workspace::load_package`]). Workspace-wide metadata would unify features with
-/// every other member, so the Bevy baseline's features would appear in the standalone ECS.
+/// every other member, so one member's features could appear in another's closure.
 pub fn dependency_item(
     all_features: &Workspace,
     package_graph: &dyn Fn(&str) -> Result<Workspace, String>,
@@ -451,7 +435,7 @@ mod tests {
             "bevy_app",
             "bevy_time",
             "bevy_egui",
-            "monarch-engine",
+            "rayon",
         ] {
             assert_eq!(direct(APPLICATION_PACKAGE, engine).len(), 1, "{engine}");
         }
@@ -467,7 +451,7 @@ mod tests {
         let model_rule = rule("world-model");
         assert_eq!(model_rule[0].package, "world-model");
         assert!(closure_violations(&|_| Ok(workspace(None)), model_rule).is_empty());
-        for forbidden in ["bevy_ecs", "wgpu-core", "redb", "monarch-engine"] {
+        for forbidden in ["bevy_ecs", "wgpu-core", "redb", "rayon"] {
             let problems = closure_violations(&|_| Ok(workspace(Some(forbidden))), model_rule);
             assert_eq!(problems.len(), 1, "{forbidden}: {problems:?}");
             assert!(
