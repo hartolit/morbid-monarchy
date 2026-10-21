@@ -8,6 +8,7 @@ mod checkpoints;
 mod measure;
 mod mechanism;
 mod recovery;
+mod replay;
 mod residency;
 pub(super) mod world;
 
@@ -98,9 +99,24 @@ pub const CASES: &[Case] = &[
         run: recovery::headless_session,
     },
     Case {
+        name: "replay-reproduction",
+        summary: "a checkpoint reopened twice and replayed with the same tick-scheduled commands and residency changes, compared with each other and with the world that ran on without stopping",
+        run: replay::replay_reproduction,
+    },
+    Case {
         name: "streaming-measure",
         summary: "the qualification window walks eight chunks east with changed chunks leaving and a save halfway: bytes per entered chunk, snapshot bytes, retained memory, load and write age, frames per move, and frame CPU time and allocations against a resident baseline",
         run: measure::streaming_measure,
+    },
+    Case {
+        name: "checkpoint-cadence-qualification",
+        summary: "periodic checkpoints off, every 300 and every 60 ticks under the qualification coupled workload, and every 60 in the idle one, paced at the tick rate: bytes per checkpoint, ticks to publication, the most a crash would have lost, and frame CPU time and allocations",
+        run: measure::checkpoint_cadence_qualification,
+    },
+    Case {
+        name: "checkpoint-cadence-scale",
+        summary: "periodic checkpoints off, every 300 and every 60 ticks under the scale coupled workload, paced at the tick rate: bytes per checkpoint, ticks to publication, the most a crash would have lost, and frame CPU time and allocations",
+        run: measure::checkpoint_cadence_scale,
     },
     Case {
         name: "resident-no-readback",

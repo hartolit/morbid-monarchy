@@ -2780,6 +2780,36 @@ destination = "gpu-world snapshots with world-runtime residency and checkpoints 
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.streaming.replay-reproduction"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "replay-reproduction"
+origin = "transition"
+expectation = "A checkpoint reopened twice with the same tick-scheduled commands (a pile of spheres on sand, drives, jumps, attraction, lift, every brush, every rule) and the same held window moves away and back ends in identical cells, bodies, slots and accounting; so does a run that went on without stopping but woke every cell after the checkpoint; the drift of the run that went on as it was is recorded."
+destination = "the command-journal decision (ADR 0004): the device's reproducibility and what a checkpoint does not hold; rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.checkpoint-cadence-qualification"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "checkpoint-cadence-qualification"
+origin = "transition"
+expectation = "Under the qualification coupled workload paced at 60 ticks/s, periodic saves every 300 and every 60 ticks each commit at least once per interval, with no frame wait, and the close saves; bytes per save, ticks to publication, the largest exposure since the latest checkpoint and frame CPU time and allocations are recorded against saves off, and every 60 ticks in the idle workload."
+destination = "world-runtime checkpoints over gpu-world snapshots and world-store; the measurement of record behind the stated loss bound (ADR 0004)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.checkpoint-cadence-scale"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "checkpoint-cadence-scale"
+origin = "transition"
+expectation = "Under the scale coupled workload (radius 16, 256 spheres) paced at 60 ticks/s, periodic saves every 300 and every 60 ticks each commit at least once per interval, with no frame wait, and the close saves; the same quantities are recorded against saves off."
+destination = "world-runtime checkpoints over gpu-world snapshots and world-store; the measurement of record behind the stated loss bound (ADR 0004)"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.streaming.newest-retained-wins"
 package = "monarchy-evidence"
 target = "gpu:streaming"
