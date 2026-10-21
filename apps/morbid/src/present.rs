@@ -27,6 +27,8 @@ pub struct Surface {
     pub skipped_frames: u64,
     /// Frames handed to the presentation engine.
     pub presented_frames: u64,
+    /// How long the last texture acquisition took: the wait for a swapchain image.
+    pub last_acquire: std::time::Duration,
 }
 
 /// A frame to draw into, or why there is none.
@@ -94,6 +96,7 @@ impl Surface {
             reconfigurations: 0,
             skipped_frames: 0,
             presented_frames: 0,
+            last_acquire: std::time::Duration::ZERO,
         })
     }
 
@@ -157,7 +160,10 @@ impl Surface {
             self.surface.configure(device, &config);
             self.reconfigurations += 1;
         }
-        match self.surface.get_current_texture() {
+        let started = std::time::Instant::now();
+        let acquired = self.surface.get_current_texture();
+        self.last_acquire = started.elapsed();
+        match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => Acquired::Frame(texture),
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                 // Present this one; the next frame gets a fresh configuration.

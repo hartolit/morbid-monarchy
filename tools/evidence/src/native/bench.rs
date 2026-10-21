@@ -18,11 +18,17 @@
 //! A drive action possesses the body whose spawn outcome placed it nearest the observer's path
 //! position at the drive's first tick: the outcome is the same in every run, where the bodies'
 //! positions at that moment would depend on which samples happened to have arrived.
+//!
+//! Beyond the samples, the summary accounts for the whole measured window (`window`): the
+//! process's and the main thread's CPU time and allocations (every loop iteration, presenting
+//! or not, and every thread), the session's frame time by owner, transfer bytes by purpose,
+//! waits, pressure and observation age; and per presented frame the swapchain acquisition's
+//! wait and the session's frame time over the span.
 
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use morbid_app::{
@@ -41,12 +47,17 @@ use world_model::{
     rules::SimulationRules,
 };
 use world_runtime::{
-    ids::Tick, port::ResidentWindow, receipts::AdmissionError, store::PhysicalConfig,
+    ids::Tick,
+    port::{ResidentWindow, TransferCounters},
+    receipts::AdmissionError,
+    session::FrameTimes,
+    store::PhysicalConfig,
 };
 
 use crate::{
     measurement::{self, CSV_HEADER, FrameSample},
     scenario::{Camera, Family, LoadedScenario, PresentMode, Scenario},
+    suites::alloc,
 };
 
 /// Resident-set size is read every this many frames, as the baseline driver did.
@@ -156,6 +167,44 @@ impl Totals {
     }
 }
 
+/// The process's CPU time (user and system, every thread, exited ones included), from
+/// `/proc/self/stat` in clock ticks of 10 ms (Linux's fixed `USER_HZ` of 100).
+fn process_cpu() -> Option<Duration> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    let ticks: u64 = fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?;
+    Some(Duration::from_millis(ticks * 10))
+}
+
+/// The calling thread's time on a CPU, in nanoseconds, from `/proc/thread-self/schedstat`.
+fn thread_cpu() -> Option<Duration> {
+    let schedstat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    let nanos: u64 = schedstat.split_whitespace().next()?.parse().ok()?;
+    Some(Duration::from_nanos(nanos))
+}
+
+fn add_times(sum: &mut FrameTimes, times: FrameTimes) {
+    sum.runtime += times.runtime;
+    sum.residency += times.residency;
+    sum.checkpoints += times.checkpoints;
+    sum.transfers += times.transfers;
+}
+
+/// Where the process stood when the measured window began, or ended.
+#[derive(Debug, Clone, Copy)]
+struct Mark {
+    at: Instant,
+    process_cpu: Option<Duration>,
+    thread_cpu: Option<Duration>,
+    allocations: u64,
+    thread_allocations: u64,
+    iterations: u64,
+    presented: u64,
+    counters: TransferCounters,
+    discarded_ticks: u64,
+    session: FrameTimes,
+}
+
 /// Where the timeline stands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Stage {
@@ -204,6 +253,19 @@ pub struct BenchDriver {
     totals: Totals,
     device_tick_ms: Vec<f64>,
     body_tick_ms: Vec<f64>,
+    /// The session's frame times over every iteration so far, and over the current span.
+    session_total: FrameTimes,
+    session_span: Duration,
+    /// Per presented frame of the measured window: the acquisition's wait and the session's
+    /// frame time over the span, in milliseconds.
+    acquire_ms: Vec<f64>,
+    session_ms: Vec<f64>,
+    /// The measured window's start, taken when the presented frame before it ended, and its
+    /// end, taken when the timeline completed.
+    window_start: Option<Mark>,
+    window_end: Option<Mark>,
+    /// How old observations were and how much pressure the consumers saw, at the end.
+    observation: Value,
     adapter: Value,
     window_physical: Option<[u32; 2]>,
     window_mismatch: Option<String>,
@@ -250,6 +312,13 @@ impl BenchDriver {
             totals: Totals::default(),
             device_tick_ms: Vec::new(),
             body_tick_ms: Vec::new(),
+            session_total: FrameTimes::default(),
+            session_span: Duration::ZERO,
+            acquire_ms: Vec::new(),
+            session_ms: Vec::new(),
+            window_start: None,
+            window_end: None,
+            observation: Value::Null,
             adapter: Value::Null,
             window_physical: None,
             window_mismatch: None,
@@ -404,12 +473,31 @@ impl BenchDriver {
         });
     }
 
+    fn mark(&self, running: &Running) -> Mark {
+        let runtime = running.session().runtime();
+        Mark {
+            at: Instant::now(),
+            process_cpu: process_cpu(),
+            thread_cpu: thread_cpu(),
+            allocations: alloc::snapshot().0,
+            thread_allocations: alloc::thread_allocations(),
+            iterations: self.iterations,
+            presented: self.presented_iterations,
+            counters: runtime.counters(),
+            discarded_ticks: runtime.discarded_ticks(),
+            session: self.session_total,
+        }
+    }
+
     /// Accounts for the loop iteration that just ran; a presenting iteration ends a sample.
     fn sample(&mut self, running: &mut Running, base: u64) {
         let Some(started) = self.iteration_started else {
             return;
         };
         self.iterations += 1;
+        let times = running.session().frame_times();
+        add_times(&mut self.session_total, times);
+        self.session_span += times.total();
         let surface = running.surface();
         self.surface_mode = Some(format!("{:?}", surface.present_mode));
         if let Some(size) = surface.size {
@@ -432,6 +520,7 @@ impl BenchDriver {
         self.presented = surface.presented_frames;
         self.presented_iterations += 1;
         let main_cpu_us = started.elapsed().as_secs_f64() * 1e6;
+        let session_span = std::mem::take(&mut self.session_span);
         let now = Totals::read(running);
         let before = self.totals;
         self.totals = now;
@@ -447,6 +536,11 @@ impl BenchDriver {
         if measured && device_ticks > 0 {
             self.device_tick_ms.push(device_ms / device_ticks as f64);
             self.body_tick_ms.push(body_ms / device_ticks as f64);
+        }
+        if measured {
+            self.acquire_ms
+                .push(surface.last_acquire.as_secs_f64() * 1000.0);
+            self.session_ms.push(session_span.as_secs_f64() * 1000.0);
         }
         let sample = FrameSample {
             frame,
@@ -478,6 +572,76 @@ impl BenchDriver {
             self.samples.push(previous);
         }
         self.pending = Some((started, sample));
+        // The next span starts inside the measured window: it begins now.
+        if self.window_start.is_none() && tick >= self.scenario().run.warmup_ticks {
+            self.window_start = Some(self.mark(running));
+        }
+    }
+
+    /// The measured window's whole-process account, from its start to `end`.
+    fn window(&self, end: &Mark) -> Value {
+        let Some(start) = self.window_start else {
+            return Value::Null;
+        };
+        let seconds = end.at.duration_since(start.at).as_secs_f64();
+        let frames = (end.presented - start.presented).max(1) as f64;
+        let per_frame_ms = |later: Option<Duration>, earlier: Option<Duration>| {
+            later
+                .zip(earlier)
+                .map(|(later, earlier)| (later - earlier).as_secs_f64() * 1000.0 / frames)
+        };
+        let ms = |duration: Duration| duration.as_secs_f64() * 1000.0 / frames;
+        let (before, after) = (start.counters, end.counters);
+        let per_second = |later: u64, earlier: u64| (later - earlier) as f64 / seconds.max(1e-9);
+        json!({
+            "seconds": seconds,
+            "presented_frames": end.presented - start.presented,
+            "loop_iterations": end.iterations - start.iterations,
+            "process_cpu_ms_per_frame": per_frame_ms(end.process_cpu, start.process_cpu),
+            "process_cpu_cores": end.process_cpu.zip(start.process_cpu)
+                .map(|(later, earlier)| (later - earlier).as_secs_f64() / seconds.max(1e-9)),
+            "main_thread_cpu_ms_per_frame": per_frame_ms(end.thread_cpu, start.thread_cpu),
+            "allocations_counted": alloc::installed(),
+            "allocations_per_frame": (end.allocations - start.allocations) as f64 / frames,
+            "main_thread_allocations_per_frame":
+                (end.thread_allocations - start.thread_allocations) as f64 / frames,
+            "session_ms_per_frame": {
+                "runtime": ms(end.session.runtime - start.session.runtime),
+                "residency": ms(end.session.residency - start.session.residency),
+                "checkpoints": ms(end.session.checkpoints - start.session.checkpoints),
+                "transfers": ms(end.session.transfers - start.session.transfers),
+            },
+            "ticks_submitted": after.ticks_submitted - before.ticks_submitted,
+            "ticks_discarded": end.discarded_ticks - start.discarded_ticks,
+            "upload_bytes_per_second": {
+                "commands": per_second(after.upload.commands, before.upload.commands),
+                "tick_parameters": per_second(after.upload.tick_parameters, before.upload.tick_parameters),
+                "chunks": per_second(after.upload.chunks, before.upload.chunks),
+                "metadata": per_second(after.upload.metadata, before.upload.metadata),
+            },
+            "readback_bytes_per_second": {
+                "results": per_second(after.readback.results, before.readback.results),
+                "events": per_second(after.readback.events, before.readback.events),
+                "samples": per_second(after.readback.samples, before.readback.samples),
+                "diagnostics": per_second(after.readback.diagnostics, before.readback.diagnostics),
+                "timestamps": per_second(after.readback.timestamps, before.readback.timestamps),
+                "captures": per_second(after.readback.captures, before.readback.captures),
+                "snapshots": per_second(after.readback.snapshots, before.readback.snapshots),
+            },
+            "device_copy_bytes": after.device_copy_bytes - before.device_copy_bytes,
+            "snapshot_copy_bytes": after.snapshot_copy_bytes - before.snapshot_copy_bytes,
+            "transfer_submissions": after.transfer_submissions - before.transfer_submissions,
+            "frame_waits": after.frame_waits - before.frame_waits,
+            "maintenance_waits": after.maintenance_waits - before.maintenance_waits,
+            "pressure_refusals": after.pressure_refusals.iter().zip(before.pressure_refusals.iter())
+                .map(|(later, earlier)| later - earlier).collect::<Vec<u64>>(),
+            "stale_deliveries": after.stale_deliveries - before.stale_deliveries,
+            "buffers_created": after.buffers_created - before.buffers_created,
+            "pipelines_created": after.pipelines_created - before.pipelines_created,
+            "in_flight_high_water": after.in_flight_high_water,
+            "requested_bytes": after.requested_bytes,
+            "peak_requested_bytes": after.peak_requested_bytes,
+        })
     }
 
     fn write_outputs(&self) {
@@ -528,6 +692,11 @@ impl BenchDriver {
                 "generation": body.generation(),
             })),
             "gpu_pass_elapsed_ms": device_passes,
+            "window": self.window_end.map_or(Value::Null, |end| self.window(&end)),
+            "acquire_ms": distribution(&self.acquire_ms),
+            "acquire_over_5ms": self.acquire_ms.iter().filter(|ms| **ms > 5.0).count(),
+            "session_frame_ms": distribution(&self.session_ms),
+            "observation": self.observation,
             "failures": self.failures,
         });
         let text = serde_json::to_string_pretty(&summary).unwrap_or_default();
@@ -535,6 +704,25 @@ impl BenchDriver {
             eprintln!("native-client: write summary: {error}");
         }
     }
+}
+
+/// Observation ages and the consumers' pressure over the run.
+fn observation(running: &Running) -> Value {
+    let runtime = running.session().runtime();
+    let ledger = runtime.ledger().summary();
+    let bodies = runtime.bodies().summary();
+    json!({
+        "input_latency_ticks": { "mean": ledger.input_latency_ticks.mean(), "max": ledger.input_latency_ticks.max },
+        "observation_age_ticks": { "mean": ledger.observation_age_ticks.mean(), "max": ledger.observation_age_ticks.max },
+        "body_sample_age_ticks": { "mean": bodies.sample_age_ticks.mean(), "max": bodies.sample_age_ticks.max },
+        "body_events_deferred": bodies.events_deferred,
+        "body_event_ring_high_water": bodies.ring_high_water,
+        "cosmetic_dropped_on_device": ledger.cosmetic_dropped_on_device,
+        "cosmetic_overwritten": ledger.cosmetic_overwritten,
+        "inconsistent_ticks": ledger.inconsistent_ticks,
+        "commands_completed": ledger.commands_completed,
+        "commands_abandoned": ledger.commands_abandoned,
+    })
 }
 
 fn read_rss() -> Option<u64> {
@@ -563,6 +751,10 @@ impl Driver for BenchDriver {
             .last()
             .is_some_and(|sample| sample.tick >= self.final_tick())
         {
+            if let Some(running) = frame.running.as_deref() {
+                self.window_end = Some(self.mark(running));
+                self.observation = observation(running);
+            }
             let status = if self.failures.is_empty() {
                 "completed"
             } else {

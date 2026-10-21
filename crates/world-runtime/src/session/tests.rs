@@ -383,6 +383,13 @@ fn an_orderly_close_saves_the_last_completed_tick() {
     });
     port.model().edit(key(0, 1), 4);
     session.frame_ticks(1);
+    // The frame's time is accounted for by owner, the runtime's share first.
+    let times = session.frame_times();
+    assert!(times.runtime > Duration::ZERO, "{times:?}");
+    assert_eq!(
+        times.total(),
+        times.runtime + times.residency + times.checkpoints + times.transfers
+    );
     let last = port.model().next_tick.value() - 1;
     let report = session.close(Duration::from_secs(10));
     assert!(report.saved, "{report:?}");

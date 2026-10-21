@@ -87,6 +87,25 @@ pub enum SessionError {
     Restore(Refusal),
 }
 
+/// Where the session's last frame spent its CPU time, each owner's share measured with the
+/// monotonic clock: the runtime's frame (polling, outcomes, and encoding and submitting the
+/// frame's ticks), the residency owner with the workers' results, the checkpoint owner, and the
+/// snapshot and streaming copies no tick took along. Reports and displays add them up; nothing
+/// decides on them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameTimes {
+    pub runtime: Duration,
+    pub residency: Duration,
+    pub checkpoints: Duration,
+    pub transfers: Duration,
+}
+
+impl FrameTimes {
+    pub fn total(&self) -> Duration {
+        self.runtime + self.residency + self.checkpoints + self.transfers
+    }
+}
+
 /// What a lost or faulted live world cost: everything after the latest complete checkpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LossReport {
@@ -143,6 +162,7 @@ pub struct WorldSession {
     start: SessionStart,
     /// The tick of the checkpoint the session opened.
     opened_tick: Option<Tick>,
+    frame_times: FrameTimes,
 }
 
 /// Whether `receipt` is a committed save of the world at `boundary`.
@@ -192,6 +212,7 @@ impl WorldSession {
             loss: None,
             start: plan.start,
             opened_tick: plan.manifest.tick,
+            frame_times: FrameTimes::default(),
         })
     }
 
@@ -229,6 +250,11 @@ impl WorldSession {
         self.loss
     }
 
+    /// Where the last frame's CPU time went.
+    pub fn frame_times(&self) -> FrameTimes {
+        self.frame_times
+    }
+
     /// Moves the resident window: centre and radii.
     pub fn set_window(&mut self, window: ResidentWindow) {
         self.residency.set_target(window);
@@ -255,19 +281,33 @@ impl WorldSession {
     /// One presented frame: the runtime's ticks and poll, then residency and checkpoints, then
     /// the transfers no tick carried. Never blocks.
     pub fn frame(&mut self, elapsed: Duration) -> FrameReport {
+        let started = Instant::now();
         let report = self.runtime.frame(elapsed);
-        self.after_frame(report);
+        self.after_frame(report, started);
         report
     }
 
     /// One frame owing exactly `ticks` ticks (headless runs scheduled by tick).
     pub fn frame_ticks(&mut self, ticks: u32) -> FrameReport {
+        let started = Instant::now();
         let report = self.runtime.frame_ticks(ticks);
-        self.after_frame(report);
+        self.after_frame(report, started);
         report
     }
 
-    fn after_frame(&mut self, report: FrameReport) {
+    /// The owners' share of a frame whose runtime part began at `started`.
+    fn after_frame(&mut self, report: FrameReport, started: Instant) {
+        let mut mark = Instant::now();
+        self.frame_times = FrameTimes {
+            runtime: mark - started,
+            ..FrameTimes::default()
+        };
+        let lap = |mark: &mut Instant| {
+            let now = Instant::now();
+            let elapsed = now - *mark;
+            *mark = now;
+            elapsed
+        };
         if self.health == Health::Live {
             let lost = match report.health {
                 Some(PortHealth::Lost) => Some(AbandonReason::DeviceLost),
@@ -284,6 +324,7 @@ impl WorldSession {
         workers.collect(&mut self.done);
         self.residency
             .frame(&mut self.runtime, workers, &mut self.done);
+        self.frame_times.residency = lap(&mut mark);
         let outcomes: Vec<_> = self.residency.other_outcomes().copied().collect();
         self.checkpoints.frame(
             &mut self.runtime,
@@ -294,11 +335,13 @@ impl WorldSession {
         );
         // Results nobody wanted (reclamation) are dropped here; nothing else is left.
         self.done.clear();
+        self.frame_times.checkpoints = lap(&mut mark);
         if self.health == Health::Live {
             // A snapshot requested this frame, or a change that is streaming, goes out now when
             // no tick of this frame took it along.
             let _ = self.runtime.submit_transfers();
         }
+        self.frame_times.transfers = lap(&mut mark);
     }
 
     fn lose(&mut self, reason: AbandonReason) {

@@ -1125,10 +1125,14 @@ pub fn loss_and_recovery(size: [u32; 2]) -> Vec<Cue> {
 }
 
 /// The start screen through the client's own handlers: create a world, import a baseline save
-/// (from a copy), open the new world, close it with its save, and reopen it at the saved tick.
+/// (from a copy), refuse a damaged one, open the new world, close it with its save, and reopen
+/// it at the saved tick.
 pub struct WorldsDriver {
     pub report: Rc<RefCell<ScriptReport>>,
     legacy: PathBuf,
+    /// A baseline save with a row the decoder refuses, and its bytes before the import.
+    damaged: PathBuf,
+    damaged_bytes: Vec<u8>,
     step: u32,
     wait_until: u64,
     saved_tick: Option<u64>,
@@ -1136,18 +1140,36 @@ pub struct WorldsDriver {
 }
 
 impl WorldsDriver {
-    pub fn new(legacy: PathBuf) -> Self {
+    /// `damaged` is a copy of a baseline save with one row the decoder refuses; it must stay as
+    /// it is.
+    pub fn new(legacy: PathBuf, damaged: PathBuf) -> Self {
+        let damaged_bytes = std::fs::read(&damaged).unwrap_or_default();
         Self {
             report: Rc::new(RefCell::new(ScriptReport {
                 script: "worlds".to_owned(),
                 ..ScriptReport::default()
             })),
             legacy,
+            damaged,
+            damaged_bytes,
             step: 0,
             wait_until: 10,
             saved_tick: None,
             opened_once: false,
         }
+    }
+
+    /// Damages one row of a copy of `legacy` at `copy`: the origin chunk's row becomes bytes
+    /// the decoder refuses, as a torn write or a bad sector would leave it.
+    pub fn damage(legacy: &std::path::Path, copy: &std::path::Path) -> Result<(), String> {
+        use world_model::spatial::ChunkKey;
+        use world_store::legacy::LegacyStore;
+        std::fs::copy(legacy, copy)
+            .map_err(|error| format!("copy {}: {error}", legacy.display()))?;
+        let store = LegacyStore::open_or_create(copy).map_err(|error| error.to_string())?;
+        store
+            .write_batch(&[(ChunkKey::new(0, 0, 0), &[0u8; 16])])
+            .map_err(|error| error.to_string())
     }
 
     fn record(&self, frame: u64, name: &str, result: Result<String, String>) {
@@ -1242,13 +1264,41 @@ impl Driver for WorldsDriver {
                     },
                 );
                 self.step = 3;
+                self.wait_until = now + 5;
+                Control::Start(StartAction::Import {
+                    name: "Damaged".to_owned(),
+                    legacy: self.damaged.clone(),
+                    seed: 69,
+                    scale: 0.5,
+                })
+            }
+            3 => {
+                let message = frame.start.messages.first().cloned().unwrap_or_default();
+                let unchanged = std::fs::read(&self.damaged)
+                    .is_ok_and(|bytes| !bytes.is_empty() && bytes == self.damaged_bytes);
+                self.record(
+                    now,
+                    "refuse a damaged baseline save from the start screen",
+                    match find("Damaged") {
+                        None if message.contains("Import refused")
+                            && message.contains("do not decode")
+                            && unchanged =>
+                        {
+                            Ok(format!("{message}; the damaged save is unchanged"))
+                        }
+                        entry => Err(format!(
+                            "listed: {entry:?}, message: {message}, unchanged: {unchanged}"
+                        )),
+                    },
+                );
+                self.step = 4;
                 let path = find("Scripted").map(|entry| entry.path).unwrap_or_default();
                 Control::Open {
                     name: "Scripted".to_owned(),
                     path,
                 }
             }
-            3 => {
+            4 => {
                 let Some(running) = frame.running else {
                     return Control::Continue;
                 };
@@ -1267,10 +1317,10 @@ impl Driver for WorldsDriver {
                     .last_submitted_tick()
                     .map(|tick| tick.value());
                 self.opened_once = true;
-                self.step = 4;
+                self.step = 5;
                 Control::Close
             }
-            4 => {
+            5 => {
                 if frame.phase != morbid_app::driver::PhaseKind::Start {
                     return Control::Continue;
                 }
@@ -1284,14 +1334,14 @@ impl Driver for WorldsDriver {
                         Err(message)
                     },
                 );
-                self.step = 5;
+                self.step = 6;
                 let path = find("Scripted").map(|entry| entry.path).unwrap_or_default();
                 Control::Open {
                     name: "Scripted".to_owned(),
                     path,
                 }
             }
-            5 => {
+            6 => {
                 let Some(running) = frame.running else {
                     return Control::Continue;
                 };
@@ -1308,7 +1358,7 @@ impl Driver for WorldsDriver {
                     )),
                     other => Err(format!("{other:?}")),
                 });
-                self.step = 6;
+                self.step = 7;
                 Control::Quit
             }
             _ => Control::Continue,

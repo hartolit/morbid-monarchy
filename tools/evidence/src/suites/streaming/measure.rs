@@ -24,56 +24,69 @@ fn percentile(values: &mut [f64], p: f64) -> f64 {
     values[((values.len() - 1) as f64 * p).round() as usize]
 }
 
-/// Frame CPU times and process allocations over a number of frames.
+/// Frame CPU times, the session's share of them by owner, and allocations over a number of
+/// frames.
+#[derive(Default)]
 struct Phase {
     frame_ms: Vec<f64>,
+    /// The session's frame time by owner (`FrameTimes`): the runtime, the residency owner, the
+    /// checkpoint owner and the copies no tick took along.
+    owners_ms: [Vec<f64>; 4],
+    /// Every thread's allocations, and this thread's, which runs the session; the rest are the
+    /// store's workers' (and any thread wgpu runs).
     allocations: u64,
+    main_allocations: u64,
     frames: u32,
 }
 
-/// Runs `frames` frames of one tick, paced like a display so the device keeps up and the time
-/// measured is the frame's CPU cost.
-fn phase(live: &mut Live, frames: u32) -> Phase {
-    let mut frame_ms = Vec::with_capacity(frames as usize);
-    let (before, _) = alloc::snapshot();
-    for _ in 0..frames {
+impl Phase {
+    /// Runs one frame of one tick, paced like a display so the device keeps up and the time
+    /// measured is the frame's CPU cost. Allocations count to the next frame, so the workers'
+    /// during the pause belong to the frame that gave them work.
+    fn frame(&mut self, live: &mut Live) {
+        let process = alloc::snapshot().0;
+        let main = alloc::thread_allocations();
         let started = Instant::now();
         live.session.frame_ticks(1);
-        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        self.frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        let times = live.session.frame_times();
+        for (series, time) in self.owners_ms.iter_mut().zip([
+            times.runtime,
+            times.residency,
+            times.checkpoints,
+            times.transfers,
+        ]) {
+            series.push(time.as_secs_f64() * 1000.0);
+        }
         std::thread::sleep(Duration::from_micros(500));
-    }
-    let (after, _) = alloc::snapshot();
-    Phase {
-        frame_ms,
-        allocations: after - before,
-        frames,
+        self.allocations += alloc::snapshot().0 - process;
+        self.main_allocations += alloc::thread_allocations() - main;
+        self.frames += 1;
     }
 }
 
-/// Runs frames of one tick, paced the same way, until `done` holds.
+fn phase(live: &mut Live, frames: u32) -> Phase {
+    let mut phase = Phase::default();
+    for _ in 0..frames {
+        phase.frame(live);
+    }
+    phase
+}
+
+/// Runs frames of one tick until `done` holds.
 fn phase_until(
     live: &mut Live,
     what: &str,
     mut done: impl FnMut(&world_runtime::session::WorldSession) -> bool,
 ) -> Result<Phase, String> {
-    let mut frame_ms = Vec::new();
-    let (before, _) = alloc::snapshot();
+    let mut phase = Phase::default();
     while !done(&live.session) {
-        if frame_ms.len() > 5000 {
-            return Err(format!("{what}: not done after {} frames", frame_ms.len()));
+        if phase.frames > 5000 {
+            return Err(format!("{what}: not done after {} frames", phase.frames));
         }
-        let started = Instant::now();
-        live.session.frame_ticks(1);
-        frame_ms.push(started.elapsed().as_secs_f64() * 1000.0);
-        std::thread::sleep(Duration::from_micros(500));
+        phase.frame(live);
     }
-    let (after, _) = alloc::snapshot();
-    let frames = frame_ms.len() as u32;
-    Ok(Phase {
-        frame_ms,
-        allocations: after - before,
-        frames,
-    })
+    Ok(phase)
 }
 
 /// Completes the submitted ticks without submitting more.
@@ -107,10 +120,30 @@ fn report(check: &mut Check, label: &str, mut phase: Phase) {
         percentile(&mut phase.frame_ms, 0.99),
     );
     check.metric(&format!("{label}_frame_cpu_ms_max"), max);
+    let frames = f64::from(phase.frames.max(1));
     check.metric(
         &format!("{label}_allocations_per_frame"),
-        phase.allocations as f64 / f64::from(phase.frames.max(1)),
+        phase.allocations as f64 / frames,
     );
+    check.metric(
+        &format!("{label}_session_thread_allocations_per_frame"),
+        phase.main_allocations as f64 / frames,
+    );
+    check.metric(
+        &format!("{label}_other_thread_allocations_per_frame"),
+        (phase.allocations - phase.main_allocations) as f64 / frames,
+    );
+    for (owner, mut series) in ["runtime", "residency", "checkpoints", "transfers"]
+        .into_iter()
+        .zip(phase.owners_ms)
+    {
+        let mean = series.iter().sum::<f64>() / frames;
+        check.metric(&format!("{label}_{owner}_ms_mean"), mean);
+        check.metric(
+            &format!("{label}_{owner}_ms_p95"),
+            percentile(&mut series, 0.95),
+        );
+    }
 }
 
 /// Chunk upload bytes, snapshot readback bytes, snapshot device-copy bytes, all readback bytes,
@@ -199,22 +232,12 @@ pub fn streaming_measure(adapter: &str, check: &mut Check) -> Result<(), String>
     let before = live.session.runtime().counters();
     let moves = 8;
     let mut frames_per_move = Vec::new();
-    let mut walking = Phase {
-        frame_ms: Vec::new(),
-        allocations: 0,
-        frames: 0,
-    };
+    let mut walking = Phase::default();
     for step in 1..=moves {
         live.session.set_window(window(step, 0, RADIUS));
         let mut frames = 0;
-        let started = alloc::snapshot().0;
         loop {
-            let begun = Instant::now();
-            live.session.frame_ticks(1);
-            walking
-                .frame_ms
-                .push(begun.elapsed().as_secs_f64() * 1000.0);
-            std::thread::sleep(Duration::from_micros(500));
+            walking.frame(&mut live);
             frames += 1;
             let residency = live.session.residency();
             if residency.window() == window(step, 0, RADIUS) && residency.settled() {
@@ -224,8 +247,6 @@ pub fn streaming_measure(adapter: &str, check: &mut Check) -> Result<(), String>
                 return Err(format!("move {step} did not settle"));
             }
         }
-        walking.allocations += alloc::snapshot().0 - started;
-        walking.frames += frames;
         frames_per_move.push(f64::from(frames));
         if step == moves / 2 {
             live.session.save();

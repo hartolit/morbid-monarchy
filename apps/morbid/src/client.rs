@@ -84,6 +84,8 @@ pub struct SurfaceReport {
     pub skipped_frames: u64,
     pub presented_frames: u64,
     pub busy_frames: u64,
+    /// The last swapchain image acquisition's wait.
+    pub last_acquire: std::time::Duration,
 }
 
 impl Running {
@@ -159,6 +161,7 @@ impl Running {
             skipped_frames: self.surface.skipped_frames,
             presented_frames: self.surface.presented_frames,
             busy_frames: self.busy_frames,
+            last_acquire: self.surface.last_acquire,
         }
     }
 }

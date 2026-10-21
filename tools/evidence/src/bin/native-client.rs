@@ -6,14 +6,25 @@
 //!               [--pose X,Y,Z,YAW_DEG,PITCH_DEG] [--frames N,N...] [--window WxH]
 //! native-client script features|loss|worlds ...
 //! native-client bench --scenario FILE --worlds NEW_DIR --samples FILE --summary FILE
-//!               --adapter ID --settings PATH [--gpu-timestamps]
+//!               --adapter ID --settings PATH [--gpu-timestamps] [--autosave TICKS]
 //! ```
+//!
+//! The process counts its heap allocations (all threads, and per thread), so a run's summary can
+//! report them; the count costs two relaxed atomic additions and a thread-local one each.
+//! `--autosave` is a diagnostic: the frozen scenarios run with autosave off, as `cargo evidence
+//! bench` starts them.
 
 use std::{path::PathBuf, process::ExitCode};
 
-use monarchy_evidence::native::{CaptureDriver, Pose};
+use monarchy_evidence::{
+    native::{CaptureDriver, Pose},
+    suites::alloc::{self, CountingAllocator},
+};
 use morbid_app::options::{Autosave, ClientOptions};
 use world_model::glam::DVec3;
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn value(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -23,6 +34,7 @@ fn value(args: &[String], name: &str) -> Option<String> {
 }
 
 fn main() -> ExitCode {
+    alloc::mark_installed();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("script") {
         return script(&args);
@@ -213,28 +225,35 @@ fn script(args: &[String]) -> ExitCode {
     }
 }
 
-/// `native-client script worlds --worlds DIR --legacy FILE --adapter ID --settings PATH --out DIR`:
-/// the start screen's create, import, open, close and reopen through the client's handlers.
+/// `native-client script worlds --legacy FILE --adapter ID --out DIR [--worlds DIR]
+/// [--settings PATH]`: the start screen's create, import, refusal of a damaged save, open,
+/// close and reopen through the client's handlers. Without `--worlds` and `--settings` the
+/// client's own defaults apply (the user data and configuration directories), as for a person.
 fn worlds_script(args: &[String], size: [u32; 2]) -> ExitCode {
     use monarchy_evidence::native::WorldsDriver;
-    let (Some(worlds), Some(legacy), Some(adapter), Some(settings), Some(out)) = (
-        value(args, "--worlds"),
+    let (Some(legacy), Some(adapter), Some(out)) = (
         value(args, "--legacy"),
         value(args, "--adapter"),
-        value(args, "--settings"),
         value(args, "--out"),
     ) else {
-        eprintln!(
-            "native-client: --worlds, --legacy, --adapter, --settings and --out are required"
-        );
+        eprintln!("native-client: --legacy, --adapter and --out are required");
         return ExitCode::from(2);
     };
-    let driver = WorldsDriver::new(PathBuf::from(legacy));
+    let out = PathBuf::from(out);
+    let _ = std::fs::create_dir_all(&out);
+    let damaged = out.join("damaged-legacy.redb");
+    if let Err(error) = WorldsDriver::damage(std::path::Path::new(&legacy), &damaged) {
+        eprintln!("native-client: the damaged copy: {error}");
+        return ExitCode::FAILURE;
+    }
+    let driver = WorldsDriver::new(PathBuf::from(legacy), damaged);
     let report = std::rc::Rc::clone(&driver.report);
     let options = ClientOptions {
         adapter: Some(adapter),
-        worlds: PathBuf::from(worlds),
-        settings: PathBuf::from(settings),
+        worlds: value(args, "--worlds")
+            .map_or_else(morbid_app::options::default_worlds_dir, PathBuf::from),
+        settings: value(args, "--settings")
+            .map_or_else(morbid_app::options::default_settings_path, PathBuf::from),
         open: None,
         window_size: Some(size),
         vsync: true,
@@ -246,13 +265,11 @@ fn worlds_script(args: &[String], size: [u32; 2]) -> ExitCode {
         Ok(summary) => report.failures.extend(summary.errors),
         Err(error) => report.failures.push(error),
     }
-    if report.checks.len() != 4 {
+    if report.checks.len() != 5 {
         report
             .failures
-            .push(format!("{} of 4 steps ran", report.checks.len()));
+            .push(format!("{} of 5 steps ran", report.checks.len()));
     }
-    let out = PathBuf::from(out);
-    let _ = std::fs::create_dir_all(&out);
     let _ = std::fs::write(
         out.join("report.json"),
         serde_json::to_string_pretty(&report).unwrap_or_default(),
@@ -319,7 +336,14 @@ fn bench(args: &[String]) -> ExitCode {
         open: None,
         window_size: Some(loaded.scenario.presentation.resolution),
         vsync: BenchDriver::vsync(&loaded.scenario),
-        autosave: Autosave::Off,
+        autosave: match value(args, "--autosave").map(|ticks| ticks.parse::<u32>()) {
+            None => Autosave::Off,
+            Some(Ok(ticks)) if ticks > 0 => Autosave::Every(ticks),
+            Some(_) => {
+                eprintln!("native-client: --autosave takes a positive number of ticks");
+                return ExitCode::from(2);
+            }
+        },
     };
     let summary_path = PathBuf::from(summary);
     let driver = BenchDriver::new(
