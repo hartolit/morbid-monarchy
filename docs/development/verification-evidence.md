@@ -142,10 +142,13 @@ are not labelled physical VRAM residency if that is not observable.
 
 Per-pass timestamps diagnose GPU work. End-to-end frame samples and completed-tick throughput
 establish the complete workload. Since 06 a native frame sample is one presented frame: the
-client's loop may run iterations that present nothing (both presentation slots busy) and still
-advance the timeline, and they belong to the next presented frame's sample. Measure an idle case, each physical family, streaming/save
-pressure and the coupled case. Keep dense and clustered populations. Record both allocated capacity
-and occupied items; unused preallocation still costs memory.
+client's loop may run iterations that present nothing (a tick fell due while both presentation
+slots were busy, or the surface is unavailable) and still advance the timeline, and they belong to
+the next presented frame's sample; since `2c63b64` it waits instead of running an iteration that
+would change nothing, and the run's summary counts those idle waits. Measure an idle case, each
+physical family, streaming/save pressure and the coupled case. Keep dense and clustered
+populations. Record both allocated capacity and occupied items; unused preallocation still costs
+memory.
 
 ## CI and hardware access
 

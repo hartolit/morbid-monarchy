@@ -2,7 +2,8 @@
 
 **Frozen qualification contract, the measured baseline (01), the measured transfer lifecycle
 (02), the material phases (03), bodies (04), streaming and checkpoints (05), the native
-client's renderer and frame (06), and the integrated qualification (07).** 00 adopted the evidence policy in
+client's renderer and frame (06), the integrated qualification (07) and the client's loop
+after it.** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -640,7 +641,8 @@ overlay. In the idle case above that is 3.8 iterations, 0.98 ms of the main thre
 about 2,000 heap allocations (nearly all egui's) per presented frame, against 0.45 ms for the
 presenting iteration alone; with vsync it is one iteration, 0.61 ms and 830 allocations. Laying
 out the overlay only when a frame is presented was tried and not kept: the thread stays busy
-either way without vsync, and the change made scripted input timing flaky.
+either way without vsync, and the change made scripted input timing flaky. After 07 the loop
+waits instead of running such iterations ([below](#client-loop-without-vsync-after-07)).
 
 **Saving and streaming, by owner.** `streaming-measure` on 2026-10-21 (07's gate on `eb9d8fb`'s
 tree, quiet host) breaks 05's frame costs down by the session's owners
@@ -657,6 +659,95 @@ residency owner's; the store's worker threads make 160–180 of the extra alloca
 (encoding and redb transactions) and the session thread 30–160 (transfer submissions inside
 wgpu and the owners' bookkeeping). No owner waits. These are small against the 16.67 ms frame
 budget and are reported, not tuned.
+
+## Client loop without vsync (after 07)
+
+**Result.** Since `2c63b64` the client runs a frame only when one has work: a free presentation
+slot, a due tick the device can take, a closed or lost session, or a hidden window. Otherwise it
+waits in its event wait, 250 µs at a time, after asking the GPU owner what it would admit
+(`GpuWorld::poll_admission`, which waits for nothing). Measured with 07's protocol, loop iterations
+per presented frame fell from 3.6–5.4 to 1.0 at radius 6, from 18–23 to 1.3 at radius 16 and from
+37–56 to 2.1–3.0 at radius 32; the main thread's CPU time per presented frame by 51–57%, 78–80% and
+83–88%; heap allocations per presented frame by 58–70%, 88–90% and 87–92%. Frame medians are within
+1.5% of 07's, inside the spread of 07's own runs, or lower (qualification coupled 1.18 against 1.24
+ms, scale idle 4.63 against 4.77 ms); every qualification and scale run meets the qualification
+budget, and the simulation keeps 07's rate (60 ticks/s, and 52 against 51–52 with 4,096 dense
+bodies).
+
+Executed evidence, measured on 2026-10-21 between 14:39 and 15:40 UTC with `cargo evidence bench
+--profile qualification|scale|capacity --adapter vulkan-10de-2c05 --runs 5` on `2c63b64`, a clean
+tree; host, adapter, presentation and protocol as in [07](#integrated-qualification-07), the
+person's desktop in use as then. No run was contended and no attempt rejected. Records:
+`target/evidence/loop-bench-{qualification,scale,capacity}/` on the nominated machine. 07's values
+are in parentheses (capacity coupled from its second invocation); the columns are defined as in
+07's tables, idle waits per presented frame added.
+
+**qualification**
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | Ticks/s | Main-thread CPU per frame | Process CPU | Iterations / idle waits per frame | Allocations per frame |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 (5 / 5) | 1.08 (1.08) | 1.38–1.47 (10.66–10.76) | 10.69 (10.98) | 12.27 (12.29) | 60.0 (60.0) | 0.48 (0.98) ms | 0.37 (0.40) cores | 1.0 / 2.6 (3.6 / 0) | 827 (1951) |
+| flow | 5 / 5 (5 / 5) | 1.13 (1.12) | 1.46–1.49 (1.46–10.78) | 10.63 (10.98) | 12.44 (13.29) | 60.0 (60.0) | 0.49 (1.03) ms | 0.36 (0.52) cores | 1.0 / 2.8 (4.3 / 0) | 835 (2287) |
+| body-contact | 5 / 5 (5 / 5) | 1.15 (1.14) | 2.16–2.21 (2.03–10.67) | 10.67 (10.86) | 12.42 (11.89) | 60.0 (60.0) | 0.51 (1.19) ms | 0.35 (1.23) cores | 1.0 / 3.1 (4.4 / 0) | 862 (2366) |
+| mixed | 5 / 5 (5 / 7) | 1.06 (1.07) | 1.39–1.42 (1.26–10.66) | 10.65 (10.86) | 11.77 (12.53) | 60.0 (60.0) | 0.48 (0.99) ms | 0.37 (0.52) cores | 1.0 / 2.6 (4.0 / 0) | 830 (2131) |
+| streaming | 5 / 5 (5 / 5) | 1.14 (1.15) | 1.47–1.48 (10.61–10.63) | 10.64 (10.88) | 12.95 (13.01) | 60.0 (60.0) | 0.50 (1.12) ms | 0.40 (0.68) cores | 1.0 / 2.9 (4.6 / 0) | 838 (2418) |
+| coupled | 5 / 5 (5 / 5) | 1.18 (1.24) | 2.09–2.41 (2.70–10.63) | 10.65 (10.93) | 11.69 (65.97) | 60.0 (60.0) | 0.60 (1.26) ms | 0.69 (0.72) cores | 1.0 / 2.9 (5.4 / 0) | 860 (2864) |
+
+**scale**
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | Ticks/s | Main-thread CPU per frame | Process CPU | Iterations / idle waits per frame | Allocations per frame |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 (5 / 6) | 4.63 (4.77) | 5.51–5.54 (5.72–10.76) | 5.93 (11.01) | 6.71 (13.25) | 60.0 (60.0) | 0.97 (4.69) ms | 0.29 (0.92) cores | 1.3 / 15.6 (19.7 / 0) | 975 (9212) |
+| flow | 5 / 5 (5 / 5) | 4.69 (4.67) | 5.59–5.61 (5.60–5.66) | 5.99 (5.94) | 6.77 (6.23) | 60.0 (60.0) | 1.01 (4.84) ms | 0.32 (1.08) cores | 1.3 / 15.7 (20.8 / 0) | 999 (9557) |
+| body-contact | 5 / 5 (5 / 5) | 4.79 (4.76) | 6.76–6.83 (6.75–6.78) | 7.24 (7.10) | 8.35 (7.82) | 60.0 (60.0) | 1.06 (5.23) ms | 0.45 (1.28) cores | 1.3 / 17.1 (21.5 / 0) | 1090 (9972) |
+| mixed | 5 / 5 (5 / 5) | 4.58 (4.55) | 5.68–5.70 (5.65–5.69) | 6.05 (6.01) | 6.75 (6.90) | 60.0 (60.0) | 0.98 (4.74) ms | 0.38 (1.16) cores | 1.3 / 15.5 (20.3 / 0) | 986 (9332) |
+| streaming | 5 / 5 (5 / 5) | 4.72 (4.71) | 5.90–5.94 (5.84–5.94) | 7.19 (7.12) | 8.31 (8.50) | 60.0 (60.0) | 1.10 (4.90) ms | 0.45 (1.19) cores | 1.3 / 15.6 (18.3 / 0) | 1049 (8540) |
+| coupled | 5 / 5 (5 / 5) | 4.93 (4.90) | 6.90–6.97 (6.87–6.92) | 7.47 (7.27) | 10.93 (8.80) | 60.0 (60.0) | 1.11 (5.37) ms | 0.56 (1.40) cores | 1.3 / 17.4 (23.2 / 0) | 1110 (10751) |
+
+**capacity**
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | Ticks/s | Main-thread CPU per frame | Process CPU | Iterations / idle waits per frame | Allocations per frame |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 (5 / 5) | 18.37 (18.26) | 21.28–21.67 (21.25–21.46) | 22.01 (21.87) | 22.61 (22.52) | 60.0 (60.0) | 2.22 (18.43) ms | 0.29 (1.17) cores | 2.1 / 65.4 (41.6 / 0) | 1514 (18570) |
+| flow | 5 / 5 (5 / 5) | 18.43 (18.27) | 21.37–21.49 (21.23–21.46) | 21.96 (21.99) | 22.32 (22.58) | 60.0 (59.9) | 2.29 (18.46) ms | 0.45 (1.16) cores | 2.1 / 65.5 (40.8 / 0) | 1561 (18333) |
+| body-contact | 5 / 5 (5 / 5) | 26.86 (26.59) | 34.45–42.00 (33.74–42.50) | 43.03 (43.82) | 56.13 (44.78) | 52.0 (52.4) | 3.61 (28.02) ms | 0.69 (1.40) cores | 3.0 / 97.2 (56.3 / 0) | 2369 (25495) |
+| mixed | 5 / 5 (5 / 5) | 18.11 (18.01) | 21.18–21.32 (20.99–21.52) | 23.22 (23.08) | 24.64 (25.33) | 60.0 (59.9) | 2.31 (18.23) ms | 0.29 (1.16) cores | 2.1 / 64.3 (40.2 / 0) | 1538 (18050) |
+| streaming | 5 / 5 (5 / 5) | 18.83 (18.84) | 25.39–25.81 (26.50–27.57) | 29.36 (30.60) | 30.99 (34.65) | 60.0 (58.8) | 3.38 (19.67) ms | 0.53 (1.34) cores | 2.3 / 65.9 (37.5 / 0) | 2337 (17821) |
+| coupled | 5 / 5 (5 / 5) | 27.05 (27.12) | 37.54–48.65 (37.53–48.83) | 51.61 (52.12) | 82.93 (54.29) | 52.0 (50.9) | 3.56 (27.50) ms | 0.65 (1.39) cores | 2.9 / 95.6 (54.6 / 0) | 2461 (25072) |
+
+**What the waiting costs.** A slot that frees during a wait is noticed when the wait ends. At
+radius 6, where frames are shortest, the fastest frames show it: in idle the 10th percentile of
+frames shorter than 5 ms rose from 0.84–0.86 to 0.94–0.95 ms and their median from 1.05 to 1.08 ms,
+while their 90th percentile fell from 1.23–1.24 to 1.20–1.22 ms; the frame median is unchanged.
+Each wait costs about 30 µs of main-thread CPU (pumping events and the admission poll). The 250 µs
+wait was chosen from the radius-6 frame (about 1.1 ms, of which the presenting frame takes 0.45 ms
+of CPU) and not tuned further.
+
+**Acquisition waits.** The 10.09 ms waits for a swapchain image still come and go: frames of 5 ms
+or more, nearly all of them these waits, were 1.9–3.4% of every qualification idle, flow,
+body-contact, mixed and streaming run, none of four coupled runs and 4.2% of the fifth (07: 0 to
+17% by run). No run's share reached 5%, so no p95 includes them; body-contact's run p95s (2.16–2.21
+against 07's 2.03 ms in its three runs without waits) rose by them alone, since its frames shorter
+than 5 ms keep their p95 (2.02 against 2.03 ms) and median (1.15 against 1.14–1.15 ms). In
+alternating runs of 07's short idle scenario with the binaries of `8eb3179` and `2c63b64`, three
+pairs on the same desktop (`target/evidence/loop-presentation/`), the waits hit 8.2–10.7% of the
+old binary's frames and 2.5–3.3% of the new one's, with equal frame medians (1.07–1.09 ms) and p95s
+of 10.6–10.8 against 1.4–1.5 ms; that the spinning provoked some of them is an inference.
+
+**Vsync.** In two alternating pairs of the same scenario with vsync (FIFO on the 240 Hz display),
+both binaries run exactly one iteration per presented frame, never wait idle, and spend 0.61–0.62
+ms of main-thread CPU and 833 allocations per frame at 4.17 ms frames. The scripted runs, which
+present with vsync, pass on `2c63b64`: `features` 41 checks in each of three runs, `loss` 6 and
+`worlds` 5 (`target/evidence/loop-scripts/`).
+
+**Single long frames at capacity.** The longest frame of each body-contact and coupled run takes
+40–56 ms, once 83 ms (07: 35–56 ms); in body-contact it falls at ticks 360–366, as the attract
+target alternates, in coupled between ticks 323 and 424. In four of these ten runs the presenting
+frame itself held the main thread for 35–56 ms, most of it in the session's frame, against one such
+frame (56 ms) in 07's runs; in the others the loop waited for the device, as 07's did. That work
+the spinning loop spread over the polls of its idle iterations now falls into one frame is an
+inference. The capacity profile's p99s are unchanged (43.0 and 51.6 against 43.8 and 52.1 ms); it
+promises no frame rate.
 
 ## Structural gates
 
