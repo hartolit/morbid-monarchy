@@ -13,9 +13,11 @@
 //!
 //! Chunk snapshots (of outgoing chunks) use a fixed image of `snapshot_entries` chunks. A world
 //! snapshot copies the whole cell array, every change word and every body slot's records into a
-//! world image it allocates for itself, within the plan's `world_image_bytes`; it streams its
-//! changed chunks and its bodies, and frees the image when the last of them is taken. At most
-//! one world snapshot is in flight. Each submission that copies snapshots reserves one capture
+//! world image of the plan's `world_image_bytes`; it streams its changed chunks and its bodies,
+//! and once the last of them is taken the image waits, unused, for the next world snapshot of
+//! the same window. Allocating it for every snapshot cost the requesting frame about 2 ms at
+//! radius 16, once a second at the default autosave cadence; a resize releases it. At most one
+//! world snapshot is in flight. Each submission that copies snapshots reserves one capture
 //! staging buffer as its flag sheet: the world's change words first (one per slot), then one
 //! word per chunk snapshot in copy order.
 //!
@@ -184,6 +186,9 @@ pub struct Snapshots {
     pub image: wgpu::Buffer,
     pub entries: Vec<ChunkEntry>,
     pub world: Option<WorldImage>,
+    /// The buffer of the last drained world image, kept for the next world snapshot of a window
+    /// of the same size. No submission uses it: it was drained.
+    pub spare_world: Option<wgpu::Buffer>,
     pub next_world: u32,
     pub sheets: Vec<Sheet>,
 }
@@ -200,6 +205,7 @@ impl Snapshots {
                 entries as usize
             ],
             world: None,
+            spare_world: None,
             next_world: 1,
             sheets: Vec::new(),
         }

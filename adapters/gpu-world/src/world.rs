@@ -1105,6 +1105,9 @@ impl PhysicalWorld for GpuWorld {
         if !self.context.has_submission_capacity() {
             return Err(self.refuse(Pressure::InFlightSubmissions));
         }
+        // A kept world image of the old window's size is of no use to the new one: it goes
+        // before the new window's buffers are created.
+        self.release_spare_world_unless(next.world_image_bytes);
         let (window, metadata_bytes) = WindowBuffers::create(&mut self.context, &next, &slots)
             .map_err(|_| {
                 Refusal::Unsupported(CapacityLimit {

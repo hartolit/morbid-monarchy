@@ -173,6 +173,8 @@ pub fn change_flags(adapter: &str, check: &mut Check) -> Result<(), String> {
     // changed and streams their cells.
     driver.run(&[edit(EditTool::Lower, IVec2::new(63, 40), 4)])?;
     let (_, chunks, bodies) = world_snapshot(&mut driver)?;
+    // The first world snapshot allocated its image; the later ones reuse it.
+    let buffers = driver.world.counters().buffers_created;
     let changed: Vec<(i32, i32)> = chunks
         .iter()
         .filter(|(_, cells)| cells.is_some())
@@ -236,6 +238,11 @@ pub fn change_flags(adapter: &str, check: &mut Check) -> Result<(), String> {
         .collect();
     check.equal("changed by the body", deformed, vec![(0, 1)]);
     check.equal("bodies after the spawn", bodies.live(), 1);
+    check.equal(
+        "buffers created by four later world snapshots",
+        driver.world.counters().buffers_created - buffers,
+        0,
+    );
 
     // A snapshot through a transfer submission holds the last submitted tick.
     let last = Tick::new(driver.next_tick.value() - 1);

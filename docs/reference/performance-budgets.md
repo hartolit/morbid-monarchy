@@ -358,9 +358,10 @@ fewer, larger dispatches would reduce them, which 06–07 can measure against th
 ## Streaming and checkpoints (05)
 
 **Resources.** On the device, snapshots are planned beside live terrain: a fixed chunk snapshot
-image of 32 entries (1 MiB) and the world image a world snapshot allocates while it drains,
-`8 N + 144 B` bytes (6,127,616 B at radius 6 with the default 4,096 bodies), reserved in the plan
-so the budget holds while one drains; one change word per slot. During a resize the budget holds
+image of 32 entries (1 MiB) and the world image a world snapshot copies into, `8 N + 144 B`
+bytes (6,127,616 B at radius 6 with the default 4,096 bodies), reserved in the plan; since the
+autosave cadence (after 07) the first world snapshot allocates it and later ones of the same
+window reuse it. One change word per slot. During a resize the budget holds
 the old allocations, the new ones and the larger world image together
 ([GPU contract](gpu-contract.md#snapshots-and-completed-ticks)). On the CPU the residency owner
 keeps metadata per key, never cells, and two byte budgets: payloads loaded and waiting for upload

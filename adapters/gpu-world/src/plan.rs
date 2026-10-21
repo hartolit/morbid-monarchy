@@ -556,9 +556,10 @@ pub struct ResourcePlan {
     pub device_bytes: u64,
     pub staging_bytes: u64,
     pub terrain_bytes: u64,
-    /// Bytes of the world image a world snapshot allocates for this window: every slot's
+    /// Bytes of the world image a world snapshot copies into for this window: every slot's
     /// cells, then every body slot's state and configuration. Not in `device_bytes` (it is
-    /// allocated on demand) but in [`reserved_bytes`](Self::reserved_bytes).
+    /// allocated at the first world snapshot and kept for the next ones while the window keeps
+    /// its size) but in [`reserved_bytes`](Self::reserved_bytes).
     pub world_image_bytes: u64,
     pub timestamps: bool,
 }
@@ -981,8 +982,8 @@ pub fn plan(
         }
     }
 
-    // The world image a snapshot allocates on demand is part of the plan: it must fit one
-    // buffer and the device budget like the buffers allocated at once.
+    // The world image the first world snapshot allocates (and later ones reuse) is part of the
+    // plan: it must fit one buffer and the device budget like the buffers allocated at once.
     let world_image_bytes = checked(
         BufferRole::SnapshotImage,
         cell_bytes.checked_add(u64::from(transfer.bodies) * (BodyState::BYTES + BodyConfig::BYTES)),

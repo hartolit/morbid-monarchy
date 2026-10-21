@@ -711,8 +711,8 @@ reads it.
 `PhysicalWorld::snapshot_chunk` (an outgoing chunk) copies the slot into an entry of a fixed chunk
 image (`TransferConfig::snapshot_entries`, 32) and its change word onto a flag sheet at the end of
 the next submission. `snapshot_world` copies the whole cell array, every change word and every
-body slot's state and configuration into a world image it allocates for itself, within the plan's
-reserved `world_image_bytes` (`8N + 144 B`), and records the table's slots and the tick's physical
+body slot's state and configuration into a world image of the plan's reserved
+`world_image_bytes` (`8N + 144 B`), and records the table's slots and the tick's physical
 configuration. At most one world snapshot is in flight. Each submission that copies snapshots
 reserves one capture staging buffer as its sheet (the world's words, then one per chunk snapshot,
 at most 17 KiB). When the sheet maps, an unchanged chunk is reported (`Outcome::Snapshot {
@@ -720,8 +720,10 @@ changed: false }`) and freed, with no payload; a changed one streams through cap
 later submission and is reported ready; a world snapshot's bodies stream in pieces of at most 32
 KiB and are decoded into `world_model::resume::BodySet` (`Outcome::BodySnapshot`, with the number
 of chunks it holds and its configuration). A spawn of the copied tick whose target missed is
-recorded as the release its outcome will make. The world image is freed when its last chunk and
-its bodies are taken. A snapshot is an obligation: lost or faulted, it is abandoned; stopped, a
+recorded as the release its outcome will make. Once its last chunk and its bodies are taken, the
+world image is kept for the next world snapshot while the window keeps its size (a resize releases
+it): allocating it for every snapshot took about 2 ms of the requesting frame at radius 16, once a
+second at the default autosave cadence (after 07). A snapshot is an obligation: lost or faulted, it is abandoned; stopped, a
 ready one stays takeable and one that still needed a submission is abandoned.
 
 Copies ride at the end of whichever submission comes next: a tick (the snapshot holds the end of

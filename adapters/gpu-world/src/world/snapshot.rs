@@ -71,23 +71,29 @@ impl GpuWorld {
         if self.snapshots.world.is_some() {
             return Err(self.refuse(Pressure::SnapshotImage));
         }
-        let cell_bytes = u64::from(self.slots.capacity()) * CHUNK_BYTES;
-        let bytes = cell_bytes + u64::from(self.transfer.bodies) * BODY_RECORD_BYTES;
-        let buffer = self
-            .context
-            .create_buffer(
-                "world snapshot",
-                bytes,
-                wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                false,
-            )
-            .map_err(|_| {
-                Refusal::Unsupported(world_runtime::port::CapacityLimit {
-                    resource: world_runtime::port::LimitedResource::Allocation,
-                    requested: bytes,
-                    available: 0,
-                })
-            })?;
+        let (cell_bytes, bytes) = self.world_image_bytes();
+        let buffer = match self.snapshots.spare_world.take() {
+            Some(spare) if spare.size() == bytes => spare,
+            other => {
+                if let Some(spare) = other {
+                    self.context.release_buffer(spare);
+                }
+                self.context
+                    .create_buffer(
+                        "world snapshot",
+                        bytes,
+                        wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                        false,
+                    )
+                    .map_err(|_| {
+                        Refusal::Unsupported(world_runtime::port::CapacityLimit {
+                            resource: world_runtime::port::LimitedResource::Allocation,
+                            requested: bytes,
+                            available: 0,
+                        })
+                    })?
+            }
+        };
         let id = self.snapshots.next_world;
         self.snapshots.next_world = id.checked_add(1).unwrap_or(1);
         self.snapshots.world = Some(WorldImage {
@@ -598,7 +604,18 @@ impl GpuWorld {
         });
     }
 
-    /// Frees the world image once everything in it was reported and taken.
+    /// The bytes of a world image of the current window: its cell array, then every body
+    /// slot's records.
+    pub(super) fn world_image_bytes(&self) -> (u64, u64) {
+        let cell_bytes = u64::from(self.slots.capacity()) * CHUNK_BYTES;
+        (
+            cell_bytes,
+            cell_bytes + u64::from(self.transfer.bodies) * BODY_RECORD_BYTES,
+        )
+    }
+
+    /// Ends the world image once everything in it was reported and taken: its buffer is kept
+    /// for the next world snapshot when the window still has its size, released otherwise.
     fn release_drained_world(&mut self) {
         if self
             .snapshots
@@ -607,7 +624,25 @@ impl GpuWorld {
             .is_some_and(WorldImage::drained)
             && let Some(world) = self.snapshots.world.take()
         {
-            self.context.release_buffer(world.buffer);
+            if world.bytes == self.world_image_bytes().1 && self.snapshots.spare_world.is_none() {
+                self.snapshots.spare_world = Some(world.buffer);
+            } else {
+                self.context.release_buffer(world.buffer);
+            }
+            self.refresh_counters();
+        }
+    }
+
+    /// Releases a kept world image that a window of `bytes` per image cannot use.
+    pub(super) fn release_spare_world_unless(&mut self, bytes: u64) {
+        if self
+            .snapshots
+            .spare_world
+            .as_ref()
+            .is_some_and(|spare| spare.size() != bytes)
+            && let Some(spare) = self.snapshots.spare_world.take()
+        {
+            self.context.release_buffer(spare);
             self.refresh_counters();
         }
     }
