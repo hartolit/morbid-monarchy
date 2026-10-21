@@ -1,15 +1,22 @@
 # Continuation note
 
-**Written 2026-10-21 at the end of the GPU transition, for the next agent.** No sprint is active
-and no successor is authorized: the next assignment is the user's to choose. This note says where
-work stopped, what is open and how to work on this machine. It is temporary; replace or remove it
-when the next assignment starts, and move anything lasting into its maintained owner.
+**Written 2026-10-21 at the end of the GPU transition, for the next agent; updated the same day
+after the first open item was done.** No sprint is active and no successor is authorized: the next
+assignment is the user's to choose. This note says where work stopped, what is open and how to work
+on this machine. It is temporary; replace or remove it when the next assignment starts, and move
+anything lasting into its maintained owner.
 
 ## Where things stand
 
-- **Branch `experimental`, last commit `981b0ea`, clean tree, nothing pushed.** The transition's
-  commits end with `d9bffb6` (resident-world step 6), `eb9d8fb` (the code every 07 lane and
-  benchmark ran on), `b49b05c` (07's documents) and `981b0ea` (sprint removed).
+- **Branch `experimental`, clean tree, nothing pushed.** The transition's commits end with
+  `d9bffb6` (resident-world step 6), `eb9d8fb` (the code every 07 lane and benchmark ran on),
+  `b49b05c` (07's documents) and `981b0ea` (sprint removed).
+- **After the transition, at the user's choice:** `c4271ad` stopped the benchmark's pacing rule
+  from rejecting saturated runs whose isolated catch-up frames end on the 60 Hz tick cadence. Its
+  spike test now counts only frames in stretches of at least two; the decision and its evidence are
+  in the [regression policy](../../reference/performance-budgets.md#regression-and-improvement-policy),
+  the recorded runs it is tested on in `tools/evidence/tests/fixtures/pacing/`. `check docs`,
+  `check static` and `test cpu` passed on it (`target/evidence/pacing-*`); no bench run since.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
   `vulkan-10de-2c05`, NVIDIA 615.78.08, Linux 7.2.11, KWin Wayland). The final acceptance of
   A01–A15, the feature inventory, the baseline's dispositions and the commands are in the
@@ -22,39 +29,29 @@ when the next assignment starts, and move anything lasting into its maintained o
 
 ## Open items, in a sensible order
 
-None of these is authorized work; propose them to the user. The first three come from 07's
+None of these is authorized work; propose them to the user. The first two come from 07's
 findings ([status](../../product/status.md#known-gaps) lists the gaps).
 
-1. **The benchmark's pacing rule rejects tick-cadence frames.** In the capacity profile the GPU
-   is saturated and some frames end exactly on the 60 Hz tick cadence (16.67 ms), which the spike
-   test in `tools/evidence/src/measurement.rs` (`presentation_pacing`) reads as compositor
-   throttling: three of seven attempts of capacity coupled were rejected, although those frames
-   were isolated and carried catch-up ticks. A second invocation passed. The rule belongs to the
-   frozen protocol ([budgets](../../reference/performance-budgets.md#regression-and-improvement-policy)):
-   change it only with a recorded decision, keep it rejecting the compositor-paced baseline runs
-   (`target/evidence/rejected-baseline-*-79e7ead`) and its `measurement::tests` specimen, and add
-   tests that accept the rejected capacity attempts (`target/evidence/07-bench-capacity/coupled/`
-   run-1, run-6, run-7). A session card for this was proposed on 2026-10-21 and not started.
-2. **The client loop without vsync.** It never blocks: about 4 iterations per presented frame at
+1. **The client loop without vsync.** It never blocks: about 4 iterations per presented frame at
    radius 6 and 20 at radius 16, each laying out the egui overlay (about 500 allocations each).
    Laying out the overlay only in presenting iterations was tried and reverted: it made the
    `features` script's scripted input flaky (1 of 3 runs passed, against 3 of 3), for a reason
    not found, and saved no real CPU because the thread spins either way. Any fix must keep the
    scripts reliable (they wait in loop iterations, not ticks) and keep vsync's one iteration per
    refresh. With vsync, a person's default, this cost does not arise.
-3. **The 10.09 ms swapchain acquisition waits** without vsync (up to 22% of presented frames,
+2. **The 10.09 ms swapchain acquisition waits** without vsync (up to 22% of presented frames,
    none in some runs) set the native p95 near 10.7 ms. Measured on KWin Wayland (mailbox) and
    Xwayland (immediate), absent with FIFO, unchanged by one more swapchain image; blaming the
    NVIDIA driver is an inference. Next evidence would be another compositor or driver.
-4. **Capacity limits:** 4,096 dense bodies at radius 32 take about 8 ms of device time per tick,
+3. **Capacity limits:** 4,096 dense bodies at radius 32 take about 8 ms of device time per tick,
    and the simulation falls to 51–53 ticks/s with counted discarded ticks. The renderer at radius
    32 makes frames 18–27 ms. No frame rate is promised there; see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
    body solver.
-5. **No command journal:** changes after the last checkpoint are lost on a crash or device loss;
+4. **No command journal:** changes after the last checkpoint are lost on a crash or device loss;
    a world whose layout, physics or generator identity changes is refused, not converted, so a
    format change needs a migration before it reaches a user with saved worlds.
-6. **Unqualified:** every other adapter, driver, compositor and platform.
+5. **Unqualified:** every other adapter, driver, compositor and platform.
 
 The [roadmap](../../product/roadmap.md#after-qualification) says how to choose what comes after
 the transition.
@@ -84,6 +81,7 @@ the transition.
   `target/evidence/07*`, the baseline's raw samples under `target/evidence/baseline-*`, and 07's
   helper scripts under `target/drafts/07/` (`analyze.py` and `tables.py` summarize a benchmark
   report against the baseline, `packaged.sh` repeats the packaged fresh start, `diag.sh` and
-  `summ.py` run and summarize one diagnostic benchmark run).
+  `summ.py` run and summarize one diagnostic benchmark run); the pacing rule's analysis under
+  `target/drafts/pacing/` (`margins.py` evaluates rule variants over every kept benchmark run).
 - `world_data/save.redb` at the repository root is a generated save the user called unimportant;
   experiments use temporary stores.
