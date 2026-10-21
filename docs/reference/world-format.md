@@ -5,6 +5,8 @@ format is described separately from the target envelope. 01 captured legacy fixt
 cell definition into `world-model`; 05 implemented the new format, its store and the import
 ([version 1](#saved-world-format-version-1-05)), and the residency and checkpoint owners that use
 them. 06 removed the baseline application; the legacy format is now only read, by the import.
+07 exercised the whole lifecycle together in `resident-world` and through the packaged client
+([qualification](../development/qualification.md)).
 
 ## Existing packed cell
 
@@ -38,7 +40,7 @@ Material IDs and scales retain their existing meanings until changed through a t
 `elevation_scale` world units high (default 0.5, supported 0.01–5.0,
 `world_model::config::ELEVATION_SCALE`). Bodies collide with, float in and deform the scaled
 surface, and the renderer draws the same surface, so the scale is not a display setting. Cells
-store integer units and never change when it does. The target applies a change at a tick
+store integer units and never change when it does. The runtime applies a change at a tick
 boundary, as a configuration command, and records the scale with the configuration in every
 checkpoint; a world reopened with another scale is a different physical world, not a restyle.
 The removed baseline wrote `GlobalPhysicsConfig::elevation_scale` immediately from its developer
@@ -252,7 +254,10 @@ A process crash can lose changes after the last published checkpoint. Device los
 unsnapshotted GPU state. State that loss boundary plainly. Recovery reconstructs from the last
 validated complete checkpoint with a new session epoch; it does not claim exact replay of commands
 that were never saved. Ignore callbacks from the old epoch. Successful recovery and orderly shutdown
-are different evidence cases.
+are different evidence cases: `resident-world` step 6 runs them in one trace (an orderly close,
+a device lost before a save's payloads reached the CPU, and a process ending inside its save
+before and after the publication commits), and each reopen finds exactly the checkpoint the
+boundary names, with its bodies and configuration (07).
 
 ## Legacy import and replacement
 
@@ -265,4 +270,6 @@ seed 69 was used for every user world.
 Only publish/select the new store after complete validation succeeds. Keep the original recoverable.
 Tests cover malformed/truncated bytes, unsupported keys, mixed revisions, failed destination writes
 and interrupted import. Importing a legacy snapshot cannot recover changes that the old app never
-saved. Unsupported legacy cases are preserved with a concrete refusal, not replaced by fresh terrain.
+saved. Unsupported legacy cases are preserved with a concrete refusal, not replaced by fresh terrain:
+a save with an undecodable row is refused unchanged by `world-store import-legacy` and by the
+client's start screen, which lists no world for it (the `worlds` script, 07).

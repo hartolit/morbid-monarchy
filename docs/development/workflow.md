@@ -77,7 +77,7 @@ not success.
 | `cargo evidence test gpu --suite render --adapter ADAPTER_ID` | Runnable (06) | The same for the renderer offscreen through `world-render`: target formats and zero size, terrain materials, missing chunks, edits and spheres at their GPU state, the follow camera, buffer replacement, the activity overlay, device loss, GPU culling against the unculled path, pass times and draw counts. |
 | `cargo evidence session --store PATH --adapter ADAPTER_ID` | Runnable (05) | A saved world opened headless through the runtime's session and the live world, run (`--ticks N`, `--center X,Y --radius R`, `--edit TOOL,X,Y`, `--autosave TICKS\|off`) and closed in order, in its own `gpu-suite` process; passes only when the close saved the last completed tick. Create or import the store with `world-store` first; see [world format](../reference/world-format.md#operating-a-saved-world-05). |
 | `cargo evidence run --scenario resident-world --adapter ADAPTER_ID [--consumer native]` | Runnable (04–05; native since 06; complete since 07) | Executes the connected scenario through the runtime's session, the live world and a temporary store, in its own `gpu-suite` process, one item per step of the acceptance's connected trace; step 6 starts child processes of the same binary for its interruptions. `--consumer native` (06) runs the same commands and state with every session shown in the native client's window and one frame captured per step. |
-| `cargo evidence bench --profile qualification --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01; the native client since 06) | Release measurements of the frozen scenarios in the native client's real window (`native-client bench`), one sample per presented frame, with run validation and raw/summary outputs. `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
+| `cargo evidence bench --profile qualification\|scale\|capacity --adapter ADAPTER_ID --output target/evidence/RUN` | Runnable (01; the native client since 06; the window's whole-process account since 07) | Release measurements of the frozen scenarios in the native client's real window (`native-client bench`), one sample per presented frame, with run validation and raw/summary outputs; each run's summary also accounts for the measured window (process and main-thread CPU and allocations, the session's frame time by owner, transfer bytes by purpose, waits, acquisition waits, observation age). `--case NAME` (repeatable) and `--runs N` select a subset for a focused comparison. |
 | `cargo evidence check all --adapter ADAPTER_ID` | Runnable (01; complete since 07) | Docs, static, CPU, all GPU suites and the connected scenario (headless); no silent skipping. |
 
 The GPU suite names are `transfers` (02), `cells` (03), `bodies` (04), `streaming` (05), `render`
@@ -96,9 +96,9 @@ cargo build --locked --release -p monarchy-evidence --bin native-client
 
 | Command | Contract |
 | --- | --- |
-| `target/release/native-client script features --worlds DIR --world NAME --adapter ID --settings PATH --out DIR` | The [feature inventory](virtual-office/gpu-transition/acceptance.md#feature-preservation-inventory) through the input path: GPU totals, every brush, both sphere presets at the GPU-resolved cursor, attract and lift, possession with drive, jump, tether and release, look, walking and flying, detaching the focus, rule toggles and climate, keyboard save, active-world resize, window resize and minimize; each checked against its command outcome or the client's state. Writes `report.json` and frames. `NAME` is a world in `DIR` created at seed 69. |
+| `target/release/native-client script features --worlds DIR --world NAME --adapter ID --settings PATH --out DIR` | The [feature inventory](qualification.md#feature-preservation-inventory) through the input path: GPU totals, every brush, both sphere presets at the GPU-resolved cursor, attract and lift, possession with drive, jump, tether and release, look, walking and flying, detaching the focus, rule toggles and climate, keyboard save, active-world resize, window resize and minimize; each checked against its command outcome or the client's state. Writes `report.json` and frames. `NAME` is a world in `DIR` created at seed 69. |
 | `target/release/native-client script loss ...` (same arguments) | Save, edit after the save, inject a device loss and recover through the loss dialog's path: a later epoch at the saved checkpoint, the loss shown on screen. |
-| `target/release/native-client script worlds --worlds DIR --legacy FILE --adapter ID --settings PATH --out DIR` | The start screen's create, import (a copy of `FILE`, a baseline `save.redb`), open, close with save and reopen. |
+| `target/release/native-client script worlds --legacy FILE --adapter ID --out DIR [--worlds DIR] [--settings PATH]` | The start screen's create, import (a copy of `FILE`, a baseline `save.redb`), refusal of a copy with a damaged row (the copy unchanged, no world listed), open, close with save and reopen. Without `--worlds` and `--settings` the client's own default directories apply. |
 | `target/release/native-client capture --worlds DIR --world NAME --adapter ID --settings PATH --out DIR [--pose X,Y,Z,YAW,PITCH] [--frames N,...]` | Frames of a world through the client, for visual comparison. |
 
 `cargo evidence bench` builds and runs `native-client bench` itself.
@@ -119,11 +119,12 @@ it does not require rebuilding the application. Rustdoc/examples additionally ne
 format/doctest/documentation checks. Executable changes require focused owner tests and applicable
 GPU, persistence or performance evidence.
 
-During the authorized 00–07 sprint, run focused checks per stage and reserve the full workspace,
-all supported features, long coupled stress and final hardware comparison for 07. This scheduling
-exception does not postpone new shader execution, ABI tests, save-failure tests or other checks
-needed to trust the next stage. If a shared change plausibly breaks an earlier stage, rerun that
-stage's relevant coverage now.
+Run focused checks while iterating and the full gate before a qualification claim: `check all`,
+the connected scenario in the native window and the scripted window runs, and the benchmark
+profiles whose cost the change can move. A change to shaders, layouts, saving or the frame path
+does not wait for that gate to run its own GPU, persistence or timing evidence. If a shared change
+plausibly breaks an earlier owner's contract, rerun that owner's coverage now. The GPU transition
+(00–07) last ran the whole gate; its result is the [qualification](qualification.md).
 
 The static gate must include the selected equivalents of:
 

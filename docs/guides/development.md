@@ -17,6 +17,9 @@ Worlds are `<name>.world` files in `$XDG_DATA_HOME/morbid-monarchy/worlds` (or
 `$XDG_CONFIG_HOME/morbid-monarchy/client.toml`; nothing is read or written relative to the
 working directory, so the client runs the same from anywhere. The GPU adapter is chosen
 explicitly (`--adapter`, the settings file or the start screen) and never falls back to another.
+The client has no asset directory: `target/release/morbid` copied anywhere is the whole
+application, and 07 qualified a fresh start of the copied binary from an empty working
+directory with an empty home directory ([qualification](../development/qualification.md)).
 
 `world_data/save.redb` at the repository root is a save the baseline wrote. The client never opens
 it; the start screen's import makes a new world from it (give seed 69 and elevation scale 0.5, the
@@ -48,6 +51,8 @@ cargo evidence test cpu
 cargo evidence inspect-adapter
 cargo evidence test gpu --suite all --adapter vulkan-10de-2c05
 cargo evidence run --scenario resident-world --adapter vulkan-10de-2c05 --consumer native
+cargo evidence check all --adapter vulkan-10de-2c05
+cargo evidence bench --profile qualification --adapter vulkan-10de-2c05
 ```
 
 `inspect-adapter` prints a stable identifier for every adapter (`vulkan-10de-2c05` is the RTX 5070
@@ -71,7 +76,10 @@ from every crate's type inventory. `resident-world` automates the physical and s
 For performance, select a frozen profile and follow
 [the evidence protocol](../development/verification-evidence.md): `cargo evidence bench` measures
 the complete native frame in the client's window. Use pass timings (the diagnostic run, the
-`render` suite's frame cost) to locate a limit, then confirm the complete application. Keep
+`render` suite's frame cost) to locate a limit, then confirm the complete application. Each
+run's `driver.json` also accounts for the measured window as a whole: the process's and the main
+thread's CPU time and allocations per presented frame (every loop iteration and thread), the
+session's frame time by owner, transfer bytes by purpose and the swapchain acquisition's waits. Keep
 profiler capture and diagnostic modes labelled; a debug overlay that performs extra readback is
 not the normal performance profile.
 

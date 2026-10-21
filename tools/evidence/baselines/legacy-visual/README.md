@@ -3,7 +3,7 @@
 Frames of the Bevy baseline as it renders the frozen qualification scenarios, for the native
 client (06) to compare against. They record the presentation and the developer overlay with the
 default lighting and quality settings listed in
-[acceptance](../../../../docs/development/virtual-office/gpu-transition/acceptance.md#baseline-presentation-and-tuning-reference-01).
+[qualification](../../../../docs/development/qualification.md#presentation-reference).
 Pixel identity is not the goal; a changed look needs a recorded reason.
 
 | Frame | Scenario (SHA-256 prefix) | Tick | Shows |

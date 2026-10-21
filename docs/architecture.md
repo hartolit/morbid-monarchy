@@ -1,10 +1,12 @@
 # Architecture
 
-**Architecture of the GPU transition, adopted in prompt 00 and implemented through 06.** Every
+**Architecture of the GPU transition, adopted in prompt 00, implemented through 06 and qualified
+in 07.** Every
 owner below exists with its consumers: 01 created `world-model` and `tools/evidence`; 02
 `world-runtime` and `gpu-world`; 05 `world-store`; 06 `world-render` and the native client
 `morbid-app` (`apps/morbid`), and removed the Bevy baseline, its CPU engine and its chunk
-manager. [Status](product/status.md) owns what is verified, and 07 qualifies the whole. Where no
+manager; 07 qualified the whole ([qualification](development/qualification.md)).
+[Status](product/status.md) owns what is verified now. Where no
 consumer justifies a crate, a module is used instead and recorded here and in
 [ADR 0002](decisions/0002-native-composition.md).
 
@@ -33,8 +35,8 @@ and an ordered physical tick; separating them behind per-cell traits would obscu
 
 Since 06 the owners above are the only implementation; the Bevy baseline (its application,
 `monarch-engine` and `spatial-lib`) was deleted, and `9a3230c` is the last commit that builds it.
-The sprint [source audit](development/virtual-office/gpu-transition/source-audit.md) lists the
-baseline's symbols and where each responsibility went.
+The [qualification](development/qualification.md#baseline-dispositions) records what the
+baseline did and where each responsibility went.
 
 | Responsibility | Owner and behavior |
 | --- | --- |
@@ -163,8 +165,8 @@ and obligations. Normal residency metadata does not contain a permanent full cel
 
 Bodies crossing the resident boundary must have an explicit policy: request/pin needed chunks,
 clamp supported travel, or suspend/snapshot bodies with the region. They must not disappear or
-collide with an unrelated recycled slot. Prompt 04 chooses the body boundary policy; 05 completes
-its storage lifecycle. Unloaded regions do not secretly continue simulation in this sprint.
+collide with an unrelated recycled slot. 04 chose suspension at the residency edge and 05
+its storage lifecycle. Unloaded regions do not continue simulation.
 
 ## Assets and shaders
 
@@ -205,7 +207,7 @@ progress/error reporting; those waits are not hidden in performance results.
 The original Bevy app was a temporary baseline through 05; GPU stages were exercised headlessly,
 with no visual bridge. 06 made the native client the sole application and removed the
 engine-specific plugins, materials, task pools and the CPU authority path, with no fallback flag.
-07 verifies dependency/removal and qualification. The CPU reference of the cell rules remains in
+07 verified the dependency closures and the removal and qualified the whole. The CPU reference of the cell rules remains in
 the development evidence leaf as a test oracle. Historical source remains in Git (`9a3230c` is
 the last commit with the baseline) and in the retained baseline artifacts under
 `tools/evidence/baselines/`.

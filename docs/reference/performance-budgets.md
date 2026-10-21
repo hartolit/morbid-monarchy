@@ -1,8 +1,8 @@
 # Performance budgets
 
 **Frozen qualification contract, the measured baseline (01), the measured transfer lifecycle
-(02), the material phases (03), bodies (04), streaming and checkpoints (05), and the native
-client's renderer and frame (06).** 00 adopted the evidence policy in
+(02), the material phases (03), bodies (04), streaming and checkpoints (05), the native
+client's renderer and frame (06), and the integrated qualification (07).** 00 adopted the evidence policy in
 [ADR 0003](../decisions/0003-behavior-and-performance-evidence.md). 01 froze the profile inputs as
 scenario files, calibrated the run protocol, and measured the legacy application
 ([below](#measured-legacy-baseline-01)). The targets are engineering targets, not prior promises
@@ -418,7 +418,7 @@ peaks at 8,616,352 requested device bytes, exactly the plan's overlap bound.
 
 **Renderer.** The `render` suite's `frame-cost` case draws generated terrain (seed 69, every rule
 on) offscreen at 1920×1080 from the qualification camera with the renderer's pass timestamps, on
-the tree committed as «RENDER_COMMIT» (RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux 7.2.11). The
+the tree committed as `da1c3ba` (2026-10-20 12:40 UTC; RTX 5070 Ti, Vulkan, NVIDIA 615.78.08, Linux 7.2.11). The
 scene passes are the shadow map, the landscape layers and the spheres; post is bloom and tone
 mapping. Medians of the measured frames:
 
@@ -476,8 +476,185 @@ measured around `get_current_texture` in a short idle run, on every presented fr
 immediate present mode (about 94 frames a second) and on 369 of about 2,400 with mailbox (about
 400 frames a second); submission took 0.3 ms and the present call 0.06 ms. The interval matches
 no display's refresh, so it is not pacing by the compositor's frame rate; the client now prefers
-mailbox. These waits are the 10.6–11 ms frames that set every case's p95; 07 investigates their
-source.
+mailbox. These waits are the 10.6–11 ms frames that set every case's p95; 07 measured them on
+other paths ([below](#integrated-qualification-07)).
+
+## Integrated qualification (07)
+
+**Result.** The qualification profile meets its budget in every run (p95 at most 10.78 ms, p99 at
+most 10.98 ms, against 16.67 and 25 ms) at 60 ticks/s, where the baseline missed it in
+body-contact and coupled; the scale profile holds 60 ticks/s with no frame over 16.67 ms, where the
+baseline fell to 17–30 ticks/s; the capacity profile admits radius 32 with 4,096 bodies and
+reports its limits rather than truncating work. No full-grid transfer occurs, the CPU's share of a
+tick fell by a factor of 30 to over 100, no frame waits for the device, at most three ticks are in
+flight and selected observations are at most two ticks old. The one regression against the
+baseline is the p95 of idle and streaming (10.7 against 6.2 and 6.1 ms), which the acquisition
+waits of uncapped presentation explain (presentation without vsync, below); with vsync, a person's
+default, they do not occur.
+
+Executed evidence, measured on 2026-10-21 between 07:57 and 09:03 UTC with `cargo evidence bench
+--profile qualification|scale|capacity --adapter vulkan-10de-2c05 --runs 5` on `eb9d8fb`, a clean
+tree.
+
+| Identity | Value |
+| --- | --- |
+| Source | `eb9d8fb`, clean; Rust 1.99.0; `Cargo.lock` tracked; release build |
+| Application | The native client (`morbid-app`) in its real window under `native-client bench`: a new world per run made to the frozen scenario, its commands through the client's command path for their exact ticks, the camera on its path by tick, the overlay shown |
+| Host | Ryzen 9 5950X (32 threads), 31 GiB, Linux 7.2.11, KDE Plasma (KWin Wayland), displays at 240 and 144 Hz; the person's desktop in use (a browser and chat clients open) |
+| Adapter | RTX 5070 Ti, Vulkan, NVIDIA 615.78.08 |
+| Presentation | 1920×1080 window, no vsync (mailbox), the client's full renderer and overlay |
+| Protocol | Five valid runs per case plus one diagnostic run with GPU timestamps; the scenario's warm-up and measured ticks (qualification and scale 300 + 1,800, capacity 120 + 600) |
+| Validity | No run contended: all-core CPU busy 1–13% and GPU utilization 0–11% before each run. Rejected and repeated for presentation: qualification mixed twice (the desktop resized and later maximized the window), scale idle once (KWin gave it 1920×1052), capacity coupled three times (paced at 16.67 ms, below) and was run again; every attempt is in the reports |
+| Records | `target/evidence/07-bench-{qualification,scale,capacity}/` on the nominated machine: `report.json`, every run's `samples.csv`, `driver.json` and logs |
+
+Frame times are in milliseconds over the measured ticks, one sample per presented frame; the
+median is the median of the five run medians, and every run's p95 is listed because the
+acquisition waits below come and go between runs. Process and main-thread CPU are per presented
+frame over the whole measured window (every loop iteration and thread). Device time per tick and
+the body pass come from the diagnostic run. Upload and readback are every byte the runtime moved,
+by second. GPU memory is what nvidia-smi attributed to the process at its peak. The baseline
+column is the Bevy application's five-run median and median p95 ([above](#measured-legacy-baseline-01)),
+which sampled its main schedule rather than presented frames.
+
+**Qualification** (radius 6, 64 bodies):
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | > 16.67 ms | Ticks/s | Process CPU / main thread per frame | Iterations per frame | Device tick (body pass) | Upload / readback | RSS / GPU memory | Baseline median / p95 |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 | 1.08 | 10.69, 10.76, 10.75, 10.75, 10.66 | 10.98 | 12.29 | 0 | 60.0 | 1.01 / 0.98 | 3.6 | 0.18 | 16.2 / 76.9 KiB/s | 291 / 241 MiB | 3.58 / 6.20 |
+| flow | 5 / 5 | 1.12 | 10.78, 10.73, 10.68, 1.52, 1.46 | 10.98 | 13.29 | 0 | 60.0 | 1.06 / 1.03 | 4.3 | 0.23 | 26.0 / 85.3 KiB/s | 381 / 242 MiB | 11.04 / 14.56 |
+| body-contact | 5 / 5 | 1.14 | 2.03, 2.03, 2.03, 10.67, 10.65 | 10.86 | 11.89 | 0 | 60.0 | 1.52 / 1.19 | 4.4 | 0.84 (0.65) | 52.7 / 442.5 KiB/s | 452 / 300 MiB | 14.68 / 18.68 |
+| mixed | 5 / 7 | 1.07 | 10.66, 10.65, 10.62, 1.26, 10.66 | 10.86 | 12.53 | 0 | 60.0 | 1.02 / 0.99 | 4.0 | 0.31 | 21.1 / 81.1 KiB/s | 380 / 242 MiB | 4.59 / 12.22 |
+| streaming | 5 / 5 | 1.15 | 10.61, 10.63, 10.61, 10.62, 10.61 | 10.88 | 13.01 | 0 | 60.0 | 1.17 / 1.12 | 4.6 | 0.20 | 1214.7 / 668.0 KiB/s | 328 / 241 MiB | 3.57 / 6.07 |
+| coupled | 5 / 5 | 1.24 | 2.70, 10.60, 3.11, 10.63, 10.63 | 10.93 | 65.97 | 1 | 60.0 | 1.29 / 1.26 | 5.4 | 0.88 (0.66) | 165.2 / 516.2 KiB/s | 344 / 241 MiB | 17.12 / 28.64 |
+
+Every run of every case meets the qualification budget (p95 ≤ 16.67 ms, p99 ≤ 25 ms) and holds
+60 ticks/s with nothing discarded, no frame wait and at most three ticks in flight. One frame in
+all thirty runs exceeded 16.67 ms: 65.97 ms in coupled run 5 at tick 1,532, during which the loop
+presented nothing and ran no tick (the presenting iteration's CPU time was 0.44 ms and the next
+frame caught up three ticks); no device or maintenance wait was recorded and the cause is outside
+the measured iterations, not identified. The frame medians are 0.07–0.32 of the baseline's; the
+p95s are either 1.3–3.1 ms or 10.6–10.8 ms, by whether a run met the acquisition waits, so in
+idle and streaming, where the baseline's p95 was 6.2 and 6.1 ms, a native run's p95 is above it
+when the waits occur.
+
+**Scale** (radius 16, 256 bodies):
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | > 16.67 ms | Ticks/s | Process CPU / main thread per frame | Iterations per frame | Device tick (body pass) | Upload / readback | RSS / GPU memory | Baseline median / p95 |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 6 | 4.77 | 10.74, 10.73, 10.76, 5.72, 5.73 | 11.01 | 13.25 | 0 | 60.0 | 4.87 / 4.69 | 19.7 | 0.73 | 16.2 / 76.9 KiB/s | 360 / 498 MiB | 28.22 / 36.67 |
+| flow | 5 / 5 | 4.67 | 5.61, 5.63, 5.66, 5.60, 5.63 | 5.94 | 6.23 | 0 | 60.0 | 5.25 / 4.84 | 20.8 | 0.75 | 26.0 / 85.3 KiB/s | 317 / 498 MiB | 147.86 / 160.39 |
+| body-contact | 5 / 5 | 4.76 | 6.75, 6.78, 6.76, 6.77, 6.76 | 7.10 | 7.82 | 0 | 60.0 | 6.73 / 5.23 | 21.5 | 1.80 (0.98) | 52.7 / 442.5 KiB/s | 432 / 574 MiB | 205.91 / 218.14 |
+| mixed | 5 / 5 | 4.55 | 5.69, 5.65, 5.68, 5.67, 5.67 | 6.01 | 6.90 | 0 | 60.0 | 5.53 / 4.74 | 20.3 | 0.84 | 21.1 / 81.1 KiB/s | 316 / 498 MiB | 170.33 / 206.86 |
+| streaming | 5 / 5 | 4.71 | 5.88, 5.86, 5.94, 5.84, 5.90 | 7.12 | 8.50 | 0 | 60.0 | 5.87 / 4.90 | 18.3 | 0.77 | 3123.7 / 2086.7 KiB/s | 499 / 498 MiB | 27.03 / 52.63 |
+| coupled | 5 / 5 | 4.90 | 6.90, 6.90, 6.92, 6.91, 6.87 | 7.27 | 8.80 | 0 | 60.0 | 7.53 / 5.37 | 23.2 | 1.82 (1.03) | 322.4 / 618.5 KiB/s | 465 / 574 MiB | 223.80 / 252.64 |
+
+The scale profile holds 60 ticks/s in every case, where the baseline fell to 17–30 in every
+active case and discarded 30–69 s of simulated time per run; no frame exceeded 16.67 ms, so the
+scale profile meets even the qualification budget. Frame medians are 0.02–0.17 of the baseline's,
+and the frame is now the renderer's (4.2 ms of scene passes at radius 16, `render` `frame-cost`).
+
+**Capacity** (radius 32 on both axes: 4,225 chunks, 17.3 million cells; 4,096 bodies in
+body-contact and coupled; 120 warm-up and 600 measured ticks, so fewer than 1,800 frames a run;
+no frame-rate promise). Coupled is from a second invocation on the same commit
+(`target/evidence/07-bench-capacity-coupled-2/`): in the first, three of seven attempts were
+rejected as paced at 16.67 ms and the case had four valid runs. Those frames were isolated
+(never two in a row) and 43 of the 46 in the worst attempt carried three catch-up ticks: with the
+device saturated, frames end at the tick cadence, which equals a 60 Hz refresh interval, so the
+validity rule's spike test rejects them although no compositor throttled the window. Every
+attempt of both invocations is in the reports.
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | > 16.67 ms | Ticks/s | Process CPU / main thread per frame | Iterations per frame | Device tick (body pass) | Upload / readback | RSS / GPU memory |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 | 18.26 | 21.39, 21.46, 21.25, 21.30, 21.26 | 21.87 | 22.52 | 2688 | 60.0 | 21.91 / 18.43 | 41.6 | 3.36 | 16.2 / 76.9 KiB/s | 359 / 1009 MiB |
+| flow | 5 / 5 | 18.27 | 21.46, 21.37, 21.23, 21.34, 21.33 | 21.99 | 22.58 | 2690 | 59.9 | 21.52 / 18.46 | 40.8 | 3.35 | 26.0 / 85.3 KiB/s | 319 / 1010 MiB |
+| body-contact | 5 / 5 | 26.59 | 34.34, 33.74, 42.50, 34.25, 34.26 | 43.82 | 44.78 | 1844 | 52.4 | 39.88 / 28.02 | 56.3 | 8.07 (4.86) | 46.3 / 388.8 KiB/s | 408 / 1062 MiB |
+| mixed | 5 / 5 | 18.01 | 21.22, 20.99, 21.11, 21.52, 21.08 | 23.08 | 25.33 | 2724 | 59.9 | 21.45 / 18.23 | 40.2 | 3.41 | 21.1 / 81.2 KiB/s | 320 / 1009 MiB |
+| streaming | 5 / 5 | 18.84 | 27.57, 26.77, 26.93, 26.78, 26.50 | 30.60 | 34.65 | 1915 | 58.8 | 26.53 / 19.67 | 37.5 | 3.29 | 6242.7 / 3980.2 KiB/s | 460 / 1778 MiB |
+| coupled | 5 / 5 | 27.12 | 48.83, 48.69, 37.53, 37.56, 37.93 | 52.12 | 54.29 | 1996 | 50.9 | 38.71 / 27.50 | 54.6 | 7.83 (4.65) | 636.6 / 739.8 KiB/s | 411 / 1582 MiB |
+
+Every workload was admitted: the window's plan fits the requested limits (the 138,444,800-byte
+binding) and the 4,096-body table, the worlds became resident in 3.5–3.6 s, and gpu-world's
+requested device bytes peaked at 486 MiB (967 MiB while a moving window's old and new
+allocations overlap), while nvidia-smi attributed 1.0–1.8 GiB to the process with the renderer's
+targets and buffers. No tick was inconsistent and nothing was truncated. With 4,096 dense bodies a
+tick takes 7.8–8.1 ms of device time and the renderer most of the rest of a 27 ms frame, so the
+simulation falls behind real time visibly: the runtime refuses ticks while three are in flight
+(about 22,000 counted refusals a run), the clock discards 78–103 owed ticks a run beyond its
+catch-up limit (counted, as `ticks_discarded`), and the 4,096 spawns, more than a tick's 256
+commands, arrive late (3,072 of them) but all exist. Body samples stayed at most two ticks old.
+The streaming case moves 6.1 MiB/s of chunks in and 3.9 MiB/s of changed payloads out.
+
+**Simulation-related CPU work.** The baseline spent 2.1–9.0 ms of CPU per tick on its
+simulation and 4.8–5.3 ms on bodies at qualification size, 7.6–39.6 ms and 17.0 ms at scale. On
+`eb9d8fb` the CPU's share of a tick is encoding and submitting it: 53–67 µs for the material
+phases at radius 6 (`cells` `activity-measurement`, idle to fully active), 211 µs with the
+qualification body workload and 302 µs with the scale's (`bodies` `body-legacy-workloads`), the
+session's owners 0.07 ms per frame at one tick a frame (`streaming-measure`); the physics runs on
+the device in 0.2–0.9 ms per tick at qualification size and 0.7–1.8 ms at scale (the diagnostic
+runs above). Per tick that is 30 to over 100 times less CPU work at qualification size (2.2 ms
+against about 0.07 ms when idle, 12.2 ms against about 0.28 ms with bodies) and about 150 times
+less with the scale's bodies (46.5 ms against 0.30 ms). The client's whole process uses more CPU
+than these figures because without vsync its loop polls several times per presented frame and
+lays out the overlay each time (below): per second it used 0.4–1.2 of a core at qualification
+size and 0.9–1.4 at scale, most of it on the main thread.
+
+**Transfers and memory.** The baseline uploaded the grid and copied it every tick: 0.60–0.85
+GiB/s at qualification size, 0.76–3.15 GiB/s at scale. The native client uploads 16–53 KiB/s
+with a still camera (tick parameters and commands), 165–322 KiB/s in the coupled cases and
+1.2–3.1 MiB/s in the streaming cases (chunks entering the window, 32 KiB each), and reads back
+77–620 KiB/s (results, events, body samples and accounting) and up to 2.0 MiB/s while streaming
+(the payloads of changed chunks leaving the window); no full-grid transfer occurs. Resident memory is 291–499 MiB against the baseline's 790–1,052 MiB,
+and the GPU memory attributed to the process 241–300 MiB at qualification size (the baseline's
+peaked at 510 MiB) and 498–574 MiB at scale (574 MiB).
+
+**Allocations.** About 2,000–2,900 heap allocations per presented frame at qualification size
+and 8,500–10,800 at scale, nearly all on the main thread: egui's layout in every loop iteration
+(about 500 each) and wgpu's command recording on the submit path (about 350 per tick, as 04
+measured). Application-owned pools allocate nothing after warm-up; these are reported, not tuned.
+
+
+**Presentation without vsync.** The frozen profiles present without vsync, as the baseline did,
+so the client presents faster than the displays refresh. Measured on 2026-10-21 in the idle
+case (900 measured ticks, quiet host; `target/evidence/07g-presentation/`), the swapchain
+acquisition then waits a constant 10.09 ms on a share of the presented frames, and those
+frames set the 95th percentile:
+
+| Path | Present mode | Frames waiting > 5 ms | Their wait | Frame median / p95 / p99 | Loop iterations per presented frame |
+| --- | --- | ---: | ---: | ---: | ---: |
+| KWin Wayland | mailbox | 14.3% | 10.09 ms (max 10.49) | 1.08 / 10.67 / 10.81 ms | 3.8 |
+| KWin Wayland, one more swapchain image | mailbox | 10.7% | 10.08 ms (max 10.54) | 1.06 / 10.61 / 10.67 ms | 4.1 |
+| KWin through Xwayland | immediate (no mailbox offered) | 21.7% | 10.09 ms (max 10.33) | 1.05 / 10.72 / 10.83 ms | 2.9 |
+| KWin Wayland, vsync | FIFO | 0 | – (3.59 ms median, the 240 Hz refresh) | 4.17 / 4.26 / 4.31 ms | 1.0 |
+
+The same constant wait on two window systems, insensitive to the swapchain's length and absent
+whenever presentation follows the display, points at the driver's wait for a free image when
+frames outrun the compositor (an inference: neither the driver's nor KWin's source was
+inspected). A person's client presents with vsync by default and never waits in this way; the
+qualification budget holds either way.
+
+**The loop's iterations.** Without vsync the client's loop never blocks: while both
+presentation slots are busy it runs iterations that present nothing, each laying out the
+overlay. In the idle case above that is 3.8 iterations, 0.98 ms of the main thread's CPU time and
+about 2,000 heap allocations (nearly all egui's) per presented frame, against 0.45 ms for the
+presenting iteration alone; with vsync it is one iteration, 0.61 ms and 830 allocations. Laying
+out the overlay only when a frame is presented was tried and not kept: the thread stays busy
+either way without vsync, and the change made scripted input timing flaky.
+
+**Saving and streaming, by owner.** `streaming-measure` on 2026-10-21 (07's gate on `eb9d8fb`'s
+tree, quiet host) breaks 05's frame costs down by the session's owners
+(`world_runtime::session::FrameTimes`) and by thread:
+
+| Frames | CPU p50 / p95 (ms) | Runtime p95 | Residency p95 | Checkpoints p95 | Transfers p95 | Allocations: session thread / store workers |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Resident, 300 frames | 0.071 / 0.096 | 0.080 | 0.012 | 0.000 | 0.000 | 119 / 0 |
+| Saving, until committed | 0.077 / 0.518 | 0.077 | 0.014 | 0.422 | 0.037 | 147 / 159 |
+| Walking, 8 moves | 0.128 / 0.430 | 0.153 | 0.306 | 0.106 | 0.043 | 277 / 183 |
+
+A save's extra 0.42 ms at p95 is the checkpoint owner's frame work, and walking's 0.33 ms is the
+residency owner's; the store's worker threads make 160–180 of the extra allocations per frame
+(encoding and redb transactions) and the session thread 30–160 (transfer submissions inside
+wgpu and the owners' bookkeeping). No owner waits. These are small against the 16.67 ms frame
+budget and are reported, not tuned.
 
 ## Structural gates
 

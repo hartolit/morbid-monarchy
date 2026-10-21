@@ -1,7 +1,8 @@
 # GPU transition acceptance
 
-**A01–A09 satisfied for their stages' scope (01–05); A10–A15 not run.** The
-[handoff](handoff.md) records the evidence. 00 reviewed this matrix against checkout `a9c1539`
+**A01–A15 satisfied (07, 2026-10-21); the final outcome of each item is in the
+[qualification](../../qualification.md#acceptance-outcomes).** The [handoff](handoff.md)
+records the stages' evidence. 00 reviewed this matrix against checkout `a9c1539`
 and found no existing test intention or tool missing from it. The feature inventory below adds the controls it
 had left implicit, and one conflict is recorded under it. This is the shared outcome matrix, not a
 second implementation prompt or a substitute for the canonical contracts. A stage records concrete

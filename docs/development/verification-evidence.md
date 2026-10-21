@@ -6,8 +6,8 @@ This document owns how evidence is collected and what it establishes. Commands a
 static and CPU lanes, adapter inspection and the baseline benchmark; 02 the shader validation
 item and the `transfers` GPU suite; 03 the `cells` GPU suite; 04 the `bodies` suite and
 `resident-world`; 05 the `streaming` suite; 06 the `render` suite, `resident-world` in the native
-window, scripted runs of the real client and the benchmark of the native frame. Workflow lists
-each command's state. An unimplemented or unavailable suite cannot return success.
+window, scripted runs of the real client and the benchmark of the native frame; 07 completed
+`resident-world` and the benchmark's whole-process account. Workflow lists each command's state. An unimplemented or unavailable suite cannot return success.
 
 ## Evidence lanes
 
@@ -95,24 +95,38 @@ inject a failure. A suite that cannot detect an introduced violation is not suff
 
 ## Connected scenario
 
-`resident-world` is the named end-to-end scenario, delivered incrementally and completed in 07.
-Start from known terrain with a sand bank and water basin. Drive a sphere across the bank into the
-water; produce a crater/rut and a displacement wave. Apply a material brush using a GPU-resolved
-ray, observe its result and a selected body/contact summary on the CPU. Move focus across chunk
-boundaries, capture dirty outgoing state, load additional chunks, then return. Save a complete
-checkpoint, destroy the application/store objects, reopen, and compare the promised state.
+`resident-world` is the named end-to-end scenario, delivered stage by stage (04–06) and completed
+in 07. It uses a fixed effective configuration and synthetic inputs through the same command
+boundary as the native client, in a temporary store, never a user's world:
 
-An adversarial version delays readbacks, reorders load completions, fails a store write, resizes
-under pending work and then recovers. It must not lose dirty material, apply a stale completion,
-report an unfinished tick as saved, or resurrect an older chunk. Use temporary stores, never a
-user's only `world_data` directory.
+1. **known-terrain:** known chunks (a sand bank on rock, a slope, a water basin) are the store's
+   saved state; they load and read back exactly at chunk corners, negative cells and the edge.
+2. **sphere-into-water:** a controlled sphere is driven across the bank into the water; it ruts
+   the sand and displaces water, every tick balances and the totals change by exactly the
+   declared sinks.
+3. **ray-edit-and-consumer:** a brush stroke at a GPU-resolved ray is acknowledged and observed;
+   a CPU consumer reacts to the sphere's observed immersion and its reaction applies, with the
+   identity, tick age and admitted inputs measured.
+4. **move-and-return:** the window moves until the changed regions leave it, they are captured
+   before reuse, and focus returns before a deliberately delayed write finishes: the newest
+   retained state wins, and the suspended sphere resumes once.
+5. **checkpoint-and-reopen:** a complete checkpoint at one completed tick, with bodies and
+   configuration; the application, runtime and store objects are destroyed, reopened and
+   compared.
+6. **adversarial-recovery:** dense bodies at a chunk and tile seam with brush edits and phase
+   changes while the event consumer, readbacks and spawn outcomes are delayed; stale handles and a
+   full body table; a rebase across negative coordinates with a held write and reversed
+   deliveries; held deliveries under an overlapping resize, reordered loads, failed writes and a
+   failed and retried save; then device loss, process interruption before and after publication,
+   orderly close and a fresh reopen, each recovering the actual last complete checkpoint with its
+   bodies and configuration, never a fictional command replay.
 
-The native presentation trace must demonstrate the same scenario and actual buffers, not a video
-of unrelated CPU gameplay. The harness can drive synthetic input through the normal command
-boundary; it must not patch GPU buffers behind the production owners to force a result. Since 06
+The trace is an integration obligation, not the entire test suite: fine-grained cases locate
+errors, and an overlay or a video cannot establish conservation or durability. Since 06
 `--consumer native` runs the same scenario with every session presented in the client's window
-(`morbid_app::viewer`), captioned and captured per step, and the `native-client` scripts drive the
-real client's input, overlay and command path and check each tool against its command outcome.
+(`morbid_app::viewer`), captioned and captured per step; step 6's interrupted children run
+headless in their own processes. The `native-client` scripts drive the real client's input,
+overlay and command path and check each tool against its command outcome.
 
 ## Measurement outputs
 
@@ -147,7 +161,8 @@ credentials, saves or opaque profiler captures into public artifacts without rev
 
 ## Completion evidence
 
-Each stage keeps one concise handoff with tested revision, affected coverage, actual commands and
-remaining gaps. 07 publishes a permanent summary under `docs/development/` or another maintained
-owner and updates status. Retain raw evidence outside the temporary sprint directory before its
-removal. The summary records conclusions and limits, not thousands of log lines.
+Each assignment keeps one concise handoff with tested revision, affected coverage, actual
+commands and remaining gaps while it is active. The GPU transition's final acceptance, with each
+item's evidence and where the raw reports are kept, is the [qualification](qualification.md);
+[status](../product/status.md) carries the current result. Raw evidence stays outside tracked
+documents; summaries record conclusions and limits, not thousands of log lines.

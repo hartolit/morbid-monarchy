@@ -1,11 +1,13 @@
 # CPU–GPU execution contract
 
-**Implemented in 02 for the command, query and transfer path, in 03 for the material phases and
-in 04 for bodies, rays and the body observations.** This document owns the semantic
-obligations. Since 02 the interfaces exist: the port is `world_runtime::port`, its GPU
-implementation `gpu_world::world::GpuWorld`, and the `transfers` (02), `cells` (03) and
-`bodies` (04) GPU suites execute this contract on a device. Change this account with the implementation; do not
-maintain a parallel prose-only protocol.
+**Implemented in 02 for the command, query and transfer path, in 03 for the material phases, in
+04 for bodies, rays and the body observations, in 05 for snapshots and checkpoints and in 06 for
+presentation on the same timeline; qualified as a whole in 07.** This document owns the semantic
+obligations. The port is `world_runtime::port`, its GPU implementation
+`gpu_world::world::GpuWorld`, and the `transfers` (02), `cells` (03), `bodies` (04), `streaming`
+(05) and `render` (06) GPU suites and the connected `resident-world` scenario execute this
+contract on a device. Change this account with the implementation; do not maintain a parallel
+prose-only protocol.
 
 ## Identity and time
 
@@ -29,7 +31,7 @@ GPU completion of a submission and the CPU decoding its results are reported sep
 Normal command retries with the same ID and payload cannot apply twice within the live session;
 reuse with different payload is rejected. Keep retention bounded: an acknowledged/expired ID has
 an explicit floor or generation rule, not indefinite receipts. A restart creates a new session;
-this sprint does not promise replay of all unsaved commands after a crash.
+there is no replay of unsaved commands after a crash (no command journal).
 
 *Implemented (02), the floor rule.* `world_runtime::receipts::Receipts` holds a fixed number of
 receipts (default 4,096). Issuers choose identities. An identity at or above the floor and not
@@ -644,7 +646,7 @@ per-body/interaction accumulators with acknowledged watermarks; they cannot disa
 append buffer filled. Record aggregation semantics so repeated contact does not apply damage twice.
 An accumulator's numeric range and handle retirement must also be bounded and tested.
 
-This sprint implements a real CPU consumer for command outcomes and selected contact/immersion
+The runtime implements a real CPU consumer for command outcomes and selected contact/immersion
 observations, including an overflow/age display. It does not claim the baseline already had a
 working damage/audio system. Do not manufacture per-cell “changed” events as the normal bridge.
 
@@ -674,7 +676,10 @@ stays) and the next drain delivers it; removals that do not fit wait, one per sl
 beyond that are counted unreported, their receipts still holding them. The cosmetic producer is
 one `EVENT_BODY` per body per tick, coalescing its craters, splashes, contacts and landings and
 its strongest impact; overflow is counted on the device and in the ledger. The ledger adds every
-`BodiesCompleted` report into `LedgerSummary::bodies`. Sixty-four samples are 6 KiB per tick.
+`BodiesCompleted` report into `LedgerSummary::bodies`, and since 07 every tick's cell report into
+`LedgerSummary::cells`, so the tools and reactions of a span can be checked against totals
+measured at its ends (`resident-world` step 6 does, exactly). Sixty-four samples are 6 KiB per
+tick.
 
 The rings are sized from the budgets: 256 commands and their results are 24 KiB per tick, at most
 96 KiB per presented frame at the default catch-up of four ticks, inside the 256 KiB budget; the
@@ -731,9 +736,9 @@ the budget without allocating, so the residency owner learns of a refusal before
 
 Execute on real GPU resources: packed-word roundtrip; empty and partial workgroups; repeat/reset;
 stale command/body/slot rejection; ordered edit plus query; delayed map completion; zero/full
-observation queues; repeated resize; controlled device-loss injection; and resource-limit refusal.
-Add family-specific physics and cross-family tests as the sprint progresses. Shader validation or
-CPU emulation alone cannot satisfy this boundary.
+observation queues; repeated resize; controlled device-loss injection; and resource-limit refusal,
+with family-specific physics and cross-family tests. Shader validation or CPU emulation alone
+cannot satisfy this boundary.
 
 `cargo evidence test gpu --suite transfers --adapter ID` executes these on the named adapter, one
 process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 28 cases
@@ -747,3 +752,9 @@ GPU cases, geometry probes, the broadphase oracle, handles and stale generations
 clock, clusters, fast bodies, shared deformation, edits under a resting body, the residency
 edge, rays against an independent reference, ray-targeted commands, controls through receipts,
 observation delivery under pressure and the measurements, 32 cases (`target = "gpu:bodies"`).
+`--suite streaming` (05, 19 cases) executes residency, snapshots, checkpoints and recovery over
+real temporary stores, and `--suite render` (06, 12 cases) the renderer's reads of this state.
+`cargo evidence run --scenario resident-world` executes the whole trace through the runtime's
+session, the live world and a store, headless or in the native window; its step 6 combines dense
+bodies at a seam with edits and phase changes, delayed consumers and readbacks, a rebase across
+negative coordinates, failed writes and saves, device loss and process interruption (07).
