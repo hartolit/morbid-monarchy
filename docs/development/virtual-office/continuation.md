@@ -26,8 +26,9 @@ anything lasting into its maintained owner.
   replay from a checkpoint and the cost of checkpoint cadence (`streaming` `replay-reproduction`,
   `checkpoint-cadence-*`); `0ec68c5` records the decision
   ([ADR 0004](../../decisions/0004-bounded-loss-by-checkpoint-cadence.md), the
-  [whiteboard topic](whiteboard/discussions/command-journal.md)); `b7d86bb` tests version-1
-  worlds against a committed fixture and refuses damaged ones unchanged; `21674ad` keeps the
+  [whiteboard topic](whiteboard/discussions/command-journal.md)); `b7d86bb` refuses damaged
+  worlds before opening them for writing (its version-1 fixture was removed again: no save
+  compatibility before release, the user's decision); `21674ad` keeps the
   world snapshot's device image between saves; `2932764` autosaves every 60 ticks by default and
   never off, with the `bounded-loss` case. Measurements in the
   [budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07), reports under
@@ -64,8 +65,7 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    times of autosave off ([budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07));
    `features` last ran on `2c63b64`, and the frozen benchmark protocol still saves never. A
    command journal for a loss below the cadence is parked on the whiteboard with what it needs
-   first; a future change of the format, layout, physics or generator still needs a migration of
-   version-1 worlds, which the `world-store` fixture test enforces.
+   first.
 
 The [roadmap](../../product/roadmap.md#after-qualification) says how to choose what comes after
 the transition.

@@ -67,7 +67,7 @@ of storage traffic. Chosen: (b), recorded in ADR 0004.
 
 1. The activity state in every checkpoint: each tile's changed and persist bitmaps (16 B per
    tile, 1 KiB per chunk), copied with the world snapshot and restored without the activation's
-   wake. That is a format version 2 and a migration of version-1 worlds. The alternative, waking
+   wake. That is a format version 2 (before release older worlds are simply refused). The alternative, waking
    every cell of the running world at each checkpoint, makes saving change the world.
 2. Residency in the journal: the tick each chunk is activated or retired at and the revision it
    came from, window moves and tick-rate changes; replay holds ticks until the journaled chunks

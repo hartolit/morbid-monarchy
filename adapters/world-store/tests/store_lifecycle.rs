@@ -27,6 +27,7 @@ use world_model::{
 use world_runtime::{
     ids::{ChunkRevision, SessionEpoch, Tick, WorldId},
     port::ResidentWindow,
+    session::SessionPlan,
     store::{
         CheckpointId, ChunkPayload, ChunkRow, Conflict, Generator, PhysicalConfig, Publication,
         StoreError, StoredItem, Unsupported, WorldHeader, WorldOrigin, WorldStore,
@@ -612,6 +613,139 @@ fn files_that_are_not_saved_worlds_are_refused_unchanged() {
             refused.err()
         );
         assert_eq!(fs::read(path).expect("bytes"), before, "{}", path.display());
+    }
+}
+
+/// Rewrites one row of the database at `path` through redb, as damage inside a valid file.
+fn damage_row<K: redb::Key + 'static>(
+    path: &Path,
+    table: redb::TableDefinition<K, &'static [u8]>,
+    key: K::SelfType<'_>,
+    change: fn(Vec<u8>) -> Vec<u8>,
+) where
+    for<'a> K::SelfType<'a>: Copy,
+{
+    let db = Database::open(path).expect("raw open");
+    let txn = db.begin_write().expect("write");
+    {
+        let mut rows = txn.open_table(table).expect("table");
+        let bytes = rows.get(key).expect("read").expect("row").value().to_vec();
+        rows.insert(key, change(bytes).as_slice()).expect("damage");
+    }
+    txn.commit().expect("commit");
+}
+
+/// Re-seals a row whose bytes were changed on purpose, so only the change is wrong.
+fn reseal(mut bytes: Vec<u8>) -> Vec<u8> {
+    let end = bytes.len() - 4;
+    let checksum = format::crc32c(&bytes[..end]);
+    bytes[end..].copy_from_slice(&checksum.to_le_bytes());
+    bytes
+}
+
+/// Opening a world for play changes its file even when nothing is written, so a world whose
+/// header, latest checkpoint or latest body set is damaged, or from another format version or
+/// physics revision, must be refused by the read-only look before that, and left byte for byte.
+#[test]
+fn damaged_and_foreign_worlds_are_refused_before_anything_is_written() {
+    let scratch = Scratch::new("refused");
+    let original = scratch.path("world.redb");
+    {
+        let store = create(&original, StoreFaults::new());
+        write(&store, A, 1, 3).expect("write");
+        checkpoint(&store, 2, 40, &[(A, ChunkRevision::new(1))]).expect("publish");
+        store.end_session().expect("closed in order");
+    }
+    const WORLD: redb::TableDefinition<&str, &[u8]> = redb::TableDefinition::new("world");
+    const BODIES: redb::TableDefinition<u64, &[u8]> = redb::TableDefinition::new("bodies");
+    const CHECKPOINTS: redb::TableDefinition<u64, &[u8]> =
+        redb::TableDefinition::new("checkpoints");
+    // Byte 12 lies inside every row's body; byte 4 is the format version; byte 20 of the
+    // header is its physics revision.
+    let flip = |mut bytes: Vec<u8>| {
+        bytes[12] ^= 0x10;
+        bytes
+    };
+    let flip: fn(Vec<u8>) -> Vec<u8> = flip;
+    type Expected = fn(&StoreError) -> bool;
+    let cases: Vec<(&str, Expected)> = vec![
+        ("damaged header", |error| {
+            matches!(
+                error,
+                StoreError::Corrupt {
+                    item: StoredItem::Header,
+                    ..
+                }
+            )
+        }),
+        ("future format version", |error| {
+            matches!(
+                error,
+                StoreError::Unsupported {
+                    item: StoredItem::Header,
+                    detail: Unsupported::FormatVersion {
+                        stored: 2,
+                        supported: 1
+                    },
+                }
+            )
+        }),
+        ("another physics revision", |error| {
+            matches!(
+                error,
+                StoreError::Unsupported {
+                    item: StoredItem::Header,
+                    detail: Unsupported::Physics { .. },
+                }
+            )
+        }),
+        ("damaged latest pointer", |error| {
+            matches!(
+                error,
+                StoreError::Corrupt {
+                    item: StoredItem::Current,
+                    ..
+                }
+            )
+        }),
+        (
+            "damaged manifest",
+            |error| matches!(error, StoreError::Corrupt { item: StoredItem::Manifest(id), .. } if *id == CheckpointId::new(2)),
+        ),
+        (
+            "damaged body set",
+            |error| matches!(error, StoreError::Corrupt { item: StoredItem::Bodies(id), .. } if *id == CheckpointId::new(2)),
+        ),
+    ];
+    for (index, (what, expected)) in cases.iter().enumerate() {
+        let path = scratch.path(&format!("case-{index}.redb"));
+        fs::copy(&original, &path).expect("copy");
+        match index {
+            0 => damage_row(&path, WORLD, "header", flip),
+            1 => damage_row(&path, WORLD, "header", |mut bytes| {
+                bytes[4] = 2;
+                reseal(bytes)
+            }),
+            2 => damage_row(&path, WORLD, "header", |mut bytes| {
+                bytes[20] = bytes[20].wrapping_add(1);
+                reseal(bytes)
+            }),
+            3 => damage_row(&path, WORLD, "latest", flip),
+            4 => damage_row(&path, CHECKPOINTS, 2, flip),
+            _ => damage_row(&path, BODIES, 2, flip),
+        }
+        let before = fs::read(&path).expect("bytes");
+        // What the client does to open a world for play.
+        let refused = RedbWorldStore::open(&path, OpenOptionsStore::default())
+            .and_then(|store| SessionPlan::prepare(&store).map(|_| ()));
+        match refused {
+            Err(error) => assert!(expected(&error), "{what}: refused as {error:?}"),
+            Ok(()) => panic!("{what}: the world was opened"),
+        }
+        assert!(
+            fs::read(&path).expect("bytes") == before,
+            "{what}: the refused world was changed"
+        );
     }
 }
 

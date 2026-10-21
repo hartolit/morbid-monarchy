@@ -22,11 +22,9 @@ latest checkpoint or latest body set is damaged or from another revision, is ref
 
 The exact bytes and the compatibility policy are in
 [world format](../../docs/reference/world-format.md#saved-world-format-version-1-05). The
-[legacy fixtures](tests/fixtures/legacy-v0/README.md) are the old writer's rows; the
-[version-1 fixture](tests/fixtures/v1/README.md) is a world an earlier build of this store wrote
-(`examples/capture_v1_fixture.rs` captured it). Tests run against real files in temporary
-directories: the format against hand-placed offsets and damaged rows, the store's publication
-rules and injected failures, process interruption at every barrier and inside redb's commits
-(`tests/store_lifecycle.rs`), imports of the old writer's rows, including corrupt, unclean,
-interrupted and failing ones (`tests/import.rs`), and the version-1 fixture read, continued and,
-damaged, refused unchanged (`tests/v1_fixture.rs`).
+[legacy fixtures](tests/fixtures/legacy-v0/README.md) are the old writer's rows. Tests run against
+real files in temporary directories: the format against hand-placed offsets and damaged rows, the
+store's publication rules and injected failures, damaged and foreign worlds refused unchanged,
+process interruption at every barrier and inside redb's commits (`tests/store_lifecycle.rs`), and
+imports of the old writer's rows, including corrupt, unclean, interrupted and failing ones
+(`tests/import.rs`).

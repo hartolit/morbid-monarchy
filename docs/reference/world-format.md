@@ -131,12 +131,10 @@ build's is refused as unsupported before anything else is read, and the file is 
 conversion exists yet: a different layout reads other fields out of the same bits, and other rules
 or body tuning make it a different physical world. The fingerprints are pinned by tests, so
 changing a listed rule or body constant fails until its revision is raised here and in
-`world_model::identity`. A row of another format version is refused the same way. People keep
-version-1 worlds, so a change that would refuse them needs, before it ships, a tested migration
-that keeps the original bytes and validates the replacement before publishing it, or a recorded
-decision to refuse them; `world-store`'s committed
-[version-1 fixture](../../adapters/world-store/tests/fixtures/v1/README.md) fails any build that
-stops reading it.
+`world_model::identity`. A row of another format version is refused the same way. Until the
+game is released, saved worlds are test data: a change of the format, the layout, the physics or
+the generator raises its revision, and worlds of the old one are refused, unchanged, not migrated
+(the user's decision, 2026-10-21).
 
 *Publication.* Chunk revisions and a checkpoint's body set are written ahead in their own
 transactions (`Durability::Immediate`, redb's default: durable when the commit returns). One
@@ -280,9 +278,7 @@ publication committed 63, and every reopened world held exactly the edits of its
 The bound holds while storage accepts writes: when it fails, saves retry with their payloads kept,
 the exposure grows (151 ticks in that case when it stopped failing, back within the bound 12 ticks
 later) and the save's state says so. Saves cost storage traffic, not frame time: [checkpoint
-cadence](performance-budgets.md#checkpoint-cadence-after-07). The format did not change: version-1
-worlds open as they are, tested against a world an earlier build wrote (`world-store`
-`tests/v1_fixture.rs`).
+cadence](performance-budgets.md#checkpoint-cadence-after-07). The format did not change.
 
 ## Legacy import and replacement
 
