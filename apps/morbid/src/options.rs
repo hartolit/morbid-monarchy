@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use world_model::config::TICK_RATE_HZ;
+use world_runtime::checkpoint::{AUTOSAVE_TICKS, DEFAULT_AUTOSAVE_TICKS};
 
 pub const USAGE: &str = "\
 usage: morbid [options]
@@ -18,12 +18,10 @@ usage: morbid [options]
   --settings PATH      the settings file (default: the user configuration directory)
   --window WxH         the window's size in physical pixels
   --vsync on|off       wait for the display's refresh (default on)
-  --autosave TICKS|off checkpoint every TICKS ticks (default 3600: one minute at 60 Hz)
+  --autosave TICKS     checkpoint every TICKS ticks, 60 to 3600 (default 60: a second at 60 Hz);
+                       a crash or a lost device loses at most that and the save in progress
   --help               this text
 ";
-
-/// Ticks between autosaves when nothing says otherwise: one minute at the default tick rate.
-pub const DEFAULT_AUTOSAVE_TICKS: u32 = 3_600;
 
 /// The settings file, as written by a person. Unknown keys are refused.
 #[derive(Debug, Default, Deserialize, PartialEq)]
@@ -32,13 +30,17 @@ pub struct SettingsFile {
     pub adapter: Option<String>,
     pub worlds: Option<PathBuf>,
     pub vsync: Option<bool>,
-    /// Ticks between autosaves; 0 turns autosave off.
+    /// Ticks between autosaves, in `world_runtime::checkpoint::AUTOSAVE_TICKS`.
     pub autosave_ticks: Option<u32>,
 }
 
+/// When a world is checkpointed besides on request and at close.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Autosave {
+    /// Every this many ticks: the bound on what a crash or a lost device loses (ADR 0004).
     Every(u32),
+    /// Never. Only scripted and measured runs (the evidence runner's `native-client`), which
+    /// save when their script says, choose this; no option or setting selects it.
     Off,
 }
 
@@ -146,13 +148,21 @@ fn parse_size(text: &str) -> Option<[u32; 2]> {
     (size[0] > 0 && size[1] > 0 && size[0] <= 16_384 && size[1] <= 16_384).then_some(size)
 }
 
+/// An autosave interval a person may choose. It cannot be off: the interval bounds what a crash
+/// or a lost device loses.
 fn parse_autosave(text: &str) -> Option<Autosave> {
-    if text == "off" {
-        return Some(Autosave::Off);
-    }
     let ticks: u32 = text.parse().ok()?;
-    // At least one second at the fastest supported tick rate.
-    (ticks >= *TICK_RATE_HZ.end() as u32).then_some(Autosave::Every(ticks))
+    AUTOSAVE_TICKS
+        .contains(&u64::from(ticks))
+        .then_some(Autosave::Every(ticks))
+}
+
+fn autosave_range() -> String {
+    format!(
+        "{} to {} ticks; autosave cannot be off, it bounds what a crash or a lost device loses",
+        AUTOSAVE_TICKS.start(),
+        AUTOSAVE_TICKS.end()
+    )
 }
 
 /// Parses the command line (without the program name) over the settings file it names.
@@ -195,7 +205,7 @@ pub fn parse(args: &[String]) -> Result<ClientOptions, OptionsError> {
             "--autosave" => {
                 autosave = Some(
                     parse_autosave(value()?)
-                        .ok_or_else(|| usage("must be off or a tick count of at least 240"))?,
+                        .ok_or_else(|| usage(&format!("must be {}", autosave_range())))?,
                 )
             }
             other => return Err(OptionsError::Usage(format!("unknown option `{other}`"))),
@@ -206,12 +216,11 @@ pub fn parse(args: &[String]) -> Result<ClientOptions, OptionsError> {
     let settings = read_settings(&settings_path)?;
     let file_autosave = match settings.autosave_ticks {
         None => None,
-        Some(0) => Some(Autosave::Off),
         Some(ticks) => {
             Some(
                 parse_autosave(&ticks.to_string()).ok_or_else(|| OptionsError::Settings {
                     path: settings_path.clone(),
-                    reason: format!("autosave_ticks {ticks} is below 240"),
+                    reason: format!("autosave_ticks {ticks}: must be {}", autosave_range()),
                 })?,
             )
         }
@@ -227,7 +236,7 @@ pub fn parse(args: &[String]) -> Result<ClientOptions, OptionsError> {
         vsync: vsync.or(settings.vsync).unwrap_or(true),
         autosave: autosave
             .or(file_autosave)
-            .unwrap_or(Autosave::Every(DEFAULT_AUTOSAVE_TICKS)),
+            .unwrap_or(Autosave::Every(DEFAULT_AUTOSAVE_TICKS as u32)),
     })
 }
 
@@ -257,7 +266,7 @@ mod tests {
         let dir = scratch("override");
         let path = settings_in(
             &dir,
-            "adapter = \"gl-1-2\"\nvsync = false\nautosave_ticks = 0\n",
+            "adapter = \"gl-1-2\"\nvsync = false\nautosave_ticks = 600\n",
         );
         let line = format!(
             "--settings {} --adapter vulkan-10de-2c05 --window 800x600",
@@ -266,7 +275,7 @@ mod tests {
         let options = parse(&args(&line)).expect("valid");
         assert_eq!(options.adapter.as_deref(), Some("vulkan-10de-2c05"));
         assert!(!options.vsync, "the file's vsync applies");
-        assert_eq!(options.autosave, Autosave::Off);
+        assert_eq!(options.autosave, Autosave::Every(600));
         assert_eq!(options.window_size, Some([800, 600]));
         assert!(options.worlds.ends_with("morbid-monarchy/worlds"));
         std::fs::remove_dir_all(dir).ok();
@@ -287,12 +296,39 @@ mod tests {
             "--window 0x10",
             "--vsync maybe",
             "--autosave 10",
+            "--autosave 59",
+            "--autosave 3601",
+            "--autosave off",
             "--adapter",
         ] {
             let line = format!("{base} {bad}");
             assert!(
                 matches!(parse(&args(&line)), Err(OptionsError::Usage(_))),
                 "{bad} was accepted"
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn autosave_is_on_by_default_and_cannot_be_turned_off() {
+        let dir = scratch("autosave");
+        let empty = settings_in(&dir, "");
+        let options = parse(&args(&format!("--settings {}", empty.display()))).expect("valid");
+        assert_eq!(options.autosave, Autosave::Every(60));
+        let bounds = format!("--settings {} --autosave 3600", empty.display());
+        assert_eq!(
+            parse(&args(&bounds)).expect("valid").autosave,
+            Autosave::Every(3600)
+        );
+        for ticks in [0, 59, 3601] {
+            let path = settings_in(&dir, &format!("autosave_ticks = {ticks}\n"));
+            assert!(
+                matches!(
+                    parse(&args(&format!("--settings {}", path.display()))),
+                    Err(OptionsError::Settings { .. })
+                ),
+                "autosave_ticks = {ticks} was accepted"
             );
         }
         std::fs::remove_dir_all(dir).ok();

@@ -536,3 +536,73 @@ fn a_save_captured_before_a_loss_is_still_published() {
         Some(&ChunkRevision::new(1))
     );
 }
+
+/// Ticks after the latest published checkpoint: what a crash now would lose.
+fn exposure(session: &WorldSession) -> u64 {
+    let last = session.runtime().last_submitted_tick().expect("ticks ran");
+    session
+        .checkpoints()
+        .latest()
+        .tick
+        .map_or(last.value() + 1, |saved| last.since(saved))
+}
+
+#[test]
+fn periodic_saves_keep_up_and_a_loss_names_the_interval_it_ran_at() {
+    let mut config = quiet();
+    config.checkpoints.autosave_ticks = Some(8);
+    let (mut session, port, store) = open_with(config, |_| {});
+    until(&mut session, "settle", |session| {
+        session.residency().settled()
+    });
+    // Saves follow the interval from the latest checkpoint's tick, one at a time. How long a
+    // save takes to publish is the store's: the `streaming` suite's `bounded-loss` measures it.
+    let before = session.checkpoints().committed();
+    until(&mut session, "three periodic saves", |session| {
+        session.checkpoints().committed() >= before + 3
+    });
+    assert_eq!(
+        session
+            .checkpoints()
+            .receipt()
+            .map(|receipt| receipt.reason),
+        Some(SaveReason::Autosave)
+    );
+
+    // A store that does not accept writes: the save cannot publish, the exposure grows past the
+    // interval and the receipt says why. A loss then reports exactly that exposure.
+    port.model().edit(key(0, 0), 4);
+    store.state().hold_writes = true;
+    for _ in 0..40 {
+        session.frame_ticks(1);
+    }
+    let held = exposure(&session);
+    assert!(held > 8 + 8, "{held} ticks exposed while writes were held");
+    port.model().lose_device();
+    session.frame_ticks(1);
+    let loss = session.loss().expect("loss");
+    assert_eq!(loss.autosave_ticks, Some(8));
+    assert_eq!(
+        Some(loss.ticks_lost),
+        loss.last_submitted
+            .zip(loss.last_complete_tick)
+            .map(|(last, saved)| last.since(saved))
+    );
+    assert!(loss.ticks_lost >= held);
+    store.release();
+    let (_, loss) = session.finish_after_loss(Duration::from_secs(5));
+    assert_eq!(loss.autosave_ticks, Some(8));
+}
+
+#[test]
+fn a_session_without_periodic_saves_reports_none() {
+    let (mut session, port, _store) = open_with(quiet(), |_| {});
+    until(&mut session, "settle", |session| {
+        session.residency().settled()
+    });
+    port.model().lose_device();
+    session.frame_ticks(1);
+    assert_eq!(session.loss().expect("loss").autosave_ticks, None);
+    assert_eq!(CheckpointConfig::default().autosave_ticks, Some(60));
+    assert!(crate::checkpoint::AUTOSAVE_TICKS.contains(&60));
+}

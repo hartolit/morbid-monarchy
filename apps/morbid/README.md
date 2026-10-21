@@ -21,6 +21,12 @@ directory, and shaders and fonts are compiled in, so the client runs the same fr
 `morbid --help` lists the options (`--adapter`, `--worlds`, `--world`, `--settings`, `--window`,
 `--vsync`, `--autosave`).
 
+A world is checkpointed every 60 ticks (a second at 60 Hz), on request (F5) and when it closes.
+The interval is settable from 60 to 3,600 ticks (`--autosave`, the settings file's
+`autosave_ticks`, the world panel) and cannot be turned off: a crash or a lost device loses at most
+that interval and the save in progress, which the world panel (ticks since the latest checkpoint)
+and the loss report show ([ADR 0004](../../docs/decisions/0004-bounded-loss-by-checkpoint-cadence.md)).
+
 The GPU adapter is chosen explicitly: `--adapter ID`, the settings file's `adapter`, or a choice
 on the start screen among the hardware adapters that can present to the window (remembered in
 the settings). The world never falls back to another adapter.

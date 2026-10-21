@@ -4,6 +4,7 @@
 
 use super::Case;
 
+mod bounded;
 mod checkpoints;
 mod measure;
 mod mechanism;
@@ -92,6 +93,11 @@ pub const CASES: &[Case] = &[
         name: "process-interruption",
         summary: "a live session's process ends inside a save at a defined barrier: before the publication commits the world reopens at the previous checkpoint, after it at the new one, never a mix",
         run: recovery::process_interruption,
+    },
+    Case {
+        name: "bounded-loss",
+        summary: "at the client's autosave cadence, paced at the tick rate: a device lost while a save copies and a process ended before a publication commits lose at most the interval and the save's allowance; while storage fails the exposure grows and is reported, and the next save after it heals brings it back; every reopened world holds exactly the edits of its checkpoint's ticks",
+        run: bounded::bounded_loss,
     },
     Case {
         name: "headless-session",

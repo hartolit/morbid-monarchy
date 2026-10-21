@@ -17,8 +17,8 @@ and the consumer of what the live world reports.
 | `store` | The storage port (`WorldStore`) the saved-world store implements: chunk payloads and revisions, the world header, published checkpoint manifests, body sets, and typed failures that keep absent, corrupt, unsupported and unreadable data apart. |
 | `workers` | Bounded threads between the owners and the store: loaders that read or generate chunks, one writer that makes payloads, body sets and publications durable in order. |
 | `residency` | Which chunks are resident and where every chunk's newest content is (retained, durable, published or generated); loads that only an absent key may answer with generation, stale results discarded, outgoing chunks snapshotted and retired together, window moves, byte budgets and visible pressure. Metadata only: no resident cells. |
-| `checkpoint` | Saves (requested, periodic, closing) through one owner: a world snapshot at one completed tick, the revisions and bodies it holds, publication once they are durable, receipts and retries. |
-| `session` | One saved world's live session: open from a store's latest checkpoint, frames, the loss report after a lost device, and the orderly close with its honest result. |
+| `checkpoint` | Saves (requested, periodic, closing) through one owner: a world snapshot at one completed tick, the revisions and bodies it holds, publication once they are durable, receipts and retries. Periodic saves bound what a crash or a lost device loses: every `DEFAULT_AUTOSAVE_TICKS` (60) by default, within `AUTOSAVE_TICKS` (60 to 3,600) for a person's world (ADR 0004). |
+| `session` | One saved world's live session: open from a store's latest checkpoint, frames, the loss report after a lost device (the ticks lost and the interval saves ran at), and the orderly close with its honest result. |
 
 The composition root chooses the ports: `cargo evidence test gpu` composes the runtime with
 `gpu_world::world::GpuWorld` and, since 05, `world_store::store::RedbWorldStore` headlessly

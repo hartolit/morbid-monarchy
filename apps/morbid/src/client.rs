@@ -399,8 +399,11 @@ impl Client {
                 let focus = live.opened.checkpoint.window.center();
                 window.set_title(&format!("Morbid Monarchy — {name}"));
                 if live.opened.previous_unclean {
-                    self.start
-                        .message(format!("{name}: the previous session did not close; its unpublished rows were reclaimed."));
+                    self.start.message(format!(
+                        "{name}: the previous session did not close; the world resumed at checkpoint {} (tick {}), and what came after it was lost. Its unpublished rows were reclaimed.",
+                        live.opened.checkpoint.id.value(),
+                        live.opened.checkpoint.tick.map_or("none".to_owned(), |tick| tick.value().to_string()),
+                    ));
                 }
                 // Opening took a while; that time is not owed to the new session's clock.
                 self.last_frame = Instant::now();
@@ -784,7 +787,7 @@ impl Client {
                 HudAction::Close => close = true,
                 HudAction::ApplySettings => running.play.apply_settings(session),
                 HudAction::Resize => running.play.resize_window(session),
-                HudAction::SetAutosave(ticks) => session.set_autosave(ticks),
+                HudAction::SetAutosave(ticks) => session.set_autosave(Some(ticks)),
             }
         }
         running
@@ -1004,11 +1007,16 @@ impl Client {
         let live = running.into_live();
         let lost = live.finish_after_loss();
         let text = format!(
-            "{}: the device was lost; the latest complete checkpoint is {} at tick {:?}, {} ticks lost.",
+            "{}: the device was lost; the latest complete checkpoint is {} at tick {:?}, {} ticks lost{}.",
             lost.name,
             lost.report.last_complete.value(),
             lost.report.last_complete_tick.map(|tick| tick.value()),
-            lost.report.ticks_lost
+            lost.report.ticks_lost,
+            lost.report
+                .autosave_ticks
+                .map_or(String::new(), |every| format!(
+                    " (autosave every {every} ticks)"
+                )),
         );
         eprintln!("morbid: {text}");
         self.summary.losses.push(text.clone());

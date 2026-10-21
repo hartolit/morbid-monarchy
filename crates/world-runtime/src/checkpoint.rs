@@ -16,9 +16,14 @@
 //! Its payloads become durable through the residency owner's writes; the checkpoint writes its
 //! body set and publishes only when every revision it names is durable. A failed write or
 //! publication is retried, and every payload it needs stays retained until it succeeds.
+//!
+//! Periodic saves are what bounds a crash or a lost device: they lose what came after the
+//! latest published checkpoint, so at most the autosave interval and the save in progress while
+//! storage keeps up ([`DEFAULT_AUTOSAVE_TICKS`], ADR 0004). Nothing replays commands.
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::RangeInclusive,
     sync::Arc,
 };
 
@@ -146,10 +151,20 @@ struct InProgress {
     step: Step,
 }
 
+/// Ticks between periodic saves when nothing says otherwise: one second at the default tick
+/// rate, the most a crash or a lost device loses besides the save in progress.
+pub const DEFAULT_AUTOSAVE_TICKS: u64 = 60;
+
+/// The periodic save intervals a person's world may run at, in ticks: one second to one minute
+/// at the default tick rate. The interval is the loss bound, so it has an upper end and no off.
+pub const AUTOSAVE_TICKS: RangeInclusive<u64> = 60..=3_600;
+
 /// Bounds of the owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckpointConfig {
-    /// Ticks between periodic saves; `None` disables them.
+    /// Ticks between periodic saves, measured from the latest checkpoint's tick. `None` saves
+    /// only when asked and at close: scripted and measured runs that save when their script
+    /// says. A person's client always sets an interval in [`AUTOSAVE_TICKS`].
     pub autosave_ticks: Option<u64>,
     /// Frames between retries of a failed store operation.
     pub retry_frames: u32,
@@ -158,7 +173,7 @@ pub struct CheckpointConfig {
 impl Default for CheckpointConfig {
     fn default() -> Self {
         Self {
-            autosave_ticks: Some(60 * 60),
+            autosave_ticks: Some(DEFAULT_AUTOSAVE_TICKS),
             retry_frames: 30,
         }
     }

@@ -116,6 +116,9 @@ pub struct LossReport {
     /// The last tick submitted before the loss: ticks after the checkpoint's are lost.
     pub last_submitted: Option<Tick>,
     pub ticks_lost: u64,
+    /// The interval periodic saves ran at, if they did: while storage keeps up, a loss takes at
+    /// most this and the save in progress.
+    pub autosave_ticks: Option<u64>,
     /// Chunks resident when the device was lost: any change since their last snapshot is gone.
     pub resident_chunks: u32,
     /// Revisions captured on the CPU after the latest checkpoint. They are written, but no
@@ -359,6 +362,7 @@ impl WorldSession {
             last_complete_tick: latest.tick,
             last_submitted,
             ticks_lost,
+            autosave_ticks: self.checkpoints.autosave_ticks(),
             resident_chunks: self.residency.resident_keys().count() as u32,
             captured_not_published: self.residency.unpublished().count() as u32,
             finished_captured_save: false,
@@ -379,6 +383,7 @@ impl WorldSession {
             last_complete_tick: self.checkpoints.latest().tick,
             last_submitted: self.runtime.last_submitted_tick(),
             ticks_lost: 0,
+            autosave_ticks: self.checkpoints.autosave_ticks(),
             resident_chunks: self.residency.resident_keys().count() as u32,
             captured_not_published: 0,
             finished_captured_save: false,

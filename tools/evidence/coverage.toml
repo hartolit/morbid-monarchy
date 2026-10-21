@@ -598,8 +598,18 @@ package = "morbid-app"
 target = "lib"
 test = "options::tests::unknown_or_malformed_input_is_refused"
 origin = "transition"
-expectation = "Unknown settings keys, unknown options and out-of-range sizes, vsync and autosave values are refused."
+expectation = "Unknown settings keys, unknown options and out-of-range sizes, vsync and autosave values (including `off`) are refused."
 destination = "morbid-app configuration (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "client.options.autosave-bounded"
+package = "morbid-app"
+target = "lib"
+test = "options::tests::autosave_is_on_by_default_and_cannot_be_turned_off"
+origin = "transition"
+expectation = "Autosave defaults to every 60 ticks and accepts 60 to 3,600 from the command line or the settings file; 0, values outside the range and `off` are refused, so a person's world always has a bounded loss."
+destination = "morbid-app options over world-runtime's autosave range (ADR 0004)"
 determinism = "exact"
 
 [[behavior]]
@@ -2408,6 +2418,26 @@ destination = "world-runtime residency, checkpoints and session against the mode
 determinism = "exact"
 
 [[behavior]]
+id = "runtime.session.periodic-saves-and-the-loss-interval"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::periodic_saves_keep_up_and_a_loss_names_the_interval_it_ran_at"
+origin = "transition"
+expectation = "Periodic saves follow one another at their interval; with writes held the exposure grows past it; a loss then reports exactly the ticks after the latest checkpoint and the interval saves ran at, also after finishing."
+destination = "world-runtime checkpoints and session against the model port (ADR 0004); the GPU suite's bounded-loss runs the real owners"
+determinism = "exact"
+
+[[behavior]]
+id = "runtime.session.no-periodic-saves"
+package = "world-runtime"
+target = "lib"
+test = "session::tests::a_session_without_periodic_saves_reports_none"
+origin = "transition"
+expectation = "A session without periodic saves reports no interval in its loss; the default configuration saves every 60 ticks, inside the supported range."
+destination = "world-runtime checkpoints and session against the model port (ADR 0004)"
+determinism = "exact"
+
+[[behavior]]
 id = "runtime.session.a-save-captured-before-a-loss-is-still-published"
 package = "world-runtime"
 target = "lib"
@@ -2787,6 +2817,16 @@ test = "process-interruption"
 origin = "transition"
 expectation = "A child process running a live session aborts at the publication's barriers: before the commit the reopened world is the previous checkpoint, after it the new one, recorded unclean either way, and the next session closes cleanly."
 destination = "gpu-world snapshots with world-runtime residency and checkpoints over world-store on the selected adapter (05); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.streaming.bounded-loss"
+package = "monarchy-evidence"
+target = "gpu:streaming"
+test = "bounded-loss"
+origin = "transition"
+expectation = "At the default cadence of 60 ticks, paced at 60 ticks/s with the store on disk: a device lost while an autosave copies abandons it and loses more than 0 and at most 90 ticks, and the recovered checkpoint is the one reported; a child process aborted right before a publication commits leaves the previous checkpoint, at most 90 ticks behind its last tick, recorded unclean; with every storage write failing a save is reported failed and retrying and the exposure passes 150 ticks, and once writes succeed it returns within 90 and the close saves; after each, the store holds exactly the marker edits of its checkpoint's ticks."
+destination = "world-runtime checkpoints and session over gpu-world and world-store at the client's cadence (ADR 0004); rerun with each later GPU stage"
 determinism = "exact"
 
 [[behavior]]

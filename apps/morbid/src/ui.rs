@@ -20,7 +20,7 @@ use world_render::{
     lighting::{AMBIENT_RANGE, SUN_AZIMUTH_RANGE, SUN_ELEVATION_RANGE, UNIT_RANGE},
 };
 use world_runtime::{
-    checkpoint::{SaveReceipt, SaveState},
+    checkpoint::{AUTOSAVE_TICKS, SaveReceipt, SaveState},
     ids::Tick,
     ledger::LedgerSummary,
     port::TransferCounters,
@@ -332,7 +332,8 @@ pub enum HudAction {
     Close,
     ApplySettings,
     Resize,
-    SetAutosave(Option<u64>),
+    /// A new autosave interval, in ticks.
+    SetAutosave(u64),
 }
 
 fn save_text(receipt: Option<&SaveReceipt>) -> (String, egui::Color32) {
@@ -658,8 +659,13 @@ fn world_panel(
         ));
         ui.end_row();
         ui.label("Latest checkpoint");
+        let since = match (status.last_submitted, status.latest.tick) {
+            (Some(last), Some(saved)) => last.since(saved),
+            (Some(last), None) => last.value() + 1,
+            (None, _) => 0,
+        };
         ui.label(format!(
-            "{} at tick {} ({} chunks, {} spheres)",
+            "{} at tick {} ({} chunks, {} spheres); {since} ticks since, which a crash would lose",
             status.latest.id.value(),
             tick_text(status.latest.tick),
             status.latest.chunks,
@@ -670,23 +676,28 @@ fn world_panel(
         let (text, colour) = save_text(status.receipt.as_ref());
         ui.colored_label(colour, text);
         ui.end_row();
-        ui.label("Autosave");
-        let mut every = status.autosave.unwrap_or(0);
-        let mut on = status.autosave.is_some();
-        ui.horizontal(|ui| {
-            let toggled = ui.checkbox(&mut on, "every").changed();
-            let edited = ui
-                .add_enabled(
-                    on,
-                    egui::DragValue::new(&mut every)
-                        .range(240..=1_000_000)
-                        .suffix(" ticks"),
-                )
-                .changed();
-            if toggled || edited {
-                actions.push(HudAction::SetAutosave(on.then_some(every.max(240))));
+        ui.label("Autosave every");
+        match status.autosave {
+            Some(mut every) => {
+                // The interval bounds what a crash or a lost device loses; it is never off.
+                let edited = ui
+                    .add(
+                        egui::DragValue::new(&mut every)
+                            .range(AUTOSAVE_TICKS)
+                            .suffix(" ticks"),
+                    )
+                    .on_hover_text(
+                        "A crash or a lost device loses at most this and the save in progress.",
+                    )
+                    .changed();
+                if edited {
+                    actions.push(HudAction::SetAutosave(every));
+                }
             }
-        });
+            None => {
+                ui.label("off (a scripted run saves when its script says)");
+            }
+        }
         ui.end_row();
         ui.label("Resident chunks");
         let r = &status.residency;
@@ -774,7 +785,8 @@ fn world_panel(
     if status.previous_unclean {
         ui.colored_label(
             egui::Color32::YELLOW,
-            "The previous session did not close; what it left unpublished was reclaimed.",
+            "The previous session did not close: the world resumed at its latest checkpoint, what \
+             came after it was lost, and what it left unpublished was reclaimed.",
         );
     }
     if status.failed_chunks > 0 {
@@ -864,6 +876,12 @@ pub fn loss_dialog(ui: &mut egui::Ui, name: &str, report: &LossReport) -> Option
             "{} chunks were resident; changes since their last snapshot are gone. {} captured revisions were written but no complete checkpoint holds them.",
             report.resident_chunks, report.captured_not_published
         ));
+        if let Some(every) = report.autosave_ticks {
+            ui.label(format!(
+                "Autosave ran every {every} ticks: a loss takes at most that and the save in \
+                 progress, unless saves were failing."
+            ));
+        }
         if report.finished_captured_save {
             ui.label("A save that had everything on the CPU was finished after the loss.");
         }

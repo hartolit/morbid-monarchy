@@ -85,10 +85,12 @@ not the normal performance profile.
 
 ## Save/recovery behavior
 
-The client saves on request (F5), on the autosave interval and when a world closes, and reports
-whether the close saved the last completed tick. A failed write keeps its payload and is retried;
-corrupt data is refused, never treated as an absent chunk. After a device loss the client shows
-the latest complete checkpoint and how many ticks were lost, and recovery opens a new session
-from that checkpoint on a new device. Outside the client, `world-store` creates, inspects and
+The client saves on request (F5), every 60 ticks by default (60 to 3,600, never off) and when a
+world closes, and reports whether the close saved the last completed tick. A crash or a lost
+device loses at most the autosave interval and the save in progress while storage keeps up
+([world format](../reference/world-format.md#exit-interruption-and-device-loss)). A failed write
+keeps its payload and is retried; corrupt data is refused, never treated as an absent chunk. After
+a device loss the client shows the latest complete checkpoint, how many ticks were lost and the
+interval saves ran at, and recovery opens a new session from that checkpoint on a new device. Outside the client, `world-store` creates, inspects and
 imports stores (`world-store --help`), and `cargo evidence session` opens one headless; see
 [world format](../reference/world-format.md#operating-a-saved-world-05).
