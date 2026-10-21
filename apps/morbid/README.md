@@ -48,11 +48,13 @@ the settings). The world never falls back to another adapter.
 overlay, turns input into commands (`play`), runs the session's frame (ticks, polling, residency,
 checkpoints; never a wait), reads the commands' outcomes, and submits the renderer's and the
 overlay's passes on the world's timeline (`GpuWorld::submit_presentation`). Targets are
-GPU-resolved rays; walking reads the floor from column queries; possession follows the sphere's
-GPU pose in the renderer's camera pass and its latest sample on the CPU. A minimized window
-draws nothing and the loop sleeps until the next tick. With `--vsync` the window presents in
-FIFO mode; without it in mailbox mode (immediate only where mailbox is missing), and an
-iteration whose two presentation slots are both busy runs the session's frame and draws
-nothing rather than wait for the device. Closing saves the last completed tick
-and reports whether everything was saved; a device loss shows the latest complete checkpoint
-and what was lost, and recovery opens a new session from it on a new device.
+GPU-resolved rays; walking reads the floor from column queries; possession follows the sphere's GPU
+pose in the renderer's camera pass and its latest sample on the CPU. A minimized window draws
+nothing and the loop sleeps until the next tick. With `--vsync` the window presents in FIFO mode;
+without it in mailbox mode (immediate only where mailbox is missing). Nothing waits for the device:
+while both presentation slots are busy and no tick is due that the device could take, a frame would
+change nothing, so the loop asks the GPU owner what it would admit (`GpuWorld::poll_admission`) and
+waits a quarter of a millisecond at a time in the event wait instead; a tick that falls due still
+runs its frame, which draws nothing. Closing saves the last completed tick and reports whether
+everything was saved; a device loss shows the latest complete checkpoint and what was lost, and
+recovery opens a new session from it on a new device.

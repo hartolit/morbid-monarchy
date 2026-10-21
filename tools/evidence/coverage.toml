@@ -3022,6 +3022,16 @@ destination = "world-render on gpu-world's device (06)"
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.render.presentation-admission"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "presentation-admission"
+origin = "transition"
+expectation = "Between frames, the admission poll frees the places of completed presentation frames and ticks without decoding any tick's results, keeps them while completions are held, and the session's poll still delivers every tick."
+destination = "gpu-world presentation admission for the native client's loop"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.render.culling-matches-unculled"
 package = "monarchy-evidence"
 target = "gpu:render"

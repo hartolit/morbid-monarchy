@@ -17,7 +17,7 @@ use world_render::{
     CameraRig, RenderError,
     frame::{LENS_OFFSET_Y, forward, project},
 };
-use world_runtime::port::{PhysicalWorld, Refusal, ResidentWindow, ResizeRequest};
+use world_runtime::port::{PhysicalWorld, Pressure, Refusal, ResidentWindow, ResizeRequest};
 
 use super::{
     super::{
@@ -564,6 +564,66 @@ pub fn device_loss(adapter: &str, check: &mut Check) -> Result<(), String> {
     }
     drop(offscreen);
     check.note("the renderer was dropped after the loss without a panic");
+    Ok(())
+}
+
+/// What a client between frames sees: `poll_admission` frees the places of completed
+/// presentation frames and ticks without decoding any tick's results, and keeps them while
+/// completions are held.
+pub fn presentation_admission(adapter: &str, check: &mut Check) -> Result<(), String> {
+    let mut config = driver::config(adapter, 1);
+    config.fault_injection = true;
+    let mut world = driver::Driver::open(config)?;
+    world.upload(ChunkKey::new(0, 0, 0), &driver::flat(GROUND))?;
+    let faults = world
+        .world
+        .fault_controller()
+        .ok_or("no fault controller")?;
+    // The upload's activation ran in a tick of its own.
+    world.settle()?;
+    let observed_before = world.world.counters().ticks_observed;
+    faults.hold_completions(true);
+    for _ in 0..2 {
+        world
+            .world
+            .submit_presentation("admission", |_, _| {})
+            .map_err(|refusal| format!("presentation frame: {refusal:?}"))?;
+    }
+    let mut ticks = 0;
+    loop {
+        match world.submit(&[]) {
+            Ok(_) => ticks += 1,
+            Err(Refusal::Pressure(Pressure::InFlightSubmissions)) => break,
+            Err(other) => return Err(format!("tick {ticks}: {other:?}")),
+        }
+        if ticks > 16 {
+            return Err("the in-flight limit never refused a tick".to_owned());
+        }
+    }
+    // Empty frames and ticks of a one-chunk world: long done on the device by now.
+    std::thread::sleep(Duration::from_millis(200));
+    let held = world.world.poll_admission();
+    check.that(
+        held.presentation == Err(PresentRefusal::Busy) && !held.tick,
+        || format!("with completions held: {held:?}"),
+    );
+    faults.hold_completions(false);
+    let released = world.world.poll_admission();
+    check.that(released.presentation == Ok(()) && released.tick, || {
+        format!("after the release: {released:?}")
+    });
+    let decoded = world.world.counters().ticks_observed - observed_before;
+    check.that(decoded == 0, || {
+        format!("the admission poll decoded {decoded} of {ticks} ticks")
+    });
+    world.settle()?;
+    let delivered = world.world.counters().ticks_observed - observed_before;
+    check.that(delivered == ticks, || {
+        format!("the session's poll observed {delivered} of {ticks} ticks")
+    });
+    check.note(format!(
+        "{ticks} ticks and 2 frames held, then freed by the admission poll and delivered by the session's poll"
+    ));
     Ok(())
 }
 

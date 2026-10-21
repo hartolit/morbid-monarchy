@@ -581,17 +581,21 @@ per session from the assembled source; a new device compiles them again. Other c
 same device (the layout probes) read through `GpuWorld::view` and encode on the same timeline with
 `submit_external`.
 
-*Presentation (06).* `GpuWorld::open_presenting` opens the session on an instance of the
-adapter's backend only and creates the window's surface on it, refusing an adapter that cannot
-present to it; a lost surface is created again with `create_surface`, and only the primary
-backends are offered for presenting (`presentable_adapters`). The renderer and the overlay
-encode a frame through `submit_presentation`, on the same timeline after the frame's ticks, with
-their own bound of two uncompleted presentation submissions apart from the world's
-`max_in_flight`; `presentation_ready` refuses a frame while both are in flight, and the client
-then draws nothing that iteration rather than wait. The renderer reads the cells, the window map
-and body state through the view and replaces its bind groups only when the view's buffer
-generation changes (a resize); it derives visibility and the follow camera on the device and
-never reads physical state back.
+*Presentation (06).* `GpuWorld::open_presenting` opens the session on an instance of the adapter's
+backend only and creates the window's surface on it, refusing an adapter that cannot present to it;
+a lost surface is created again with `create_surface`, and only the primary backends are offered
+for presenting (`presentable_adapters`). The renderer and the overlay encode a frame through
+`submit_presentation`, on the same timeline after the frame's ticks, with their own bound of two
+uncompleted presentation submissions apart from the world's `max_in_flight`; `presentation_ready`
+refuses a frame while both are in flight, and the client then draws nothing that iteration rather
+than wait. Between frames the client calls `poll_admission`, which lets completed submissions free
+their places without waiting or decoding any result (the session's poll still delivers every tick,
+and a conformance hold on completions holds here too) and reports whether a presentation frame or a
+tick would be admitted; with neither, and no tick due, the client waits in its event wait rather
+than run a frame that changes nothing (`render` `presentation-admission`). The renderer reads the
+cells, the window map and body state through the view and replaces its bind groups only when the
+view's buffer generation changes (a resize); it derives visibility and the follow camera on the
+device and never reads physical state back.
 
 The radius-32 decision: the plan requests a larger storage binding. On a device that cannot
 grant it (as with WebGPU's default 128 MiB), a window whose cell array exceeds the granted binding

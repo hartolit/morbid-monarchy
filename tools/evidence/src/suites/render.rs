@@ -60,6 +60,11 @@ pub const CASES: &[Case] = &[
         run: cases::device_loss,
     },
     Case {
+        name: "presentation-admission",
+        summary: "the admission poll a client makes between frames frees completed presentation frames and ticks without decoding results, and keeps them while completions are held",
+        run: cases::presentation_admission,
+    },
+    Case {
         name: "culling-matches-unculled",
         summary: "the culled frame equals the unculled one pixel for pixel from four poses, draws fewer chunks, and an edit made out of view shows when the camera turns to it",
         run: visibility::culling_matches_unculled,

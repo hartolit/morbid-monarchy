@@ -281,6 +281,16 @@ pub enum PresentRefusal {
     Closed(Refusal),
 }
 
+/// What the live world would admit now, as [`GpuWorld::poll_admission`] found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Admissible {
+    /// A presentation frame, as [`GpuWorld::presentation_ready`] reports it.
+    pub presentation: Result<(), PresentRefusal>,
+    /// A tick, as far as the in-flight limit of world work goes. Its staging can still refuse
+    /// it; the tick's own submission reports that.
+    pub tick: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
     Running,
@@ -738,6 +748,24 @@ impl GpuWorld {
     /// Presentation frames submitted and not yet completed.
     pub fn presentations_in_flight(&self) -> u32 {
         self.context.presentations_in_flight()
+    }
+
+    /// Lets submissions that completed free their places in flight, without waiting and
+    /// without taking any of their results (the session's poll decodes those), and reports what
+    /// would be admitted now. A client between frames uses it to decide whether a frame has
+    /// anything to submit: while both presentation places are busy and no tick can go, a frame
+    /// would change nothing. A completion hold injected for conformance is respected, and a
+    /// loss the poll observes is reported by both refusals.
+    pub fn poll_admission(&mut self) -> Admissible {
+        let hold = self
+            .faults
+            .as_ref()
+            .is_some_and(|faults| faults.hold_completions());
+        self.context.poll(!hold);
+        Admissible {
+            presentation: self.presentation_ready(),
+            tick: self.admission().is_ok() && self.context.has_submission_capacity(),
+        }
     }
 
     /// Creates a buffer on the session's device, counted with the session's own.

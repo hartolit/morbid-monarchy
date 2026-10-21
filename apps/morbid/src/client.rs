@@ -10,7 +10,10 @@
 //! ```
 //!
 //! A frame never waits for the device: the session polls, the renderer submits on the world's
-//! timeline when a presentation slot is free, and FIFO presentation paces a visible window. A
+//! timeline when a presentation slot is free, and FIFO presentation paces a visible window.
+//! Without vsync nothing paces it, and a frame that found both slots busy and no tick it could
+//! submit would change nothing; the loop runs a frame only when one has work (see
+//! `Client::has_work`) and otherwise waits in the event wait for `IDLE_WAIT` at a time. A
 //! minimized or occluded window draws nothing and the loop sleeps in the event wait until the
 //! next tick is due, so the world keeps its clock without a busy loop.
 
@@ -48,6 +51,12 @@ use crate::{
 const FRAME_HISTORY: usize = 600;
 /// How long menus wait for events between frames.
 const MENU_FRAME: Duration = Duration::from_millis(33);
+/// How long the loop waits at a time while an open world has nothing for a frame to do. A
+/// presentation slot frees when the older of two frames completes, while the device renders
+/// the newer; this wait plus the next frame's CPU work must stay below that frame's device
+/// time, or the device idles. The tightest case measured, radius 6 without vsync, has frames
+/// of about 1.1 ms and 0.45 ms of CPU work in the frame that presents (07).
+const IDLE_WAIT: Duration = Duration::from_micros(250);
 
 /// A world on its device: the session, the window's surface, the renderer and the overlay.
 pub struct Running {
@@ -60,6 +69,8 @@ pub struct Running {
     focus: world_model::spatial::ChunkKey,
     /// Frames the renderer did not draw because two were still on the device.
     busy_frames: u64,
+    /// Times the loop found nothing for a frame to do and waited instead.
+    idle_waits: u64,
     /// A driver asked for the next frame's pixels.
     capture_requested: bool,
     capture: Option<Result<Capture, String>>,
@@ -84,6 +95,9 @@ pub struct SurfaceReport {
     pub skipped_frames: u64,
     pub presented_frames: u64,
     pub busy_frames: u64,
+    /// Times the loop found nothing for a frame to do and waited instead, each wait at most a
+    /// quarter of a millisecond.
+    pub idle_waits: u64,
     /// The last swapchain image acquisition's wait.
     pub last_acquire: std::time::Duration,
 }
@@ -161,6 +175,7 @@ impl Running {
             skipped_frames: self.surface.skipped_frames,
             presented_frames: self.surface.presented_frames,
             busy_frames: self.busy_frames,
+            idle_waits: self.idle_waits,
             last_acquire: self.surface.last_acquire,
         }
     }
@@ -202,6 +217,8 @@ pub struct Client {
     frame_times: VecDeque<f64>,
     pending_size: Option<[u32; 2]>,
     occluded: bool,
+    /// The last check found nothing for a frame of the open world to do.
+    idle: bool,
     grabbed: bool,
     driver: Option<Box<dyn Driver>>,
     /// A start-screen action a driver submitted, handled on the next start-screen frame.
@@ -246,6 +263,7 @@ impl Client {
             frame_times: VecDeque::with_capacity(FRAME_HISTORY),
             pending_size: None,
             occluded: false,
+            idle: false,
             grabbed: false,
             driver,
             driven_start: None,
@@ -272,6 +290,8 @@ impl Client {
             Phase::Running(running) => {
                 if self.occluded || running.surface.size().is_none() {
                     running.live.session.runtime().tick_duration()
+                } else if self.idle {
+                    IDLE_WAIT
                 } else {
                     Duration::ZERO
                 }
@@ -392,6 +412,7 @@ impl Client {
                     play,
                     focus,
                     busy_frames: 0,
+                    idle_waits: 0,
                     capture_requested: false,
                     capture: None,
                 }));
@@ -462,6 +483,39 @@ impl Client {
             window.set_cursor_visible(true);
         }
         self.grabbed = grab;
+    }
+
+    /// Whether a frame now would do anything. In an open world in a visible window, a frame
+    /// that finds both presentation slots busy and no tick it could submit changes nothing: it
+    /// would lay out the overlay and run the session's frame for a picture that is never drawn.
+    /// Without vsync that is most loop iterations, so the loop waits instead; input, storage
+    /// results and outcomes wait with it for the next frame, at most until the device finishes a
+    /// frame or a tick falls due. Every frame that does run is a whole frame, input to
+    /// presentation, so a driver sees the same frames a person's window runs. A closed or lost
+    /// session, a hidden window and every other phase always have a frame to run.
+    fn has_work(&mut self) -> bool {
+        self.idle = false;
+        let Phase::Running(running) = &mut self.phase else {
+            return true;
+        };
+        if self.occluded || running.surface.size().is_none() {
+            return true;
+        }
+        let ticks_due = running
+            .live
+            .session
+            .runtime()
+            .ticks_due(self.last_frame.elapsed());
+        let admissible = running.live.gpu().poll_admission();
+        let work = match admissible.presentation {
+            Ok(()) | Err(PresentRefusal::Closed(_)) => true,
+            Err(PresentRefusal::Busy) => admissible.tick && ticks_due > 0,
+        };
+        if !work {
+            running.idle_waits += 1;
+            self.idle = true;
+        }
+        work
     }
 
     /// One frame of the current phase.
@@ -1215,7 +1269,7 @@ pub fn run(options: ClientOptions, driver: Option<Box<dyn Driver>>) -> Result<Ru
         if client.quit {
             break;
         }
-        if client.window.is_some() {
+        if client.window.is_some() && client.has_work() {
             client.frame();
         }
         if client.quit {

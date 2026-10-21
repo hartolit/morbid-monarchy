@@ -6,8 +6,10 @@
 //! presentation, as the baseline driver's did.
 //!
 //! A sample is one presented frame. The client's loop also runs iterations that present nothing
-//! (both presentation slots busy, or the surface unavailable) and still advance the timeline;
-//! they belong to the next presented frame's sample. `frame_ms` is the time between the starts of
+//! (a tick fell due while both presentation slots were busy, or the surface is unavailable) and
+//! still advance the timeline; they belong to the next presented frame's sample. When a frame
+//! would have nothing to do the loop waits instead; those waits are counted (`idle_waits`), not
+//! iterations. `frame_ms` is the time between the starts of
 //! consecutive presenting iterations, `main_cpu_us` the presenting iteration's CPU time (input,
 //! overlay, intent, the session's frame, encoding, acquisition and submission), `ticks` the ticks
 //! submitted since the previous presented frame, and `simulation_us` and `body_us` the device
@@ -21,7 +23,7 @@
 //!
 //! Beyond the samples, the summary accounts for the whole measured window (`window`): the
 //! process's and the main thread's CPU time and allocations (every loop iteration, presenting
-//! or not, and every thread), the session's frame time by owner, transfer bytes by purpose,
+//! or not, every idle wait and every thread), the session's frame time by owner, transfer bytes by purpose,
 //! waits, pressure and observation age; and per presented frame the swapchain acquisition's
 //! wait and the session's frame time over the span.
 
@@ -200,6 +202,7 @@ struct Mark {
     thread_allocations: u64,
     iterations: u64,
     presented: u64,
+    idle_waits: u64,
     counters: TransferCounters,
     discarded_ticks: u64,
     session: FrameTimes,
@@ -250,6 +253,8 @@ pub struct BenchDriver {
     presented: u64,
     iterations: u64,
     presented_iterations: u64,
+    /// The client's idle waits, as last seen.
+    idle_waits: u64,
     totals: Totals,
     device_tick_ms: Vec<f64>,
     body_tick_ms: Vec<f64>,
@@ -309,6 +314,7 @@ impl BenchDriver {
             presented: 0,
             iterations: 0,
             presented_iterations: 0,
+            idle_waits: 0,
             totals: Totals::default(),
             device_tick_ms: Vec::new(),
             body_tick_ms: Vec::new(),
@@ -483,6 +489,7 @@ impl BenchDriver {
             thread_allocations: alloc::thread_allocations(),
             iterations: self.iterations,
             presented: self.presented_iterations,
+            idle_waits: running.surface().idle_waits,
             counters: runtime.counters(),
             discarded_ticks: runtime.discarded_ticks(),
             session: self.session_total,
@@ -499,6 +506,7 @@ impl BenchDriver {
         add_times(&mut self.session_total, times);
         self.session_span += times.total();
         let surface = running.surface();
+        self.idle_waits = surface.idle_waits;
         self.surface_mode = Some(format!("{:?}", surface.present_mode));
         if let Some(size) = surface.size {
             let requested = self.scenario().presentation.resolution;
@@ -597,6 +605,7 @@ impl BenchDriver {
             "seconds": seconds,
             "presented_frames": end.presented - start.presented,
             "loop_iterations": end.iterations - start.iterations,
+            "idle_waits": end.idle_waits - start.idle_waits,
             "process_cpu_ms_per_frame": per_frame_ms(end.process_cpu, start.process_cpu),
             "process_cpu_cores": end.process_cpu.zip(start.process_cpu)
                 .map(|(later, earlier)| (later - earlier).as_secs_f64() / seconds.max(1e-9)),
@@ -687,6 +696,7 @@ impl BenchDriver {
             "late_commands": self.late_commands,
             "loop_iterations": self.iterations,
             "presenting_iterations": self.presented_iterations,
+            "idle_waits": self.idle_waits,
             "driven_body": self.driven.map(|body| json!({
                 "slot": body.index(),
                 "generation": body.generation(),
