@@ -51,6 +51,23 @@ impl Scratch {
         Ok(Self(dir))
     }
 
+    /// A directory on the disk the workspace is on, under its git-ignored `target/`: for
+    /// measurements of storage, whose system temporary directory may be in memory (`tmpfs`, where
+    /// a sync costs nothing).
+    pub fn on_disk(name: &str) -> Result<Self, String> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/streaming-scratch")
+            .join(format!(
+                "{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ));
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        Ok(Self(dir))
+    }
+
     pub fn path(&self, file: &str) -> PathBuf {
         self.0.join(file)
     }

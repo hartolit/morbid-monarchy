@@ -386,6 +386,7 @@ fn reopened_run(adapter: &str, path: &Path, epoch: SessionEpoch) -> Result<Run, 
     run_to(&mut live, END)?;
     save_here(&mut live, END)?;
     let (cells, body_report) = accounting(&live);
+    let body_report = body_difference(&body_report, &BodyReport::default());
     let report = live.session.close(Duration::from_secs(30));
     if !report.saved {
         return Err(format!("a reopened run's close did not save: {report:?}"));
@@ -438,8 +439,10 @@ fn body_difference(end: &BodyReport, start: &BodyReport) -> BodyReport {
         contact_pairs: end.contact_pairs.wrapping_sub(start.contact_pairs),
         swept_contacts: end.swept_contacts.wrapping_sub(start.swept_contacts),
         terrain_contacts: end.terrain_contacts.wrapping_sub(start.terrain_contacts),
-        residual_overlap: end.residual_overlap,
-        residual_approach: end.residual_approach,
+        // Largest values over every tick since the session began: a span's own cannot be
+        // taken apart from them, so a difference leaves them out.
+        residual_overlap: 0.0,
+        residual_approach: 0.0,
         speed_limited: end.speed_limited.wrapping_sub(start.speed_limited),
         swept_bodies: end.swept_bodies.wrapping_sub(start.swept_bodies),
         fluid_in: end.fluid_in - start.fluid_in,

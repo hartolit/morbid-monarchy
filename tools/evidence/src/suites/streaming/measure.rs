@@ -390,7 +390,8 @@ struct Cadence {
 /// `profile`/`case`, paced at its tick rate as the client runs: bytes per checkpoint on the
 /// device, back to the CPU and to storage, ticks from a save's request to its publication, the
 /// most simulated time a crash would have lost at any frame, and the frame's CPU time and
-/// allocations. Warm-up as the scenario says, then 900 measured ticks per interval.
+/// allocations. Warm-up as the scenario says, then 900 measured ticks per interval. The store is
+/// on the workspace's disk, not in the system's temporary directory.
 fn checkpoint_cadence(
     adapter: &str,
     check: &mut Check,
@@ -444,7 +445,8 @@ fn checkpoint_cadence(
             "{profile}_{case}_{}",
             interval.map_or("off".to_owned(), |ticks| format!("every_{ticks}"))
         );
-        let scratch = Scratch::new("cadence")?;
+        // On the disk saved worlds live on: a sync there is what a save waits for.
+        let scratch = Scratch::on_disk("cadence")?;
         let path = scratch.path("world.redb");
         world::create(&path, window, rules)?;
         let store = open_store(&path, StoreFaults::new())?;
