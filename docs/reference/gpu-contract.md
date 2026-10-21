@@ -597,8 +597,9 @@ and a conformance hold on completions holds here too) and reports whether a pres
 tick would be admitted; with neither, and no tick due, the client waits in its event wait rather
 than run a frame that changes nothing (`render` `presentation-admission`). The renderer reads the
 cells, the window map and body state through the view and replaces its bind groups only when the
-view's buffer generation changes (a resize); it derives visibility and the follow camera on the
-device and never reads physical state back.
+view's buffer generation changes (a resize); it derives visibility, the follow camera and the
+landscape's cached lighting (relit for the chunks whose cells, or whose neighbours toward the sun,
+changed) on the device and never reads physical state back.
 
 The radius-32 decision: the plan requests a larger storage binding. On a device that cannot
 grant it (as with WebGPU's default 128 MiB), a window whose cell array exceeds the granted binding

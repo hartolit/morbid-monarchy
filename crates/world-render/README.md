@@ -7,6 +7,14 @@ needs no readback. Lighting and atmosphere follow the baseline's: sun, hemispher
 heightfield shadows and ambient occlusion, a sun shadow map of the spheres, distance fog with a
 sun glow, bloom and tone mapping. It writes no physical state and keeps no copy of it.
 
+The landscape's heightfield shadows and occlusion are derived data the renderer keeps per chunk
+vertex (two buffers of 4 bytes a vertex, 33.8 kB per window chunk) and relights on the device
+only for drawn chunks whose cells, or whose neighbours within the shadow's reach toward the sun,
+changed since they were last lit, or for every drawn chunk when the lighting inputs change; the
+visibility pass detects the changes from a signature of each chunk's cells and compacts the
+relight list into an indirect dispatch. `Renderer::set_lighting_cache(false)` lights every
+vertex each frame instead, the comparison the `render` suite measures against.
+
 The client composes it: `Renderer::new` on the session's `WorldView`, `resize` with the output
 size, and `encode` inside `GpuWorld::submit_presentation` each frame with a `FrameRequest`
 (camera rig, lighting, cursor, debug views). Pipelines are built once per device; bind groups

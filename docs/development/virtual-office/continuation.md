@@ -34,6 +34,15 @@ anything lasting into its maintained owner.
   [budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07), reports under
   `target/evidence/journal-*`, drafts and helpers (`cost.py`, `table.py` summarize a cadence
   case's result) under `target/drafts/journal/`.
+- **Then the capacity item, at the user's choice (in part):** `6671c7f` dropped the version-1
+  compatibility guard (saved worlds before release are test data; the user's three worlds went
+  to the trash, not deleted); `10cf62f` lets dry foliage sleep (physics revision 2, `cells`
+  `dry-foliage-sleeps`, the user's approval); `63f8ce6` and `d4d2d6c` cache the landscape's
+  lighting per chunk vertex (`render` `lighting-cache-matches`, `frame-cost` at radius 32) and
+  `bodies` `capacity-tick-phases` times radius 32's tick by phase. `check all` (160 of 160)
+  ran on `d4d2d6c`; no window run since. Measurements in the
+  [budgets](../../reference/performance-budgets.md#capacity-after-07), drafts and the recorded
+  before/after case results under `target/drafts/capacity/`.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
   `vulkan-10de-2c05`, NVIDIA 615.78.08, Linux 7.2.11, KWin Wayland). The final acceptance of
   A01–A15, the feature inventory, the baseline's dispositions and the commands are in the
@@ -53,12 +62,16 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    07, at most 4.2% since `2c63b64`) set the worst p99 near 10.7 ms. Measured on KWin Wayland
    (mailbox) and Xwayland (immediate), absent with FIFO, unchanged by one more swapchain image;
    blaming the NVIDIA driver is an inference. Next evidence would be another compositor or driver.
-2. **Capacity limits:** 4,096 dense bodies at radius 32 take about 8 ms of device time per tick,
-   and the simulation falls to 51–53 ticks/s with counted discarded ticks. The renderer at radius
-   32 makes frames 18–27 ms, and since `2c63b64` one frame of a dense run takes 40–56 ms (its
-   cause is an inference in the budgets). No frame rate is promised there; see the
+2. **Capacity limits, partly done:** at radius 32 dry foliage now sleeps (`10cf62f`, physics
+   revision 2; the idle tick 3.25 → 0.09 ms) and the landscape's lighting is cached per chunk
+   vertex (`63f8ce6`, `d4d2d6c`; the scene passes 14.84 → 4.57 ms), both measured headlessly
+   ([capacity](../../reference/performance-budgets.md#capacity-after-07)). What remains: the
+   capacity, scale and qualification profiles have not run in the window since, so the window's
+   frame times and the single 40–56 ms frames of dense runs are unmeasured; the body pass at
+   4,096 dense bodies still takes about 5.1 ms of a tick (see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
-   body solver.
+   body solver); and the cache costs 142.8 MB of device memory at radius 32. No frame rate is
+   promised there.
 3. **Unqualified:** every other adapter, driver, compositor and platform.
 4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
    code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame

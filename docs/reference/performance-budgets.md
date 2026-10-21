@@ -826,6 +826,85 @@ retrying and the exposure passed 151 ticks, then returned within the bound 12 ti
 succeeded. After each, the store held exactly the marker edits of its checkpoint's ticks. The case
 fails at more than 90 ticks (the interval and 30 ticks for publication).
 
+## Capacity (after 07)
+
+**Result.** Two costs at radius 32 grew with the window rather than with what happened in it, and
+both are gone. A world at rest kept most of its tiles awake every tick because immature foliage
+stayed active whether or not it could grow; since `10cf62f` (physics revision 2) foliage stays
+awake only while water or mud can feed it, and the capacity profile's idle tick fell from 3.25 ms
+to 0.09 ms of device time (170,151 active tiles to 54). The landscape marched its heightfield
+shadows and occlusion for every vertex of every drawn chunk every frame; since `63f8ce6` the
+renderer keeps that lighting per chunk vertex and relights only the chunks whose cells, or whose
+neighbours toward the sun, changed, and the scene passes at radius 32 fell from 14.84 ms to
+4.57 ms (from 4.30 to 1.47 ms at radius 16). What remains is the dense pile: with 4,096 dense
+bodies the body pass still takes 5.12 ms of a 5.23 ms tick (8.20 ms before).
+
+Executed evidence, offscreen and headless on the RTX 5070 Ti (Vulkan, NVIDIA 615.78.08, Linux
+7.2.11): `bodies` `capacity-tick-phases` and `render` `frame-cost` and `lighting-cache-matches` in
+`cargo evidence check all --adapter vulkan-10de-2c05` on `d4d2d6c`, a clean tree, 2026-10-21
+21:25–21:31 UTC (`target/evidence/capacity-check-all/`). The "before" tick phases ran the same
+case on `b4aedf3`'s code with the case added, 2026-10-21 20:38 UTC (a draft tree; its record is
+`target/drafts/capacity/phases-1.json`). Not yet measured in the window.
+
+**The tick at radius 32.** `capacity-tick-phases` replays the frozen capacity scenarios `idle` and
+`body-contact` (seed 69, radius 32 on both axes: 4,225 chunks, every rule on, the scenario's
+commands and spawns, 200 spawns a tick) on the GPU owner alone with tick timestamps, after
+generating the whole window; it reports the measured ticks after the scenario's warm-up, medians
+with the 95th percentile in parentheses, in device milliseconds:
+
+| Workload | Active tiles | Tick | Activity | Material phases | Bodies |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| idle, before | 170,151 | 3.25 (3.55) | 0.43 | 2.79 (3.10) | – |
+| idle, after | 54 | 0.09 (0.24) | 0.02 | 0.05 (0.18) | – |
+| body-contact (4,096 bodies), before | 169,313 | 8.20 (9.64) | 0.44 | 2.73 (3.16) | 5.01 (6.27) |
+| body-contact (4,096 bodies), after | 559 | 5.23 (6.18) | 0.03 | 0.07 (0.22) | 5.12 (6.06) |
+
+The foliage rule and its consequences are in the
+[GPU contract](gpu-contract.md#rule-changes-from-the-baseline-03-and-after-07); `cells`
+`dry-foliage-sleeps` shows the generated world falling asleep and poured water waking dry foliage.
+The body pass at 4,096 dense bodies is the solver's convergence on a crushed pile
+([bodies](#bodies-04)); the
+[dense-pile discussion](../development/virtual-office/whiteboard/discussions/dense-pile-convergence.md)
+holds what would change it.
+
+**The scene passes.** `frame-cost` as in [06](#native-client-06), now at radius 32 too, each
+window in three lighting modes: the cache (the renderer's path), every vertex lit per frame (the
+path before `63f8ce6`, kept as the comparison) and the cache relit for every drawn chunk each
+frame (the sun turned 0.01° back and forth each frame, which relights every drawn chunk). Medians
+with p95 in parentheses, in milliseconds of device time:
+
+| Window | Chunks drawn per layer | Cached | Lit per vertex | Relit every frame | Unculled (cached) | Post | Lighting cache |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Radius 6, 169 chunks | 66, 66, 59, 66 | 0.46 (0.46) | 0.86 (0.88) | 0.74 (0.75) | 0.66 | 0.09 | 5.7 MB |
+| Radius 16, 1,089 chunks | 355, 354, 321, 348 | 1.47 (1.48) | 4.30 (4.32) | 2.26 (2.28) | 3.21 | 0.09 | 36.8 MB |
+| Radius 32, 4,225 chunks | 1,280, 1,247, 1,122, 1,275 | 4.57 (4.61) | 14.84 (14.87) | 6.87 (7.21) | 11.86 | 0.11 | 142.8 MB |
+
+The cache is two buffers of 4 bytes per chunk vertex (65 × 65 a chunk), occlusion and sun
+visibility of two layers each as 8-bit fractions, so 33,800 bytes per window chunk; it is split in
+two because one buffer would exceed the 138,444,800-byte storage binding at radius 32. Each half
+takes 16,900 bytes a chunk against the cell array's 32,768, so a window whose cells fit the
+granted binding fits its cache. Relighting
+is a compute pass dispatched indirectly from the chunk list that visibility compacts each frame: a
+chunk is relit when its cells' signature (two 32-bit hashes of its cells, computed with the chunk
+bounds every frame) or its residency changes, which includes a load, an eviction and a window
+move, when that of a chunk within one chunk of it or up to two chunks toward the sun changes (the
+shadow march reaches about 121 cells), and every drawn chunk when the window's buffers are
+replaced or the sun, the shadow or occlusion strengths or the elevation scale change. A chunk out
+of view keeps its flag until it is drawn again. Flames stay lit per vertex. Encode
+takes 0.18–0.40 ms of CPU (p95 0.23–0.46 ms); static buffers, targets and uniforms are as in 06.
+
+Correctness: `lighting-cache-matches` renders four cameras with the cache and lit per vertex and
+compares the lighting values (not pixels): the worst difference is one 8-bit level, in at most
+3,639 of a camera's values; an unchanged frame relights no chunk, one edit relit 14 chunks
+(at most 27 allowed), moving the sun relights every drawn chunk, and an edit out of view is correct
+once the chunk is drawn again. A change that leaves both hashes of a chunk equal would leave its
+lighting stale until it or a neighbour changes again; that is not tested.
+
+**In the window** the capacity frames were 18–27 ms at `2c63b64`, of which this was the bulk: the
+scene's 14.8 ms and the idle world's 3.25 ms tick. How much of it the window now saves is not
+measured; the frozen capacity, scale and qualification profiles need to run again
+([known gaps](../product/status.md#known-gaps)).
+
 ## Structural gates
 
 These gates are independent of an arbitrary FPS target.

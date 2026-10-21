@@ -45,7 +45,7 @@ baseline did and where each responsibility went.
 | Bodies | `gpu-world`: slot table, device state, substeps of the tick, hashed bins, the pair solver, terrain and liquid coupling, rays and body commands (04). The CPU holds `BodyHandle`s and the runtime's body monitor its observations. |
 | Observer, tools, picking, statistics | `morbid-app` `play`: input becomes runtime commands at GPU-resolved rays and column queries; statistics are GPU totals reductions. No CPU terrain read. |
 | Residency and persistence | `world_runtime::{residency, checkpoint, session}` (metadata, snapshots at a completed tick, publication) over `gpu-world` slots and snapshots and `world-store` (format version 1, atomic checkpoints, the legacy import) (05). |
-| Rendering | `world-render`: landscape layers and spheres drawn from the GPU owner's buffers on its device and timeline, GPU culling, camera follow on the device, lighting, fog, bloom and tone mapping (06). |
+| Rendering | `world-render`: landscape layers and spheres drawn from the GPU owner's buffers on its device and timeline, GPU culling, camera follow on the device, lighting (heightfield shadows and occlusion cached per chunk vertex, relit where cells changed), fog, bloom and tone mapping (06). |
 | Composition | `morbid-app` (`apps/morbid`, executable `morbid`): a winit window with an explicitly pumped loop, an egui overlay, the world catalog and settings, explicit adapter choice, `WorldSession` over `world-store`, the GPU owner opened presenting to the window, and the renderer (06). |
 | Runtime orchestration | `world-runtime`: identities, the `PhysicalWorld` port, receipts, the ledger and body monitor, the fixed clock, workers and the session, in a standalone `bevy_ecs` world. |
 | Evidence | `monarchy-evidence`: the lanes, the GPU suites (`transfers`, `cells`, `bodies`, `streaming`, `render`), `resident-world` headless or in the native window, scripted runs of the real client and the native benchmark; the CPU reference of the cell rules stays here as a test oracle. |
@@ -177,10 +177,10 @@ or generated declaration step. This is build-time dependency, not a global shade
 
 Runtime art, UI assets and their provenance belong in `apps/morbid/assets/` when the client first
 has any (06 needed none); authoring inputs, when retained, belong in clearly separate
-`assets-src/` directories. GPU-generated normals, visibility
-lists, body instances and other derived data belong to the renderer, not disk assets or physical
-state. Fixtures belong beside their tests. Generated shader assembly, captures, caches and large
-logs belong under ignored `target/` or retained external artifacts.
+`assets-src/` directories. GPU-generated normals, visibility lists, lighting caches, body
+instances and other derived data belong to the renderer, not disk assets or physical state.
+Fixtures belong beside their tests. Generated shader assembly, captures, caches and large logs
+belong under ignored `target/` or retained external artifacts.
 
 The packaged application must locate its assets independently of the developer's current working
 directory. Keep licensing/provenance with imported assets. Do not duplicate Bevy material imports
