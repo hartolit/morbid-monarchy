@@ -30,7 +30,9 @@ GPU guidance; executable code and tests will own exact selected versions and lay
 No assignment is active. The GPU transition (prompts 00–07) is complete; its
 [qualification](development/qualification.md) records the final acceptance, the preserved
 feature inventory and what became of the baseline, and Git keeps the sprint's prompts and
-handoff. The [virtual office](development/virtual-office/README.md) owns temporary assignments,
+handoff. The office's [continuation note](development/virtual-office/continuation.md) says where
+work stopped and what is open. The [virtual office](development/virtual-office/README.md) owns
+temporary assignments,
 and the [whiteboard](development/virtual-office/whiteboard/README.md) keeps unresolved
 cross-assignment questions. Adopt lasting outcomes into the maintained owners before removing a
 completed sprint.

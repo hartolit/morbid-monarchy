@@ -12,6 +12,8 @@ status system. [Workflow](../workflow.md) owns implementation procedure and evid
 The GPU transition (00–07) closed on 2026-10-21; its [qualification](../qualification.md) keeps
 the final acceptance, and Git keeps its prompts and handoff
 (`git log -- docs/development/virtual-office/gpu-transition`).
+Where work stopped, what is open and how to work on this machine:
+[continuation note](continuation.md).
 
 ## Execute one assignment
 
