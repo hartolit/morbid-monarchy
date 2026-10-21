@@ -727,3 +727,113 @@ pub fn pacing(adapter: &str, check: &mut Check) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// The capacity profile's idle and body-contact scenarios (radius 32 of seed-69 terrain, every
+/// rule; 4,096 metal spheres pulled between two points) replayed tick by tick through the GPU
+/// world with timestamps: device time of each phase of a tick (commands, activity scheduling,
+/// material passes, bodies) and the tiles with an active cell, after the scenario's warm-up.
+/// Spawns go in at 200 a tick. Each tick is submitted alone and waited for.
+pub fn capacity_tick_phases(adapter: &str, check: &mut Check) -> Result<(), String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for case in ["idle", "body-contact"] {
+        let path = scenario::scenario_path(&root.join("scenarios"), "capacity", case);
+        let loaded = scenario::load(&path)?;
+        let s = &loaded.scenario;
+        let start = IVec2::from(s.camera.start_cell);
+        let size = world_model::spatial::CHUNK_SIZE as i32;
+        let focus = ChunkKey::new(start.x.div_euclid(size), start.y.div_euclid(size), 0);
+        let [rx, ry] = s.world.active_radius_chunks;
+        let window = ResidentWindow::new(focus, rx, ry).map_err(|e| format!("window: {e:?}"))?;
+        let mut config = gpu_world::world::GpuWorldConfig::new(
+            WorldId::new(u64::from(s.world.seed)),
+            adapter,
+            window,
+        );
+        config.allow_software = super::super::allow_software();
+        config.rules = SimulationRules {
+            liquid: s.world.families.contains(&Family::Liquid),
+            granular: s.world.families.contains(&Family::Granular),
+            thermal: s.world.families.contains(&Family::Thermal),
+            fire: s.world.families.contains(&Family::Fire),
+            biology: s.world.families.contains(&Family::Biology),
+        };
+        config.ambient_temperature = AmbientTemperature::celsius(s.world.ambient_temperature_c)
+            .map_err(|e| e.to_string())?;
+        config.elevation_scale =
+            ElevationScale::new(s.world.elevation_scale).map_err(|e| e.to_string())?;
+        config.timestamps = true;
+        config.transfer.bodies = 4096;
+        config.transfer.body_samples_per_tick = SAMPLED as u32;
+        let mut driver = Driver::open(config)?;
+        driver.tick_rate_hz = s.world.tick_rate_hz;
+        let generator = WorldGenerator::new(s.world.seed);
+        let keys: Vec<ChunkKey> = window.view().iter().collect();
+        let slots = driver.world.capabilities().chunk_upload_slots as usize;
+        for group in keys.chunks(slots) {
+            for key in group {
+                driver.stage_upload(*key, &generator.generate_chunk(*key).cells)?;
+            }
+            step(&mut driver, &[])?;
+        }
+        let ticks = s.run.warmup_ticks + s.run.measured_ticks;
+        let mut live = Vec::new();
+        let mut cursor = 0;
+        let mut spawns: Vec<Command> = Vec::new();
+        for group in &s.bodies {
+            spawns.extend(
+                group
+                    .spawns()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(Command::SpawnBody),
+            );
+        }
+        let mut phases: [Vec<f64>; 5] = Default::default();
+        let mut active = Vec::new();
+        for t in 0..ticks {
+            let mut commands: Vec<Command> = spawns.drain(..spawns.len().min(200)).collect();
+            for action in &s.actions {
+                commands.extend(action.commands_at(t, None).map_err(|e| e.to_string())?);
+            }
+            rotate(&mut driver, &live, &mut cursor);
+            let sample = step(&mut driver, &commands)?;
+            spawned(&driver, &mut live);
+            if t >= s.run.warmup_ticks
+                && let (Some(total), Some(p)) = (sample.report.gpu_time, sample.report.phases)
+            {
+                for (series, value) in phases
+                    .iter_mut()
+                    .zip([total, p.commands, p.activity, p.material, p.bodies])
+                {
+                    series.push(value.as_secs_f64() * 1000.0);
+                }
+                active.push(f64::from(sample.report.cells.active_tiles));
+            }
+        }
+        for (name, mut series) in ["total", "commands", "activity", "material", "bodies"]
+            .into_iter()
+            .zip(phases)
+        {
+            check.metric(
+                &format!("{case}_{name}_ms_p50"),
+                percentile(&mut series, 0.5),
+            );
+            check.metric(
+                &format!("{case}_{name}_ms_p95"),
+                percentile(&mut series, 0.95),
+            );
+        }
+        check.metric(
+            &format!("{case}_active_tiles_p50"),
+            percentile(&mut active, 0.5),
+        );
+        check.metric(&format!("{case}_bodies"), live.len());
+        let expected: u32 = s.bodies.iter().map(|group| group.count).sum();
+        check.equal(
+            &format!("{case}: spheres spawned"),
+            live.len(),
+            expected as usize,
+        );
+    }
+    Ok(())
+}

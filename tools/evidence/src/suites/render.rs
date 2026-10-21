@@ -70,8 +70,13 @@ pub const CASES: &[Case] = &[
         run: visibility::culling_matches_unculled,
     },
     Case {
+        name: "lighting-cache-matches",
+        summary: "the terrain lighting cache draws what per-vertex lighting draws to within one level, relights nothing on an unchanged frame, an edit's neighbourhood, every drawn chunk when the sun moves, and a chunk edited out of view once it is drawn",
+        run: visibility::lighting_cache_matches,
+    },
+    Case {
         name: "frame-cost",
-        summary: "device time of the scene and post passes, CPU encode time and renderer memory at radius 6 and 16 on generated terrain (measurement)",
+        summary: "device time of the scene and post passes, CPU encode time and renderer memory at radius 6, 16 and 32 on generated terrain, with cached and per-vertex lighting and every chunk relit (measurement)",
         run: measure::frame_cost,
     },
 ];

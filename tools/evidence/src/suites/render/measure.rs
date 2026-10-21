@@ -1,9 +1,10 @@
-//! The renderer's cost on generated terrain at the qualification and scale radii: device time of
-//! the scene passes (camera, sphere shadows, the four layers and the spheres) and the post passes
-//! (bloom and tone map) from pass timestamps, the CPU time of encoding a frame, and the
-//! renderer's own device memory. Frames are drawn one at a time with the device idle between
-//! them, so each pass's time is its own; this is the renderer alone, not a client frame. The
-//! unculled comparison path is measured in the same run.
+//! The renderer's cost on generated terrain at the qualification, scale and capacity radii:
+//! device time of the scene passes (camera, visibility, relight, sphere shadows, the four layers
+//! and the spheres) and the post passes (bloom and tone map) from pass timestamps, the CPU time
+//! of encoding a frame, and the renderer's own device memory. Frames are drawn one at a time with
+//! the device idle between them, so each pass's time is its own; this is the renderer alone, not
+//! a client frame. The unculled path, per-vertex lighting and the lighting cache's worst case
+//! (every drawn chunk relit each frame) are measured in the same run.
 
 use std::time::Instant;
 
@@ -70,8 +71,69 @@ pub(super) fn generated(adapter: &str, radius: u32) -> Result<Driver, String> {
     Ok(driver)
 }
 
+/// How the terrain lighting is computed in a measured run.
+#[derive(Clone, Copy)]
+enum Lighting {
+    /// From the cache, nothing changing: what a still scene costs.
+    Cached,
+    /// Per vertex every frame: the comparison path and the cost before the cache.
+    PerVertex,
+    /// From the cache, with the sun nudged every frame so every drawn chunk is relit: the
+    /// cache's worst case.
+    RelitEveryFrame,
+}
+
+/// Device time of the scene and post passes and the CPU time of encoding, over measured frames.
+struct Costs {
+    scene: Vec<f64>,
+    post: Vec<f64>,
+    encode: Vec<f64>,
+}
+
+fn measure_frames(
+    driver: &mut Driver,
+    offscreen: &mut Offscreen,
+    frame: &world_render::FrameRequest,
+    period_ns: Option<f32>,
+    lighting: Lighting,
+) -> Result<Costs, String> {
+    offscreen
+        .renderer
+        .set_lighting_cache(!matches!(lighting, Lighting::PerVertex));
+    let mut frame = *frame;
+    let mut costs = Costs {
+        scene: Vec::new(),
+        post: Vec::new(),
+        encode: Vec::new(),
+    };
+    for index in 0..WARMUP + FRAMES {
+        if matches!(lighting, Lighting::RelitEveryFrame) {
+            frame.lighting.sun_azimuth_degrees += if index % 2 == 0 { 0.01 } else { -0.01 };
+        }
+        let started = Instant::now();
+        offscreen.draw(&mut driver.world, &frame)?;
+        let cpu = started.elapsed().as_secs_f64() * 1000.0;
+        let times = match period_ns {
+            Some(period) => Some(pass_times(&mut driver.world, offscreen, period)?),
+            None => {
+                driver.world.wait_idle(std::time::Duration::from_secs(10));
+                None
+            }
+        };
+        if index >= WARMUP {
+            costs.encode.push(cpu);
+            if let Some((scene_ns, post_ns)) = times {
+                costs.scene.push(scene_ns / 1.0e6);
+                costs.post.push(post_ns / 1.0e6);
+            }
+        }
+    }
+    offscreen.renderer.set_lighting_cache(true);
+    Ok(costs)
+}
+
 pub fn frame_cost(adapter: &str, check: &mut Check) -> Result<(), String> {
-    for radius in [6u32, 16] {
+    for radius in [6u32, 16, 32] {
         let mut driver = generated(adapter, radius)?;
         let period_ns = match driver.world.report().timestamps {
             TimestampSupport::Enabled { period_ns } => Some(period_ns),
@@ -98,62 +160,62 @@ pub fn frame_cost(adapter: &str, check: &mut Check) -> Result<(), String> {
             pitch: (-40f32).to_radians(),
         });
         frame.lighting = world_render::Lighting::default();
+        let label = |name: &str| format!("r{radius}_{name}");
         // The unculled comparison path first: every resident chunk of every layer.
         offscreen.renderer.set_culling(false);
-        let mut unculled = Vec::new();
-        for index in 0..WARMUP + FRAMES {
-            offscreen.draw(&mut driver.world, &frame)?;
-            if let Some(period) = period_ns {
-                let (scene_ns, _) = pass_times(&mut driver.world, &offscreen, period)?;
-                if index >= WARMUP {
-                    unculled.push(scene_ns / 1.0e6);
-                }
-            } else {
-                driver.world.wait_idle(std::time::Duration::from_secs(10));
-            }
-        }
-        if !unculled.is_empty() {
+        let mut unculled = measure_frames(
+            &mut driver,
+            &mut offscreen,
+            &frame,
+            period_ns,
+            Lighting::Cached,
+        )?;
+        offscreen.renderer.set_culling(true);
+        if !unculled.scene.is_empty() {
             check.metric(
-                &format!("r{radius}_unculled_scene_ms_median"),
-                percentile(&mut unculled, 0.5),
+                &label("unculled_scene_ms_median"),
+                percentile(&mut unculled.scene, 0.5),
             );
         }
-        offscreen.renderer.set_culling(true);
-        let (mut scene, mut post, mut encode) = (Vec::new(), Vec::new(), Vec::new());
-        for index in 0..WARMUP + FRAMES {
-            let started = Instant::now();
-            offscreen.draw(&mut driver.world, &frame)?;
-            let cpu = started.elapsed().as_secs_f64() * 1000.0;
-            let times = match period_ns {
-                Some(period) => Some(pass_times(&mut driver.world, &offscreen, period)?),
-                None => {
-                    driver.world.wait_idle(std::time::Duration::from_secs(10));
-                    None
+        for (name, lighting) in [
+            ("per_vertex_", Lighting::PerVertex),
+            ("relit_", Lighting::RelitEveryFrame),
+            ("", Lighting::Cached),
+        ] {
+            let mut costs =
+                measure_frames(&mut driver, &mut offscreen, &frame, period_ns, lighting)?;
+            if !costs.scene.is_empty() {
+                check.metric(
+                    &label(&format!("{name}scene_ms_median")),
+                    percentile(&mut costs.scene, 0.5),
+                );
+                check.metric(
+                    &label(&format!("{name}scene_ms_p95")),
+                    percentile(&mut costs.scene, 0.95),
+                );
+            }
+            if name.is_empty() {
+                if !costs.post.is_empty() {
+                    check.metric(&label("post_ms_median"), percentile(&mut costs.post, 0.5));
+                    check.metric(&label("post_ms_p95"), percentile(&mut costs.post, 0.95));
                 }
-            };
-            if index >= WARMUP {
-                encode.push(cpu);
-                if let Some((scene_ns, post_ns)) = times {
-                    scene.push(scene_ns / 1.0e6);
-                    post.push(post_ns / 1.0e6);
-                }
+                check.metric(
+                    &label("encode_cpu_ms_median"),
+                    percentile(&mut costs.encode, 0.5),
+                );
+                check.metric(
+                    &label("encode_cpu_ms_p95"),
+                    percentile(&mut costs.encode, 0.95),
+                );
             }
         }
         let drawn = super::cases::draw_counts(&mut driver.world, &offscreen)?;
-        check.metric(&format!("r{radius}_drawn_per_layer"), format!("{drawn:?}"));
+        check.metric(&label("drawn_per_layer"), format!("{drawn:?}"));
         let counters = offscreen.renderer.counters();
-        let label = |name: &str| format!("r{radius}_{name}");
-        if !scene.is_empty() {
-            check.metric(&label("scene_ms_median"), percentile(&mut scene, 0.5));
-            check.metric(&label("scene_ms_p95"), percentile(&mut scene, 0.95));
-            check.metric(&label("post_ms_median"), percentile(&mut post, 0.5));
-            check.metric(&label("post_ms_p95"), percentile(&mut post, 0.95));
-        }
-        check.metric(&label("encode_cpu_ms_median"), percentile(&mut encode, 0.5));
-        check.metric(&label("encode_cpu_ms_p95"), percentile(&mut encode, 0.95));
         check.metric(&label("chunk_instances"), counters.chunk_instances);
         check.metric(&label("renderer_static_bytes"), counters.static_bytes);
         check.metric(&label("renderer_target_bytes"), counters.target_bytes);
+        check.metric(&label("lighting_cache_bytes"), counters.lighting_bytes);
         check.metric(
             &label("world_bind_groups"),
             counters.world_bind_groups_created,

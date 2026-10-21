@@ -24,7 +24,8 @@
 //! Terrain lighting is the costliest part of a frame when computed per vertex every frame (at
 //! radius 32 about 11 of 14.5 ms of scene time), and it changes only where cells change, the
 //! sun moves or the window does. The lighting cache keeps it per window chunk and layer vertex,
-//! as 8-bit fractions (8 bytes a vertex), and the relight pass recomputes only drawn chunks whose
+//! as 8-bit fractions (8 bytes a vertex in two buffers, each within the storage binding the
+//! device grants), and the relight pass recomputes only drawn chunks whose
 //! inputs changed: the signatures in the bounds pass find changed chunks, the cull marks the
 //! chunks whose lighting reads them, and a changed sun, scale or window relights everything.
 //! Swaying flames are lit per vertex; `set_lighting_cache(false)` lights every vertex per frame,
@@ -67,9 +68,10 @@ const CHUNK_RECORD_BYTES: u64 = 32;
 const DRAW_ARGS_BYTES: u64 = 4 * 5 * 4;
 /// The relight pass's indirect dispatch: three words.
 const RELIGHT_ARGS_BYTES: u64 = 3 * 4;
-/// Vertices of a chunk's layer grid, and bytes of one cache entry (two packed words).
+/// Vertices of a chunk's layer grid, and bytes of one cache entry in each of the cache's two
+/// buffers (layers 0 and 1, layers 2 and 3).
 const CHUNK_VERTICES: u64 = 65 * 65;
-const LIGHTING_ENTRY_BYTES: u64 = 8;
+const LIGHTING_ENTRY_BYTES: u64 = 4;
 /// `LIGHTING_*` flags of the frame uniform (types.wgsl).
 const LIGHTING_LIVE: u32 = 1;
 const LIGHTING_RELIGHT_ALL: u32 = 2;
@@ -184,8 +186,8 @@ struct WorldGroups {
     camera: wgpu::BindGroup,
     visibility: wgpu::BindGroup,
     relight: wgpu::BindGroup,
-    /// Kept alive with the groups that bind it.
-    _lighting: wgpu::Buffer,
+    /// Kept alive with the groups that bind them.
+    _lighting: [wgpu::Buffer; 2],
 }
 
 /// Targets for one output size.
@@ -297,11 +299,12 @@ fn layouts(device: &wgpu::Device) -> Layouts {
             read_only(1, draw),
             read_only(2, draw),
             read_only(3, draw),
-            read_only(4, draw),
+            buffer_entry(4, draw, wgpu::BufferBindingType::Uniform),
             read_only(5, draw),
             read_only(6, draw),
             read_only(7, wgpu::ShaderStages::VERTEX),
             read_only(8, wgpu::ShaderStages::VERTEX),
+            read_only(9, wgpu::ShaderStages::VERTEX),
         ],
     });
     let shadow = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -365,8 +368,9 @@ fn layouts(device: &wgpu::Device) -> Layouts {
             buffer_entry(0, compute, wgpu::BufferBindingType::Uniform),
             read_only(2, compute),
             read_only(3, compute),
-            writable(9),
-            read_only(10, compute),
+            writable(10),
+            writable(11),
+            read_only(12, compute),
         ],
     });
     let fragment = wgpu::ShaderStages::FRAGMENT;
@@ -730,7 +734,7 @@ impl Renderer {
             view.queue,
             "landscape palette",
             bytemuck::cast_slice(&palette_data),
-            wgpu::BufferUsages::STORAGE,
+            wgpu::BufferUsages::UNIFORM,
         );
         let frame_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
@@ -1092,12 +1096,18 @@ impl Renderer {
         }
         // Released with the previous groups; the new window's cache is sized for it.
         self.world_groups = None;
-        let lighting = view.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("terrain lighting"),
-            size: u64::from(view.window.chunk_count()) * CHUNK_VERTICES * LIGHTING_ENTRY_BYTES,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
+        let lighting_buffer = |label| {
+            view.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: u64::from(view.window.chunk_count()) * CHUNK_VERTICES * LIGHTING_ENTRY_BYTES,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let lighting = [
+            lighting_buffer("terrain lighting, layers 0 and 1"),
+            lighting_buffer("terrain lighting, layers 2 and 3"),
+        ];
         let scene = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render world"),
             layout: &self.layouts.world,
@@ -1110,7 +1120,8 @@ impl Renderer {
                 whole(5, view.bodies),
                 whole(6, view.activity),
                 whole(7, &self.layer_lists),
-                whole(8, &lighting),
+                whole(8, &lighting[0]),
+                whole(9, &lighting[1]),
             ],
         });
         let camera = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1144,12 +1155,13 @@ impl Renderer {
                 whole(0, &self.frame_uniform),
                 whole(2, view.cells),
                 whole(3, view.window_map),
-                whole(9, &lighting),
-                whole(10, &self.relight_list),
+                whole(10, &lighting[0]),
+                whole(11, &lighting[1]),
+                whole(12, &self.relight_list),
             ],
         });
         self.counters.world_bind_groups_created += 1;
-        self.counters.lighting_bytes = lighting.size();
+        self.counters.lighting_bytes = lighting[0].size() + lighting[1].size();
         // A new window: its cache holds nothing yet.
         self.lighting_key = None;
         self.world_groups = Some(WorldGroups {

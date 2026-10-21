@@ -180,4 +180,9 @@ pub const CASES: &[Case] = &[
         summary: "the runtime at 60 Hz of wall time with 256 and 4096 bodies: ticks kept and discarded, pressure, latency, sample age",
         run: measure::pacing,
     },
+    Case {
+        name: "capacity-tick-phases",
+        summary: "the capacity profile's idle and body-contact scenarios at radius 32 replayed tick by tick: device time of each phase of a tick and the tiles with an active cell (measurement)",
+        run: measure::capacity_tick_phases,
+    },
 ];

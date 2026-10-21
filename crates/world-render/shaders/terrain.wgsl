@@ -28,7 +28,7 @@ const FLAME_SWAY_FREQUENCY: f32 = 7.0;
 
 const VERTS_ACROSS: u32 = CHUNK_SIZE + 1u;
 // Vertices of a chunk's layer grid: the lighting cache holds one entry per window chunk and
-// vertex, both layers' terms packed per word.
+// vertex in each of its two buffers.
 const CHUNK_VERTICES: u32 = VERTS_ACROSS * VERTS_ACROSS;
 const RELIGHT_GROUP: u32 = 256u;
 
@@ -203,11 +203,17 @@ fn layer_light(cell: vec2<i32>, height: f32, hidden: bool) -> vec2<f32> {
     );
 }
 
-// A layer vertex's terms from the cache: layers 0 and 1 in the first word, 2 and 3 in the
-// second, each as two 8-bit fractions (occlusion, visibility).
+// A layer vertex's terms from the cache: one word for layers 0 and 1, another for 2 and 3, each
+// layer as two 8-bit fractions (occlusion, visibility).
 fn cached_light(chunk_index: u32, vertex_index: u32, layer: u32) -> vec2<f32> {
-    let words = lighting[chunk_index * CHUNK_VERTICES + vertex_index];
-    let terms = unpack4x8unorm(select(words.y, words.x, layer < 2u));
+    let entry = chunk_index * CHUNK_VERTICES + vertex_index;
+    var word: u32;
+    if (layer < 2u) {
+        word = lighting_lower[entry];
+    } else {
+        word = lighting_upper[entry];
+    }
+    let terms = unpack4x8unorm(word);
     return select(terms.zw, terms.xy, layer % 2u == 0u);
 }
 
@@ -233,10 +239,9 @@ fn relight(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_in
             let sample = sample_layer(center, cell, layer);
             terms[layer] = layer_light(cell, sample.elevation, sample.is_hidden);
         }
-        lighting_out[chunk_index * CHUNK_VERTICES + vertex] = vec2<u32>(
-            pack4x8unorm(vec4<f32>(terms[0], terms[1])),
-            pack4x8unorm(vec4<f32>(terms[2], terms[3])),
-        );
+        let entry = chunk_index * CHUNK_VERTICES + vertex;
+        relit_lower[entry] = pack4x8unorm(vec4<f32>(terms[0], terms[1]));
+        relit_upper[entry] = pack4x8unorm(vec4<f32>(terms[2], terms[3]));
     }
 }
 

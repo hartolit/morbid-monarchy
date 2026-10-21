@@ -2245,6 +2245,16 @@ expectation = "The runtime presenting 60 Hz frames of wall time at 256 distribut
 destination = "gpu-world bodies on the selected adapter (04); the hardware measurement of record"
 determinism = "float-tolerance"
 
+[[behavior]]
+id = "gpu.bodies.capacity-tick-phases"
+package = "monarchy-evidence"
+target = "gpu:bodies"
+test = "capacity-tick-phases"
+origin = "transition"
+expectation = "The capacity idle and body-contact scenarios (radius 32, every rule, 4,096 spheres) replay tick by tick with every sphere spawned; the device time of each tick phase and the active tiles are recorded (measurement)."
+destination = "gpu-world material phases and bodies at the capacity radius (after 07)"
+determinism = "float-tolerance"
+
 # --- Streaming, checkpoints and recovery: world-model, gpu-world, world-runtime, world-store (05) ---
 
 [[behavior]]
@@ -3147,6 +3157,6 @@ package = "monarchy-evidence"
 target = "gpu:render"
 test = "frame-cost"
 origin = "transition"
-expectation = "Device time of the scene and post passes (culled and unculled), CPU encode time and renderer memory at radius 6 and 16 (measurement)."
+expectation = "Device time of the scene and post passes (culled and unculled; cached lighting, per-vertex lighting and every drawn chunk relit each frame), CPU encode time and renderer memory with the lighting cache at radius 6, 16 and 32 (measurement)."
 destination = "world-render on gpu-world's device (06)"
 determinism = "exact"
