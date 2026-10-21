@@ -794,10 +794,29 @@ own bytes: each save is several synced redb commits (the rows, the body set, the
 reclamation of what it superseded), which also make the idle workload's 0.28 MB/s with almost no
 chunk changing. A store write waited up to 154 ms at radius 16 (fsync on this file system), and
 retained payloads peaked at 10.6 MB against the 32 MB budget. One frame of the every-300 run at
-radius 16 took 7.52 ms (2.62 ms in the same run at `2e1a938`); it is not attributed. The native
-window was not measured with saves on: the frozen benchmarks keep their protocol, autosave off,
-and a diagnostic `native-client bench --autosave 60` run is the next evidence if the frame cost
-is questioned.
+radius 16 took 7.52 ms (2.62 ms in the same run at `2e1a938`); it is not attributed.
+
+**In the native window** (diagnostic, not the frozen protocol, which keeps autosave off). The
+frozen `coupled` scenarios through `target/release/native-client bench` on `dfeb530`'s code, three
+pairs per profile alternating autosave off and `--autosave 60`, no vsync at 1920×1080, the
+person's desktop otherwise idle, 2026-10-21 19:42–19:49 UTC; every run completed on its first
+attempt without a window mismatch (`target/evidence/journal-window/bench/`, summarized by
+`target/drafts/journal/window/summ.py`). The direct runs skip `cargo evidence bench`'s pacing and
+contention checks. Frame time does not move:
+
+| Profile | Autosave | Median (ms) | p95 | p99 | Max | Main-thread CPU per frame (ms) | Allocations per frame | Checkpoint owner per frame (µs) | Snapshot readback (MB/s) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| qualification | off | 1.22–1.23 | 2.34–2.37 | 10.71–10.80 | 11.61–12.59 | 0.55–0.57 | 836–838 | 0.2 | 0.06 |
+| qualification | every 60 | 1.22–1.23 | 2.33–2.36 | 10.73–10.75 | 11.15–12.70 | 0.55–0.56 | 854–857 | 0.5 | 0.93–0.95 |
+| scale | off | 5.01–5.02 | 7.42–10.82 | 11.01–11.14 | 11.66–12.74 | 1.07–1.13 | 1071–1078 | 0.3 | 0.17 |
+| scale | every 60 | 5.01–5.02 | 7.67–8.36 | 11.08–11.22 | 12.24–13.15 | 1.10–1.19 | 1119–1124 | 3.5–3.7 | 2.54–2.68 |
+
+Every run kept 60 ticks/s with no tick discarded and no frame over 16.67 ms; the p99s are the
+10.09 ms acquisition waits ([known gaps](../product/status.md#known-gaps)). Saving adds 18–20
+allocations per presented frame at radius 6 and about 48 at radius 16 (the readback's payloads
+and the workers' writes), and at radius 16 about 0.06 ms of main-thread CPU, inside the spread of
+the runs without saves. The snapshot readback with autosave off is the window's evictions as the
+observer circles.
 
 **The bound under faults** (`bounded-loss`, same run, radius 1, every rule off, a marker edit
 every fifth tick, paced at 60 Hz, store on disk). A device lost while an autosave was copying lost

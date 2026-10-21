@@ -59,13 +59,13 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
    body solver.
 3. **Unqualified:** every other adapter, driver, compositor and platform.
-4. **The autosave cadence in the native window:** the `loss` and `worlds` scripts and the frozen
-   benchmarks run with autosave off, as their protocol says, and have not run since `2c63b64`;
-   a diagnostic `native-client bench --autosave 60` would measure the cadence's frame cost in the
-   window (headless it is within the spread between runs). A command journal for a loss below
-   the cadence is parked on the whiteboard with what it needs first; a future change of the
-   format, layout, physics or generator still needs a migration of version-1 worlds, which the
-   `world-store` fixture test enforces.
+4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
+   code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame
+   times of autosave off ([budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07));
+   `features` last ran on `2c63b64`, and the frozen benchmark protocol still saves never. A
+   command journal for a loss below the cadence is parked on the whiteboard with what it needs
+   first; a future change of the format, layout, physics or generator still needs a migration of
+   version-1 worlds, which the `world-store` fixture test enforces.
 
 The [roadmap](../../product/roadmap.md#after-qualification) says how to choose what comes after
 the transition.
