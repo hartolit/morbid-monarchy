@@ -6,16 +6,16 @@ and qualified on the nominated desktop at `eb9d8fb`
 only consecutive frames (`c4271ad`), the client's loop waits instead of spinning without vsync
 (`2c63b64`), measured again with 07's protocol, and a person's world is checkpointed every 60 ticks
 by default and never less often than every 3,600, which bounds what a crash or a lost device loses
-(`2932764`, [ADR 0004](../decisions/0004-bounded-loss-by-checkpoint-cadence.md)), and at radius 32
-a world at rest no longer keeps dry foliage awake (`10cf62f`, physics revision 2) and the
-landscape's lighting is cached per chunk vertex and relit only where cells changed (`63f8ce6`,
-`d4d2d6c`), measured headlessly but not yet in the window. The native client (`morbid-app`,
+(`2932764`, [ADR 0004](../decisions/0004-bounded-loss-by-checkpoint-cadence.md)), and at radius 32 a
+world at rest no longer keeps dry foliage awake (`10cf62f`, physics revision 2) and the landscape's
+lighting is cached per chunk vertex and relit only where cells changed (`63f8ce6`, `d4d2d6c`),
+measured headlessly and with the capacity profile in the window. The native client (`morbid-app`,
 `apps/morbid`) is the application: a winit window with an egui overlay over the runtime's
 `WorldSession`, the saved world in `world-store`, the GPU owner `gpu-world` and the renderer
-`world-render`, all on one device. The GPU owns cells and bodies; the CPU issues intent, manages residency and saves. 06
-removed the Bevy baseline, its CPU engine (`monarch-engine`) and its chunk manager (`spatial-lib`);
-`9a3230c` is the last commit that builds them. Update this page when implementation produces
-evidence; do not convert target architecture into past-tense claims.
+`world-render`, all on one device. The GPU owns cells and bodies; the CPU issues intent, manages
+residency and saves. 06 removed the Bevy baseline, its CPU engine (`monarch-engine`) and its chunk
+manager (`spatial-lib`); `9a3230c` is the last commit that builds them. Update this page when
+implementation produces evidence; do not convert target architecture into past-tense claims.
 
 ## Current implementation
 
@@ -42,31 +42,35 @@ baseline did and where each of its responsibilities went.
 The Bevy baseline, measured at `6e108d6` on the nominated machine (Ryzen 9 5950X, RTX 5070 Ti,
 Vulkan, KDE Wayland), five valid runs per case, missed the qualification budget in body-contact
 (p95 18.7 ms) and coupled (p95 28.6 ms, p99 32.1 ms) and fell behind real time in every active
-scale case (17–30 ticks/s). The native client, measured on 2026-10-21 at `2c63b64` with the same
-protocol (five valid runs per case of every profile, a clean tree, a quiet host; 07's
-qualification at `eb9d8fb` is in the budgets):
+scale case (17–30 ticks/s). The native client, measured on 2026-10-21 with the same protocol
+(five valid runs per case of every profile, a clean tree, a quiet host): qualification and scale at
+`2c63b64`, capacity at `d4d2d6c`'s code after the capacity changes; 07's qualification at
+`eb9d8fb` is in the budgets:
 
 | Profile | Frame median native / baseline | p95 native / baseline | Worst p99 | Ticks/s native / baseline | CPU per tick (simulation) | Grid transfer |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Qualification (radius 6, 64 bodies) | 1.06–1.18 / 3.57–17.12 ms | 1.4–2.4 / 6.1–28.6 ms | 10.69 ms | 60 / 60 | 0.07–0.28 / 2.1–13.1 ms | none / 0.60–0.85 GiB/s |
 | Scale (radius 16, 256 bodies) | 4.58–4.93 / 27.0–223.8 ms | 5.5–7.0 / 36.7–252.6 ms | 7.47 ms | 60 / 17–60 | 0.30 with bodies / 7.6–51.6 ms | none / 0.76–3.15 GiB/s |
-| Capacity (radius 32, up to 4,096 bodies) | 18.1–27.1 ms | 21–49 ms | 51.6 ms | 52–60 | – | none |
+| Capacity (radius 32, up to 4,096 bodies) | 5.07–12.14 ms | 6.9–15.7 ms | 17.66 ms | 60 | – | none |
 
 Every qualification run meets the budget (p95 ≤ 16.67 ms, p99 ≤ 25 ms); the scale profile does too,
-with no frame over 16.67 ms; capacity admits its workloads and reports when it falls behind
-(counted discarded ticks, pressure) instead of truncating physics. Without vsync, as the frozen
-profiles present, some frames wait 10.09 ms for a swapchain image; they came on at most 4.2% of a
-run's frames, so they set the worst p99 near 10.7 ms and no p95, and do not occur with vsync. The
-loop runs one frame per presented frame at radius 6 (1.3 at radius 16, 2–3 at radius 32) and spends
-0.5–0.6 ms of main-thread CPU per presented frame at radius 6, 1.0–1.1 ms at radius 16 and 2.2–3.6
-ms at radius 32. Simulation CPU per tick is the encoding and submission of a tick and the session's
-owners, measured by the GPU suites. The tables, conditions, transfers, memory, allocations and the
-capacity workload's limits are in the [performance
+with no frame over 16.67 ms, and since the capacity changes so do capacity's p95s and p99s, which it
+does not promise; capacity admits its workloads and reports when it falls behind (counted discarded
+ticks, pressure) instead of truncating physics. Without vsync, as the frozen profiles present, some
+frames wait 10.09 ms for a swapchain image; they came on at most 4.2% of a run's frames, so they set
+the worst p99 near 10.7 ms and no p95, and do not occur with vsync. The loop runs one frame per
+presented frame at radius 6 (1.3 at radius 16, 1.3–1.5 at radius 32) and spends 0.5–0.6 ms of
+main-thread CPU per presented frame at radius 6, 1.0–1.1 ms at radius 16 and 1.4–2.1 ms at radius
+32. Simulation CPU per tick is the encoding and submission of a tick and the session's owners,
+measured by the GPU suites. The tables, conditions, transfers, memory, allocations and the capacity
+workload's limits are in the [performance
 budgets](../reference/performance-budgets.md#integrated-qualification-07), the loop's measurement
 [after them](../reference/performance-budgets.md#client-loop-without-vsync-after-07). The capacity
-frames above predate `10cf62f` and `63f8ce6`, which headlessly cut radius 32's idle tick from
-3.25 to 0.09 ms and its scene passes from 14.84 to 4.57 ms of device time
-([capacity](../reference/performance-budgets.md#capacity-after-07)).
+row follows `10cf62f` and `63f8ce6`, which cut radius 32's idle tick from 3.25 to 0.09 ms and its
+scene passes from 14.84 to 4.57 ms of device time; before them its medians were 18.1–27.1 ms, its
+worst p99 51.6 ms, and dense runs fell to 52 ticks/s
+([capacity](../reference/performance-budgets.md#capacity-after-07)). The scene at radius 16 got
+cheaper too (4.30 to 1.47 ms headlessly); the qualification and scale profiles have not run since.
 
 ## Known gaps
 
@@ -77,12 +81,12 @@ frames above predate `10cf62f` and `63f8ce6`, which headlessly cut radius 32's i
   attributing it to the driver is an inference.
 - The loop's 250 µs idle wait delays the fastest frames by about 0.1 ms at radius 6 (the frame
   median is unchanged).
-- With 4,096 dense bodies at radius 32 the body pass takes 5.12 ms of a 5.23 ms tick of device
-  time (8.20 ms before dry foliage could sleep; headless). In the window, before that change and
-  the lighting cache, the simulation fell to 51–53 ticks/s, discarding owed ticks visibly, and
-  one frame of such a run took 40–56 ms (83 ms once). The capacity profile promises no rate and
-  has not run in the window since
-  ([capacity](../reference/performance-budgets.md#capacity-after-07)).
+- With 4,096 dense bodies at radius 32 the body pass takes about 5.1 ms of device time per tick; the
+  window keeps 60 ticks/s at 11–12 ms frame medians, but each coupled run still has one frame of
+  32–40 ms as the window moves a row, waiting for the device on work not yet attributed. The
+  process's GPU memory peak rose by 226 MiB with the lighting cache, 90 MiB more than the cache's
+  own size, unattributed. The capacity profile promises no rate
+  ([capacity](../reference/performance-budgets.md#capacity-in-the-window)).
 - A crash or a lost device loses what came after the latest checkpoint: at most the autosave
   interval (60 ticks by default, up to 3,600 if a person sets it) and the save in progress, as long
   as storage accepts writes; while it fails, the exposure grows and the overlay says so. Nothing is
@@ -116,8 +120,8 @@ constraints above ([roadmap](roadmap.md#after-qualification)).
 | CPU tests | Passed (after 07) | `cargo evidence test cpu` on `d4d2d6c`'s tree (in `check all`): 240 tests, checked against the registry's 181 CPU behaviors and 61 runner tests; the 28 baseline behaviors stay registered, 23 of them as GPU cases. |
 | GPU correctness and buffer layout | Passed (after 07, every suite) | `cargo evidence check all --adapter vulkan-10de-2c05` on `d4d2d6c`'s tree (160 of 160 items, 2026-10-21 21:25–21:31 UTC, `target/evidence/capacity-check-all/`): `transfers` (28 cases), `cells` (32), `bodies` (33), `streaming` (23), `render` (14) on the RTX 5070 Ti, NVIDIA 615.78.08, Linux 7.2.11. |
 | Connected scenario | Passed (headless after 07; native in 07) | `cargo evidence run --scenario resident-world --adapter vulkan-10de-2c05`: all six steps, step 6 the adversarial repeat, headless on `d4d2d6c`'s tree (in `check all`) and with `--consumer native` on `eb9d8fb`'s (07; its viewer has its own loop, which `2c63b64` did not change). |
-| Native interactive client | Passed (after 07, scripted in the real window) | `native-client script loss` (6) and `worlds` (5) on `dfeb530`'s code (`target/evidence/journal-window/`); `features` (41 checks, three runs) on `2c63b64`; the packaged fresh start outside the repository on `eb9d8fb` (07). |
-| Primary hardware performance | Qualified (07), measured again after it | `cargo evidence bench --profile qualification`, `scale` and `capacity` with `--runs 5` at `eb9d8fb` (07), compared with the baseline's summaries in `tools/evidence/baselines/legacy-6e108d6/` ([budgets](../reference/performance-budgets.md#integrated-qualification-07)), and at `2c63b64` against 07 ([budgets](../reference/performance-budgets.md#client-loop-without-vsync-after-07)); radius 32's tick phases and scene passes headlessly on `d4d2d6c` ([budgets](../reference/performance-budgets.md#capacity-after-07)), not yet the window profiles. |
+| Native interactive client | Passed (after 07, scripted in the real window) | `native-client script features` (41 checks), `loss` (6) and `worlds` (5) on `76376d8`'s tree (`target/evidence/capacity-scripts/`); `features` three times on `2c63b64`; the packaged fresh start outside the repository on `eb9d8fb` (07). |
+| Primary hardware performance | Qualified (07), measured again after it | `cargo evidence bench --profile qualification`, `scale` and `capacity` with `--runs 5` at `eb9d8fb` (07), compared with the baseline's summaries in `tools/evidence/baselines/legacy-6e108d6/` ([budgets](../reference/performance-budgets.md#integrated-qualification-07)), and at `2c63b64` against 07 ([budgets](../reference/performance-budgets.md#client-loop-without-vsync-after-07)); radius 32's tick phases and scene passes headlessly on `d4d2d6c` and `capacity` with `--runs 5` on `76376d8`'s tree after them ([budgets](../reference/performance-budgets.md#capacity-after-07)); qualification and scale not since `2c63b64`. |
 | Fault recovery and legacy save import | Passed (07; the loss bound after it) | `streaming` cases, since `2932764` `bounded-loss` at the client's autosave cadence (a lost device, an interrupted process and failing storage, each within or reporting the bound); `resident-world` step 6 (failed writes, a failed and retried save, device loss, process interruption before and after publication, orderly close, fresh reopen); `world-store` tests, since `b7d86bb` damaged and foreign worlds refused before the file is opened for writing; the `loss` and `worlds` scripts (on `2c63b64`); a damaged legacy save refused by the start screen and by `world-store import-legacy`. |
 | Secondary GPU / Windows / other platforms | Unqualified | No compatibility claim. Hosted CI runs the CPU and static lanes on Linux only. |
 

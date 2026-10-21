@@ -40,7 +40,8 @@ anything lasting into its maintained owner.
   `dry-foliage-sleeps`, the user's approval); `63f8ce6` and `d4d2d6c` cache the landscape's
   lighting per chunk vertex (`render` `lighting-cache-matches`, `frame-cost` at radius 32) and
   `bodies` `capacity-tick-phases` times radius 32's tick by phase. `check all` (160 of 160)
-  ran on `d4d2d6c`; no window run since. Measurements in the
+  ran on `d4d2d6c`, the capacity profile (5 runs a case, none rejected) and the three scripts in
+  the window on `76376d8`'s tree. Measurements in the
   [budgets](../../reference/performance-budgets.md#capacity-after-07), drafts and the recorded
   before/after case results under `target/drafts/capacity/`.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
@@ -65,18 +66,18 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
 2. **Capacity limits, partly done:** at radius 32 dry foliage now sleeps (`10cf62f`, physics
    revision 2; the idle tick 3.25 → 0.09 ms) and the landscape's lighting is cached per chunk
    vertex (`63f8ce6`, `d4d2d6c`; the scene passes 14.84 → 4.57 ms), both measured headlessly
-   ([capacity](../../reference/performance-budgets.md#capacity-after-07)). What remains: the
-   capacity, scale and qualification profiles have not run in the window since, so the window's
-   frame times and the single 40–56 ms frames of dense runs are unmeasured; the body pass at
-   4,096 dense bodies still takes about 5.1 ms of a tick (see the
+   ([capacity](../../reference/performance-budgets.md#capacity-after-07)). In the window the
+   capacity medians fell from 18–27 ms to 5–12 ms and dense runs keep 60 ticks/s. What remains:
+   one 32–40 ms frame in each coupled run as the window moves a row (cause unmeasured); the body
+   pass at 4,096 dense bodies, about 5.1 ms a tick (see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
-   body solver); and the cache costs 142.8 MB of device memory at radius 32. No frame rate is
-   promised there.
+   body solver); a GPU memory peak 226 MiB higher, 90 MiB of it unattributed; the qualification
+   and scale profiles not run since `2c63b64`. No frame rate is promised there.
 3. **Unqualified:** every other adapter, driver, compositor and platform.
 4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
    code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame
    times of autosave off ([budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07));
-   `features` last ran on `2c63b64`, and the frozen benchmark protocol still saves never. A
+   the scripts last ran on `76376d8`'s tree, and the frozen benchmark protocol still saves never. A
    command journal for a loss below the cadence is parked on the whiteboard with what it needs
    first.
 

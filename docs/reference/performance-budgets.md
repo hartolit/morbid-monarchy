@@ -844,7 +844,7 @@ Executed evidence, offscreen and headless on the RTX 5070 Ti (Vulkan, NVIDIA 615
 `cargo evidence check all --adapter vulkan-10de-2c05` on `d4d2d6c`, a clean tree, 2026-10-21
 21:25–21:31 UTC (`target/evidence/capacity-check-all/`). The "before" tick phases ran the same
 case on `b4aedf3`'s code with the case added, 2026-10-21 20:38 UTC (a draft tree; its record is
-`target/drafts/capacity/phases-1.json`). Not yet measured in the window.
+`target/drafts/capacity/phases-1.json`). The window runs are [below](#capacity-in-the-window).
 
 **The tick at radius 32.** `capacity-tick-phases` replays the frozen capacity scenarios `idle` and
 `body-contact` (seed 69, radius 32 on both axes: 4,225 chunks, every rule on, the scenario's
@@ -900,10 +900,47 @@ compares the lighting values (not pixels): the worst difference is one 8-bit lev
 once the chunk is drawn again. A change that leaves both hashes of a chunk equal would leave its
 lighting stale until it or a neighbour changes again; that is not tested.
 
-**In the window** the capacity frames were 18–27 ms at `2c63b64`, of which this was the bulk: the
-scene's 14.8 ms and the idle world's 3.25 ms tick. How much of it the window now saves is not
-measured; the frozen capacity, scale and qualification profiles need to run again
-([known gaps](../product/status.md#known-gaps)).
+### Capacity in the window
+
+The frozen capacity profile with 07's protocol, `cargo evidence bench --profile capacity --adapter
+vulkan-10de-2c05 --runs 5` on `76376d8`, a clean tree whose code is `d4d2d6c`'s, 2026-10-21
+22:01–22:14 UTC; host, adapter and presentation as in [07](#integrated-qualification-07), the
+person's desktop otherwise idle (GPU utilization 2–4% before each run). No run was contended and no
+attempt rejected (`target/evidence/capacity-bench-capacity/`). The values at `2c63b64`
+([above](#client-loop-without-vsync-after-07)) are in parentheses; the columns are defined as there.
+
+| Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | Ticks/s | Ticks discarded | Main-thread CPU per frame | Iterations / idle waits per frame | Allocations per frame | GPU memory peak |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5 / 5 | 5.07 (18.37) | 6.85–6.97 (21.28–21.67) | 11.56 (22.01) | 13.09 (22.61) | 60.0 (60.0) | 0 (0) | 1.36 (2.22) ms | 1.3 / 15.1 (2.1 / 65.4) | 978 (1514) | 1,236 (1,010) MiB |
+| flow | 5 / 5 | 5.15 (18.43) | 6.99–7.11 (21.37–21.49) | 11.38 (21.96) | 12.94 (22.32) | 60.0 (60.0) | 0 (0) | 1.41 (2.29) ms | 1.3 / 15.5 (2.1 / 65.5) | 1008 (1561) | 1,236 (1,010) MiB |
+| body-contact | 5 / 5 | 12.14 (26.86) | 14.16–14.49 (34.45–42.00) | 15.12 (43.03) | 18.66 (56.13) | 60.0 (52.0) | 0 (87–92 a run) | 2.06 (3.61) ms | 1.5 / 30.9 (3.0 / 97.2) | 1356 (2369) | 1,294–1,296 (1,060–1,070) MiB |
+| mixed | 5 / 5 | 5.11 (18.11) | 8.22–8.82 (21.18–21.32) | 11.43 (23.22) | 13.74 (24.64) | 60.0 (60.0) | 0 (0) | 1.36 (2.31) ms | 1.3 / 15.4 (2.1 / 64.3) | 995 (1538) | 1,236 (1,009–1,010) MiB |
+| streaming | 5 / 5 | 5.24 (18.83) | 11.30–11.36 (25.39–25.81) | 15.29 (29.36) | 17.36 (30.99) | 60.0 (60.0) | 0 (0) | 1.65 (3.38) ms | 1.3 / 16.1 (2.3 / 65.9) | 1215 (2337) | 1,777–1,778 (1,521–1,778) MiB |
+| coupled | 5 / 5 | 11.34 (27.05) | 15.14–15.65 (37.54–48.65) | 17.66 (51.61) | 39.98 (82.93) | 60.0 (52.0) | 0 (80–88 a run) | 2.10 (3.56) ms | 1.5 / 30.7 (2.9 / 95.6) | 1404 (2461) | 1,582–1,836 (1,582) MiB |
+
+The radius-32 frame median fell from 18–19 ms to 5.1–5.2 ms without dense bodies and from 27 ms
+to 11–12 ms with 4,096; the dense cases keep 60 ticks/s and discard no tick, where they fell to 52.
+Every case's p95 and p99 now lie inside the qualification budget's numbers (16.67 and 25 ms), which
+the capacity profile does not promise. The diagnostic runs' tick device time is 0.11–0.24 ms
+median without dense bodies and 5.04–5.31 ms with them (the body pass 4.85–5.17 ms).
+
+Now that frames are shorter, the 10.09 ms acquisition waits show again
+([known gaps](../product/status.md#known-gaps)): over 5 ms on 2–5% of the presented frames without
+dense bodies and 7–12% with them, where at `2c63b64` the 18–27 ms frames hid them (none in four
+cases, 3–30 a run in the dense ones); they set the 11.4–11.6 ms p99s of idle, flow and mixed.
+
+The single long frames of dense runs remain in coupled, shorter: the longest of each run takes
+32–40 ms (07 and `2c63b64`: 35–83 ms), and all 14 frames over 25 ms in the five runs fall while the
+window moves a row (near ticks 230, 485–492 and 622, where the resident chunks drop from 4,225 to
+4,160 and refill 16 a frame). The presenting iteration's own time in them is 1.0–1.6 ms, or
+11.2–11.7 ms with an acquisition wait, so the rest of the frame waits for the device; which of its
+work is not measured. Body-contact's longest frame is 18.66 ms (it was 40–56 ms).
+
+The process's GPU memory peak rose by 226 MiB in idle, flow, mixed and body-contact, more than the
+cache's 136 MiB; the rest is not attributed. Coupled's and streaming's peaks stayed where they were
+(coupled's fourth run 1,836 MiB); why the cache did not raise them is not established. The scripted
+runs pass on the same tree (`target/evidence/capacity-scripts/`, 22:14–22:15 UTC): `features` 41
+checks, `loss` 6 and `worlds` 5. The qualification and scale profiles have not run since `2c63b64`.
 
 ## Structural gates
 
