@@ -3,9 +3,12 @@
 //!
 //! ```text
 //! place_camera (compute)  the view from the frame's rig and the live body state
-//! chunk_bounds, cull,     per window chunk: height range and layers from the cells, the
-//!   compact (compute)     frustum test, then each layer's visible chunks in chunk order and
-//!                         its indirect draw
+//! chunk_bounds, cull,     per window chunk: height range, layers and a signature of the
+//!   compact (compute)     cells, the frustum test, then each layer's visible chunks in chunk
+//!                         order and its indirect draw, and the drawn chunks whose cached
+//!                         lighting is out of date
+//! relight (compute)       those chunks' heightfield occlusion and sun visibility per layer
+//!                         vertex, into the lighting cache
 //! shadow pass             spheres as depth from the sun
 //! main pass               terrain, granular and surface layers; spheres; liquids (blended)
 //! bloom                   13-tap downsamples, tent upsamples blended per mip, into the frame
@@ -17,6 +20,15 @@
 //! and no wait is involved. Pipelines are created once, bind groups over the world's buffers only
 //! when the window's buffers are replaced (`WorldView::buffers_generation`), and render targets
 //! when the output size changes; the per-frame CPU work is writing one uniform.
+//!
+//! Terrain lighting is the costliest part of a frame when computed per vertex every frame (at
+//! radius 32 about 11 of 14.5 ms of scene time), and it changes only where cells change, the
+//! sun moves or the window does. The lighting cache keeps it per window chunk and layer vertex,
+//! as 8-bit fractions (8 bytes a vertex), and the relight pass recomputes only drawn chunks whose
+//! inputs changed: the signatures in the bounds pass find changed chunks, the cull marks the
+//! chunks whose lighting reads them, and a changed sun, scale or window relights everything.
+//! Swaying flames are lit per vertex; `set_lighting_cache(false)` lights every vertex per frame,
+//! the comparison path the render suite checks the cache against.
 
 use std::num::NonZeroU64;
 
@@ -53,9 +65,17 @@ const MAX_WINDOW_CHUNKS: u64 = 65 * 65;
 const CHUNK_RECORD_BYTES: u64 = 32;
 /// One indexed indirect draw per landscape layer: five words each.
 const DRAW_ARGS_BYTES: u64 = 4 * 5 * 4;
+/// The relight pass's indirect dispatch: three words.
+const RELIGHT_ARGS_BYTES: u64 = 3 * 4;
+/// Vertices of a chunk's layer grid, and bytes of one cache entry (two packed words).
+const CHUNK_VERTICES: u64 = 65 * 65;
+const LIGHTING_ENTRY_BYTES: u64 = 8;
+/// `LIGHTING_*` flags of the frame uniform (types.wgsl).
+const LIGHTING_LIVE: u32 = 1;
+const LIGHTING_RELIGHT_ALL: u32 = 2;
 const LAYERS: u32 = 4;
 /// Pipelines a renderer creates.
-pub const PIPELINES: u32 = 14;
+pub const PIPELINES: u32 = 15;
 
 /// Why the renderer could not be built or draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +130,9 @@ pub struct RenderCounters {
     /// Device bytes of the renderer's own buffers and textures (not the world's).
     pub static_bytes: u64,
     pub target_bytes: u64,
+    /// Device bytes of the terrain lighting cache: 8 per vertex of every window chunk's grid,
+    /// sized with the window.
+    pub lighting_bytes: u64,
     /// The last frame's candidates: window chunks (each layer draws the visible ones among
     /// them; the counts stay on the device), and body slots.
     pub chunk_instances: u32,
@@ -137,6 +160,7 @@ struct Pipelines {
     chunk_bounds: wgpu::ComputePipeline,
     cull_chunks: wgpu::ComputePipeline,
     compact_lists: wgpu::ComputePipeline,
+    relight: wgpu::ComputePipeline,
     downsample_first: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
@@ -148,15 +172,20 @@ struct Layouts {
     shadow: wgpu::BindGroupLayout,
     camera: wgpu::BindGroupLayout,
     visibility: wgpu::BindGroupLayout,
+    relight: wgpu::BindGroupLayout,
     post: wgpu::BindGroupLayout,
 }
 
-/// Bind groups over the world's buffers, for one buffer generation of one session.
+/// Bind groups over the world's buffers, for one buffer generation of one session, and the
+/// lighting cache sized for that generation's window.
 struct WorldGroups {
     generation: u64,
     scene: wgpu::BindGroup,
     camera: wgpu::BindGroup,
     visibility: wgpu::BindGroup,
+    relight: wgpu::BindGroup,
+    /// Kept alive with the groups that bind it.
+    _lighting: wgpu::Buffer,
 }
 
 /// Targets for one output size.
@@ -197,7 +226,13 @@ pub struct Renderer {
     chunk_records: wgpu::Buffer,
     layer_lists: wgpu::Buffer,
     draw_args: wgpu::Buffer,
+    relight_list: wgpu::Buffer,
+    relight_args: wgpu::Buffer,
     culling: bool,
+    lighting_cache: bool,
+    /// What the cache was last computed under (`FrameUniform::lighting_key`); `None` relights
+    /// everything on the next frame.
+    lighting_key: Option<[u32; 6]>,
     post_params: wgpu::Buffer,
     linear_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
@@ -266,6 +301,7 @@ fn layouts(device: &wgpu::Device) -> Layouts {
             read_only(5, draw),
             read_only(6, draw),
             read_only(7, wgpu::ShaderStages::VERTEX),
+            read_only(8, wgpu::ShaderStages::VERTEX),
         ],
     });
     let shadow = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -319,6 +355,18 @@ fn layouts(device: &wgpu::Device) -> Layouts {
             writable(4),
             writable(5),
             writable(6),
+            writable(7),
+            writable(8),
+        ],
+    });
+    let relight = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("render relight"),
+        entries: &[
+            buffer_entry(0, compute, wgpu::BufferBindingType::Uniform),
+            read_only(2, compute),
+            read_only(3, compute),
+            writable(9),
+            read_only(10, compute),
         ],
     });
     let fragment = wgpu::ShaderStages::FRAGMENT;
@@ -358,6 +406,7 @@ fn layouts(device: &wgpu::Device) -> Layouts {
         shadow,
         camera,
         visibility,
+        relight,
         post,
     }
 }
@@ -440,6 +489,7 @@ fn pipelines(
     let shadow_layout = layout("render sphere shadows", &[Some(&layouts.world)]);
     let camera_layout = layout("render camera", &[Some(&layouts.camera)]);
     let visibility_layout = layout("render visibility", &[Some(&layouts.visibility)]);
+    let relight_layout = layout("render relight", &[Some(&layouts.relight)]);
     let post_layout = layout("render post", &[Some(&layouts.post)]);
 
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -552,6 +602,7 @@ fn pipelines(
         &visibility,
         "compact_lists",
     );
+    let relight = compute("relight", &relight_layout, &scene, "relight");
     let fullscreen = |label, fragment, format, blend| {
         render_pipeline(
             device,
@@ -609,6 +660,7 @@ fn pipelines(
         chunk_bounds,
         cull_chunks,
         compact_lists,
+        relight,
         downsample_first,
         downsample,
         upsample,
@@ -711,6 +763,15 @@ impl Renderer {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let relight_list = storage("relight list", MAX_WINDOW_CHUNKS * 4);
+        let relight_args = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("relight dispatch"),
+            size: RELIGHT_ARGS_BYTES,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         // One parameter block per post source: the HDR frame and up to the largest mip count.
         let post_sources = 1 + u64::from(BLOOM_MAX_MIP_DIMENSION.ilog2());
         let post_params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -776,6 +837,8 @@ impl Renderer {
             + chunk_records.size()
             + layer_lists.size()
             + draw_args.size()
+            + relight_list.size()
+            + relight_args.size()
             + post_params.size()
             + u64::from(SHADOW_MAP_SIZE) * u64::from(SHADOW_MAP_SIZE) * 4;
         Ok(Self {
@@ -794,7 +857,11 @@ impl Renderer {
             chunk_records,
             layer_lists,
             draw_args,
+            relight_list,
+            relight_args,
             culling: true,
+            lighting_cache: true,
+            lighting_key: None,
             post_params,
             linear_sampler,
             shadow_view,
@@ -842,6 +909,21 @@ impl Renderer {
     /// every layer: the unculled comparison path the render suite checks the culling against.
     pub fn set_culling(&mut self, culling: bool) {
         self.culling = culling;
+    }
+
+    /// Reads terrain lighting from the cache (the default), or computes it per vertex every
+    /// frame: the comparison path the render suite checks the cache against.
+    pub fn set_lighting_cache(&mut self, cached: bool) {
+        if cached && !self.lighting_cache {
+            self.lighting_key = None;
+        }
+        self.lighting_cache = cached;
+    }
+
+    /// The relight pass's last indirect dispatch (three `u32`s; the first is the number of
+    /// chunks relit), for evidence of what the cache refreshed.
+    pub fn relight_args(&self) -> &wgpu::Buffer {
+        &self.relight_args
     }
 
     /// The four layers' indexed indirect draws (five `u32`s each; the second is the instance
@@ -1008,6 +1090,14 @@ impl Renderer {
                 resource: buffer.as_entire_binding(),
             }
         }
+        // Released with the previous groups; the new window's cache is sized for it.
+        self.world_groups = None;
+        let lighting = view.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("terrain lighting"),
+            size: u64::from(view.window.chunk_count()) * CHUNK_VERTICES * LIGHTING_ENTRY_BYTES,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let scene = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render world"),
             layout: &self.layouts.world,
@@ -1020,6 +1110,7 @@ impl Renderer {
                 whole(5, view.bodies),
                 whole(6, view.activity),
                 whole(7, &self.layer_lists),
+                whole(8, &lighting),
             ],
         });
         let camera = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1042,14 +1133,32 @@ impl Renderer {
                 whole(4, &self.chunk_records),
                 whole(5, &self.layer_lists),
                 whole(6, &self.draw_args),
+                whole(7, &self.relight_list),
+                whole(8, &self.relight_args),
+            ],
+        });
+        let relight = view.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render relight"),
+            layout: &self.layouts.relight,
+            entries: &[
+                whole(0, &self.frame_uniform),
+                whole(2, view.cells),
+                whole(3, view.window_map),
+                whole(9, &lighting),
+                whole(10, &self.relight_list),
             ],
         });
         self.counters.world_bind_groups_created += 1;
+        self.counters.lighting_bytes = lighting.size();
+        // A new window: its cache holds nothing yet.
+        self.lighting_key = None;
         self.world_groups = Some(WorldGroups {
             generation: view.buffers_generation,
             scene,
             camera,
             visibility,
+            relight,
+            _lighting: lighting,
         });
     }
 
@@ -1072,7 +1181,18 @@ impl Renderer {
             return Err(RenderError::ZeroSize);
         };
         let aspect = size[0] as f32 / size[1] as f32;
-        let uniform = FrameUniform::pack(view, request, aspect, self.culling);
+        self.bind_world(view);
+        let mut uniform = FrameUniform::pack(view, request, aspect, self.culling, 0);
+        let key = uniform.lighting_key();
+        let flags = if !self.lighting_cache {
+            LIGHTING_LIVE
+        } else if self.lighting_key != Some(key) {
+            self.lighting_key = Some(key);
+            LIGHTING_RELIGHT_ALL
+        } else {
+            0
+        };
+        uniform = FrameUniform::pack(view, request, aspect, self.culling, flags);
         view.queue
             .write_buffer(&self.frame_uniform, 0, bytemuck::bytes_of(&uniform));
         let chunks = view.window.chunk_count();
@@ -1087,7 +1207,6 @@ impl Renderer {
             .write_buffer(&self.draw_args, 0, bytemuck::cast_slice(&args));
         self.counters.uniform_bytes_written +=
             std::mem::size_of::<FrameUniform>() as u64 + DRAW_ARGS_BYTES;
-        self.bind_world(view);
         let (Some(groups), Some(targets)) = (self.world_groups.as_ref(), self.targets.as_ref())
         else {
             return Err(RenderError::ZeroSize);
@@ -1114,17 +1233,26 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.camera);
             pass.set_bind_group(0, &groups.camera, &[]);
             pass.dispatch_workgroups(1, 1, 1);
-            if self.culling {
-                // Dispatches of one pass see each other's writes in order: bounds read the
-                // cells, the cull reads the bounds and the camera's view.
-                pass.set_bind_group(0, &groups.visibility, &[]);
-                pass.set_pipeline(&self.pipelines.chunk_bounds);
-                pass.dispatch_workgroups(chunks, 1, 1);
-                pass.set_pipeline(&self.pipelines.cull_chunks);
-                pass.dispatch_workgroups(chunks.div_ceil(64), 1, 1);
-                pass.set_pipeline(&self.pipelines.compact_lists);
-                pass.dispatch_workgroups(1, 1, 1);
-            }
+            // Dispatches of one pass see each other's writes in order: bounds read the cells,
+            // the cull reads the bounds and the camera's view. The unculled path runs them too,
+            // for the lighting cache, and keeps its own instance counts.
+            pass.set_bind_group(0, &groups.visibility, &[]);
+            pass.set_pipeline(&self.pipelines.chunk_bounds);
+            pass.dispatch_workgroups(chunks, 1, 1);
+            pass.set_pipeline(&self.pipelines.cull_chunks);
+            pass.dispatch_workgroups(chunks.div_ceil(64), 1, 1);
+            pass.set_pipeline(&self.pipelines.compact_lists);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        if self.lighting_cache {
+            // The listed chunks' lighting, before the layers read it.
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("relight"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipelines.relight);
+            pass.set_bind_group(0, &groups.relight, &[]);
+            pass.dispatch_workgroups_indirect(&self.relight_args, 0);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -215,6 +215,7 @@ impl FrameUniform {
         request: &FrameRequest,
         aspect: f32,
         culling: bool,
+        lighting_flags: u32,
     ) -> Self {
         let window = view.window;
         let min = window.min_key().to_ivec2();
@@ -313,7 +314,7 @@ impl FrameUniform {
                 view.plan.bodies.config,
                 view.plan.activity.records,
                 u32::from(!culling),
-                0,
+                lighting_flags,
             ],
             shadow_view_proj: shadow.to_cols_array_2d(),
             shadow: [
@@ -323,6 +324,20 @@ impl FrameUniform {
                 0.0,
             ],
         }
+    }
+
+    /// What the cached terrain lighting was computed under besides the cells: the sun's
+    /// direction, the shadow and occlusion strengths and the elevation scale, as bits. When it
+    /// changes, every chunk's lighting is out of date.
+    pub(crate) fn lighting_key(&self) -> [u32; 6] {
+        [
+            self.sun_direction[0].to_bits(),
+            self.sun_direction[1].to_bits(),
+            self.sun_direction[2].to_bits(),
+            self.ground_color[3].to_bits(),
+            self.horizon_color[3].to_bits(),
+            self.window_cells[2].to_bits(),
+        ]
     }
 
     /// The linear horizon colour, which the frame clears to.

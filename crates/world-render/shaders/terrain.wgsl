@@ -27,6 +27,10 @@ const FLAME_SWAY_UNITS: f32 = 1.5;
 const FLAME_SWAY_FREQUENCY: f32 = 7.0;
 
 const VERTS_ACROSS: u32 = CHUNK_SIZE + 1u;
+// Vertices of a chunk's layer grid: the lighting cache holds one entry per window chunk and
+// vertex, both layers' terms packed per word.
+const CHUNK_VERTICES: u32 = VERTS_ACROSS * VERTS_ACROSS;
+const RELIGHT_GROUP: u32 = 256u;
 
 struct LayerOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -150,13 +154,15 @@ fn landscape_vertex(vertex_index: u32, chunk_index: u32, layer: u32) -> LayerOut
     out.world_pos = position;
     out.world_normal = layer_normal(cell, layer);
 
-    // Hidden vertices sit under the floor and are never seen, so skip their expensive terms.
-    var ambient_occlusion = 1.0;
-    var sun_visibility = 1.0;
-    if (!layer_sample.is_hidden) {
-        ambient_occlusion = heightfield_occlusion(cell, height);
-        sun_visibility = heightfield_sun_visibility(vec2<f32>(cell), height);
+    // Swaying flames move every frame, so their terms are never cached.
+    var light: vec2<f32>;
+    if (is_flame || (frame.offsets.w & LIGHTING_LIVE) != 0u) {
+        light = layer_light(cell, height, layer_sample.is_hidden);
+    } else {
+        light = cached_light(chunk_index, vertex_index, layer);
     }
+    let ambient_occlusion = light.x;
+    let sun_visibility = light.y;
 
     let palette_index = layer * PALETTE_LAYER_STRIDE + layer_sample.mat_lookup;
     var albedo = palette[palette_index];
@@ -183,6 +189,55 @@ fn landscape_vertex(vertex_index: u32, chunk_index: u32, layer: u32) -> LayerOut
     out.submersion = submersion;
     out.animation = vec4<f32>(phase, 0.0, 0.0, 0.0);
     return out;
+}
+
+// Heightfield occlusion and sun visibility of a layer vertex at `height` over `cell`. Hidden
+// vertices sit under the floor and are never seen, so they skip both.
+fn layer_light(cell: vec2<i32>, height: f32, hidden: bool) -> vec2<f32> {
+    if (hidden) {
+        return vec2<f32>(1.0);
+    }
+    return vec2<f32>(
+        heightfield_occlusion(cell, height),
+        heightfield_sun_visibility(vec2<f32>(cell), height),
+    );
+}
+
+// A layer vertex's terms from the cache: layers 0 and 1 in the first word, 2 and 3 in the
+// second, each as two 8-bit fractions (occlusion, visibility).
+fn cached_light(chunk_index: u32, vertex_index: u32, layer: u32) -> vec2<f32> {
+    let words = lighting[chunk_index * CHUNK_VERTICES + vertex_index];
+    let terms = unpack4x8unorm(select(words.y, words.x, layer < 2u));
+    return select(terms.zw, terms.xy, layer % 2u == 0u);
+}
+
+// Refreshes the cached terms of the chunks the visibility pass listed, one workgroup per chunk:
+// for every vertex of the chunk's grid, each layer's terms at the height the layer places that
+// vertex, exactly as the per-vertex path computes them before they are rounded to 8 bits.
+@compute @workgroup_size(256)
+fn relight(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) local: u32) {
+    let chunk_index = relight_list[group.x];
+    let slot = window_slots[chunk_index];
+    if (slot == SLOT_NONE) {
+        return;
+    }
+    let chunks_x = u32(frame.window.z);
+    home_chunk = vec2<i32>(i32(chunk_index % chunks_x), i32(chunk_index / chunks_x));
+    home_slot = slot;
+    for (var vertex = local; vertex < CHUNK_VERTICES; vertex += RELIGHT_GROUP) {
+        let offset = vec2<i32>(i32(vertex % VERTS_ACROSS), i32(vertex / VERTS_ACROSS));
+        let cell = home_chunk * i32(CHUNK_SIZE) + offset;
+        let center = cell_data(cell);
+        var terms: array<vec2<f32>, 4>;
+        for (var layer = 0u; layer < 4u; layer++) {
+            let sample = sample_layer(center, cell, layer);
+            terms[layer] = layer_light(cell, sample.elevation, sample.is_hidden);
+        }
+        lighting_out[chunk_index * CHUNK_VERTICES + vertex] = vec2<u32>(
+            pack4x8unorm(vec4<f32>(terms[0], terms[1])),
+            pack4x8unorm(vec4<f32>(terms[2], terms[3])),
+        );
+    }
 }
 
 // The window chunk of a layer's instance: from the layer's visible list, or every chunk in

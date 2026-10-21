@@ -36,13 +36,20 @@ struct Frame {
     // x: followed body slot, y: its generation, z: body slots in use (extent), w: overlay bits.
     follow: vec4<u32>,
     // x: word offset of the body configurations, y: word offset of the activity tile records,
-    // z: 1 to draw every resident chunk (the unculled comparison path), 0 to draw the visible.
+    // z: 1 to draw every resident chunk (the unculled comparison path), 0 to draw the visible,
+    // w: LIGHTING_* flags.
     offsets: vec4<u32>,
     // The sun's orthographic view-projection for the sphere shadow map.
     shadow_view_proj: mat4x4<f32>,
     // x: shadow map texel size, y: depth bias, z: 1 when sphere shadows are drawn.
     shadow: vec4<f32>,
 }
+
+// Terrain lighting (heightfield occlusion and sun visibility per layer vertex) is computed per
+// vertex every frame on the comparison path, and otherwise read from a cache that the relight
+// pass refreshes for the chunks that need it; this frame relights every chunk it draws.
+const LIGHTING_LIVE: u32 = 1u;
+const LIGHTING_RELIGHT_ALL: u32 = 2u;
 
 struct View {
     view_proj: mat4x4<f32>,

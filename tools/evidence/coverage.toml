@@ -3132,6 +3132,16 @@ destination = "world-render on gpu-world's device (06)"
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.render.lighting-cache-matches"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "lighting-cache-matches"
+origin = "transition"
+expectation = "At four poses over generated terrain with water and flames the cached terrain lighting draws within one 8-bit level of per-vertex lighting; an unchanged frame relights no chunk, one edit relights its neighbourhood only, a moved sun relights every drawn chunk, and a chunk edited out of view is relit when drawn again."
+destination = "world-render terrain lighting cache (after 07)"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.render.frame-cost"
 package = "monarchy-evidence"
 target = "gpu:render"
