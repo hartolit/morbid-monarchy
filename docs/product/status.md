@@ -65,9 +65,6 @@ allocations and the capacity workload's limits are in the
   and 2,000–10,800 allocations per presented frame). With vsync it runs one per refresh.
 - With 4,096 dense bodies at radius 32 a tick takes about 8 ms of device time and the simulation
   falls to 51–53 ticks/s, discarding owed ticks visibly; the capacity profile promises no rate.
-- The benchmark's pacing rule can reject runs whose saturated frames end at the 60 Hz tick
-  cadence (capacity coupled, three of seven attempts in one invocation), although no compositor
-  throttles them.
 - No command journal: changes after the last checkpoint are lost on a crash or device loss, and
   the loss report says how many ticks. A world whose layout, physics or generator identity
   differs is refused, not converted.

@@ -37,6 +37,9 @@ lane proves is owned by [verification evidence](../../docs/development/verificat
   GPU process arguments removed and paths made relative, plus the SHA-256 of every raw file the
   run left in `target/evidence/`. The raw samples stay on the measuring machine. The conclusions
   are in [performance budgets](../../docs/reference/performance-budgets.md#measured-legacy-baseline-01).
+- `tests/fixtures/pacing/` holds the measured frame times of five recorded benchmark runs that
+  the presentation-pacing rule (`measurement::presentation_pacing`) must reject as throttled or
+  accept as paced by work; its README gives their provenance.
 
 ## Native client driver
 

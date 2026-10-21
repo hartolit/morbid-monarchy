@@ -223,7 +223,11 @@ const REFRESH_INTERVALS_MS: [f64; 5] = [
 const PACING_BAND_MS: f64 = 0.15;
 /// Unbroken frames on one interval that cannot be coincidence.
 const PACED_STRETCH_FRAMES: usize = 30;
-/// A spike must hold this share of frames and exceed its neighbourhood this many times.
+/// Consecutive frames on one interval that count toward a spike. A throttle holds the window on
+/// the interval from one frame to the next; a single frame there is coincidence.
+const SPIKE_STRETCH_FRAMES: usize = 2;
+/// A spike's frames must make up this share of all frames and exceed the neighbourhood this
+/// many times.
 const PACED_SPIKE_SHARE: f64 = 0.01;
 const PACED_SPIKE_RATIO: usize = 4;
 
@@ -234,6 +238,8 @@ pub struct Pacing {
     pub interval_ms: f64,
     /// Frames within ±0.15 ms of the interval.
     pub frames_on_interval: usize,
+    /// Those of them in stretches of at least two consecutive frames on the interval.
+    pub frames_in_stretches: usize,
     /// Frames 0.45-0.75 ms either side of it: twice the band's width, so an unpaced, smooth
     /// distribution puts about twice as many frames here as on the interval.
     pub frames_beside_interval: usize,
@@ -241,9 +247,11 @@ pub struct Pacing {
 }
 
 /// Detects presentation pacing in measured frames. Uncapped presentation produces a smooth
-/// frame-time distribution; a compositor that throttles a covered or unfocused window produces
-/// long runs of frames on one refresh interval and a spike there. Isolated frames that happen to
-/// match an interval are expected and do not count.
+/// frame-time distribution; a compositor that throttles a covered or unfocused window holds
+/// consecutive frames on one refresh interval, in long stretches or in shorter ones that add up
+/// to a spike there. Isolated frames that happen to match an interval are expected and do not
+/// count: when the device is saturated, the client alternates long frames that run no tick with
+/// short catch-up frames that end near the 60 Hz tick cadence, one at a time.
 pub fn presentation_pacing(samples: &[FrameSample]) -> Option<Pacing> {
     let frames: Vec<f64> = samples
         .iter()
@@ -253,33 +261,33 @@ pub fn presentation_pacing(samples: &[FrameSample]) -> Option<Pacing> {
     REFRESH_INTERVALS_MS
         .iter()
         .map(|&interval| {
-            let mut longest_stretch = 0;
-            let mut stretch = 0;
-            for frame in &frames {
-                stretch = if (frame - interval).abs() < PACING_BAND_MS {
-                    stretch + 1
-                } else {
-                    0
-                };
-                longest_stretch = longest_stretch.max(stretch);
-            }
-            let distance = |frame: &&f64| (**frame - interval).abs();
+            let distance = |frame: f64| (frame - interval).abs();
+            let on_interval = |frame: f64| distance(frame) < PACING_BAND_MS;
+            let stretches: Vec<usize> = frames
+                .chunk_by(|&a, &b| on_interval(a) == on_interval(b))
+                .filter(|run| on_interval(run[0]))
+                .map(<[f64]>::len)
+                .collect();
             Pacing {
                 interval_ms: interval,
-                frames_on_interval: frames
+                frames_on_interval: stretches.iter().sum(),
+                frames_in_stretches: stretches
                     .iter()
-                    .filter(|f| distance(f) < PACING_BAND_MS)
-                    .count(),
+                    .filter(|&&stretch| stretch >= SPIKE_STRETCH_FRAMES)
+                    .sum(),
                 frames_beside_interval: frames
                     .iter()
-                    .filter(|f| (3.0 * PACING_BAND_MS..5.0 * PACING_BAND_MS).contains(&distance(f)))
+                    .filter(|&&frame| {
+                        (3.0 * PACING_BAND_MS..5.0 * PACING_BAND_MS).contains(&distance(frame))
+                    })
                     .count(),
-                longest_stretch,
+                longest_stretch: stretches.iter().copied().max().unwrap_or(0),
             }
         })
         .find(|pacing| {
-            let spike = pacing.frames_on_interval as f64 >= PACED_SPIKE_SHARE * frames.len() as f64
-                && pacing.frames_on_interval > PACED_SPIKE_RATIO * pacing.frames_beside_interval;
+            let spike = pacing.frames_in_stretches as f64
+                >= PACED_SPIKE_SHARE * frames.len() as f64
+                && pacing.frames_in_stretches > PACED_SPIKE_RATIO * pacing.frames_beside_interval;
             pacing.longest_stretch >= PACED_STRETCH_FRAMES || spike
         })
 }
@@ -445,29 +453,145 @@ mod tests {
         );
     }
 
+    const TICK_MS: f64 = 1000.0 / 60.0;
+
+    fn measured_frames(times: &[f64]) -> Vec<FrameSample> {
+        times
+            .iter()
+            .map(|&frame_ms| FrameSample {
+                measured: true,
+                frame_ms,
+                ..FrameSample::default()
+            })
+            .collect()
+    }
+
     #[test]
     fn compositor_pacing_is_told_apart_from_coincidental_frame_times() {
-        let frames = |times: &[f64]| -> Vec<FrameSample> {
-            times
-                .iter()
-                .map(|&frame_ms| FrameSample {
-                    measured: true,
-                    frame_ms,
-                    ..FrameSample::default()
-                })
-                .collect()
-        };
         // A smooth uncapped run: frame times spread over 2-10 ms, some near 4.17 by chance.
         let smooth: Vec<f64> = (0..2000)
             .map(|i| 2.0 + (i as f64 * 0.6180339).fract() * 8.0)
             .collect();
-        assert_eq!(presentation_pacing(&frames(&smooth)), None);
+        assert_eq!(presentation_pacing(&measured_frames(&smooth)), None);
         // The same run with 100 consecutive frames held to 60 Hz.
         let mut throttled = smooth.clone();
         throttled.splice(500..600, std::iter::repeat_n(16.667, 100));
-        let pacing = presentation_pacing(&frames(&throttled)).expect("pacing detected");
+        let pacing = presentation_pacing(&measured_frames(&throttled)).expect("pacing detected");
         assert_eq!(pacing.longest_stretch, 100);
         assert!((pacing.interval_ms - 1000.0 / 60.0).abs() < 1e-9);
+    }
+
+    /// Frames within the pacing band of the 60 Hz interval, and 0.45-0.75 ms beside it, counted
+    /// here independently of the rule.
+    fn on_and_beside_tick(frames: &[FrameSample]) -> (usize, usize) {
+        let near = |range: std::ops::Range<f64>| {
+            frames
+                .iter()
+                .filter(|sample| range.contains(&(sample.frame_ms - TICK_MS).abs()))
+                .count()
+        };
+        (near(0.0..0.15), near(0.45..0.75))
+    }
+
+    #[test]
+    fn a_throttle_broken_into_short_stretches_is_still_paced() {
+        // Twenty throttled stretches of ten frames between single long frames, the last at the
+        // end of the run: no stretch reaches 30 frames, but together they are a spike.
+        let mut times: Vec<f64> = (0..600)
+            .map(|i| 2.0 + (i as f64 * 0.6180339).fract() * 8.0)
+            .collect();
+        for stretch in 0..20 {
+            times.extend(std::iter::repeat_n(TICK_MS, 10));
+            if stretch < 19 {
+                times.push(25.0);
+            }
+        }
+        let pacing = presentation_pacing(&measured_frames(&times)).expect("pacing detected");
+        assert_eq!(
+            (
+                pacing.frames_on_interval,
+                pacing.frames_in_stretches,
+                pacing.longest_stretch
+            ),
+            (200, 200, 10)
+        );
+        assert!((pacing.interval_ms - TICK_MS).abs() < 1e-9);
+    }
+
+    #[test]
+    fn isolated_frames_on_the_tick_cadence_are_not_pacing() {
+        // A saturated device: long frames that run no tick alternate with catch-up frames that
+        // end exactly on the tick cadence, with nothing beside it. Every second frame is on the
+        // 60 Hz interval, never two in a row.
+        let times: Vec<f64> = (0..400)
+            .map(|i| {
+                if i % 2 == 0 {
+                    30.0 + (i as f64 * 0.6180339).fract() * 10.0
+                } else {
+                    TICK_MS
+                }
+            })
+            .collect();
+        let frames = measured_frames(&times);
+        assert_eq!(on_and_beside_tick(&frames), (200, 0));
+        assert_eq!(presentation_pacing(&frames), None);
+    }
+
+    /// The measured frame times of a recorded run (`tests/fixtures/pacing`).
+    fn recorded_run(name: &str) -> Vec<FrameSample> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pacing")
+            .join(name);
+        let text = std::fs::read_to_string(&path).expect("fixture");
+        let times: Vec<f64> = text
+            .lines()
+            .map(|line| line.parse().expect("frame time"))
+            .collect();
+        measured_frames(&times)
+    }
+
+    #[test]
+    fn recorded_saturated_capacity_runs_are_not_paced() {
+        // Rejected as paced by the rule before frames had to be consecutive: each has at least
+        // 1% of its frames on 16.67 ms and more than four times as many as beside it.
+        for (name, on, beside) in [
+            ("capacity-coupled-run-1.txt", 8, 0),
+            ("capacity-coupled-run-6.txt", 23, 2),
+            ("capacity-coupled-run-7.txt", 46, 9),
+        ] {
+            let frames = recorded_run(name);
+            assert_eq!(on_and_beside_tick(&frames), (on, beside), "{name}");
+            assert_eq!(presentation_pacing(&frames), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn recorded_throttled_baseline_runs_stay_paced() {
+        for (name, on, in_stretches, beside, longest) in [
+            ("baseline-body-contact-run-3.txt", 131, 128, 9, 43),
+            ("baseline-flow-run-4.txt", 58, 58, 0, 58),
+        ] {
+            let frames = recorded_run(name);
+            let pacing = presentation_pacing(&frames).expect("pacing detected");
+            assert!((pacing.interval_ms - TICK_MS).abs() < 1e-9, "{name}");
+            assert_eq!(
+                (
+                    pacing.frames_on_interval,
+                    pacing.frames_in_stretches,
+                    pacing.frames_beside_interval,
+                    pacing.longest_stretch
+                ),
+                (on, in_stretches, beside, longest),
+                "{name}"
+            );
+            // The spike alone rejects them too, as it would if the stretches had been broken.
+            assert!(
+                pacing.frames_in_stretches as f64 >= PACED_SPIKE_SHARE * frames.len() as f64
+                    && pacing.frames_in_stretches
+                        > PACED_SPIKE_RATIO * pacing.frames_beside_interval,
+                "{name}"
+            );
+        }
     }
 
     #[test]

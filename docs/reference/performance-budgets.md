@@ -561,7 +561,9 @@ rejected as paced at 16.67 ms and the case had four valid runs. Those frames wer
 (never two in a row) and 43 of the 46 in the worst attempt carried three catch-up ticks: with the
 device saturated, frames end at the tick cadence, which equals a 60 Hz refresh interval, so the
 validity rule's spike test rejects them although no compositor throttled the window. Every
-attempt of both invocations is in the reports.
+attempt of both invocations is in the reports. The rule was revised afterwards so that such
+isolated frames no longer count ([policy](#regression-and-improvement-policy)); the attempt counts
+here are those of the rule 07 ran.
 
 | Case | Valid / attempts | Median | Run p95s | Worst p99 | Max | > 16.67 ms | Ticks/s | Process CPU / main thread per frame | Iterations per frame | Device tick (body pass) | Upload / readback | RSS / GPU memory |
 | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -714,11 +716,33 @@ gives every run the same simulated workload; a scenario's actions are scheduled 
 same reason. The run reports its frame count and flags fewer than 1,800 frames, but still counts.
 A run validates only when the measured frames span exactly the tick window, the window keeps its
 requested size, the frame times show no compositor pacing (30 or more consecutive frames within
-0.15 ms of a 60/120/144/165/240 Hz interval, or at least 1% of frames on one interval and more
-than four times as many as 0.45–0.75 ms beside it), and the
+0.15 ms of a 60/120/144/165/240 Hz interval, or at least 1% of frames in stretches of two or more
+consecutive frames on one interval, more than four times as many as lie 0.45–0.75 ms beside
+it), and the
 host was quiet (all-core CPU busy below 15% before the run, waiting up to 120 s; otherwise the run
 is marked contended). A presentation rejection is retried at most twice per case and every
 attempt stays in the report; a crash, timeout or simulation error is never retried.
+
+*Pacing rule revised on 2026-10-21, after 07.* Until then the spike test counted every frame on
+an interval. When the device is saturated, the client alternates long frames that run no tick
+with short catch-up frames, usually of three ticks, that end near the 60 Hz tick cadence and
+never two in a row. 07's first capacity coupled invocation lost three of seven attempts to
+them (8, 23 and 46 isolated frames on 16.67 ms), although no compositor paced the window. A
+throttle holds the window on the interval from one frame to the next: in the 14 runs `79e7ead`
+rejected when KWin throttled the baseline's window, nearly every frame on 16.67 ms has a
+neighbour there (at worst 128 of 131), and those frames lie a median 0.005–0.012 ms from
+the interval, against 0.06–0.12 ms for the capacity frames. The spike now counts only frames in
+stretches of at least two. Applied with the runner's own code to every run kept on the
+nominated machine (329, from 01's pilots to 07), the revised rule changes exactly three
+verdicts, accepting those capacity attempts. It still rejects the 14 throttled baseline runs
+and the throttled streaming pilot that prompted the rule, each by its spike alone as well as by
+its stretch, and it rejects nothing the old rule accepted. Not adopted: exempting the 60 Hz
+interval because it equals the tick period (the throttled runs are on it); ignoring frames
+that carry several ticks (throttled frames carry catch-up ticks too, two ticks on 277 frames of
+one baseline run); a narrower band (jitter depends on the timer and the compositor). Frame
+times alone still cannot tell a throttle from a loop held to its own 60 Hz tick for 30
+frames; such a run is rejected, and no current workload produces one. `measurement::tests`
+checks the rule against five of these runs, kept in `tools/evidence/tests/fixtures/pacing/`.
 
 The target is no unexplained >5% regression in a required scenario's median or p95 outside the
 measured noise range. This is a review threshold, not permission to regress 4.9% in every stage.

@@ -561,9 +561,10 @@ fn validate_run(
             if let Some(pacing) = statistics.presentation_pacing {
                 result.presentation_problems += 1;
                 result.problems.push(format!(
-                    "frames were paced at {:.2} ms, not by work ({} frames on it, {} beside, longest stretch {}); the window was throttled",
+                    "frames were paced at {:.2} ms, not by work ({} frames on it, {} of them in consecutive stretches, {} beside, longest stretch {}); the window was throttled",
                     pacing.interval_ms,
                     pacing.frames_on_interval,
+                    pacing.frames_in_stretches,
                     pacing.frames_beside_interval,
                     pacing.longest_stretch
                 ));

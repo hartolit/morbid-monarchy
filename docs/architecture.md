@@ -78,6 +78,7 @@ tools/evidence/                 Rust-only development leaf
   scenarios/                    frozen measurement workloads
   baselines/                    retained reference frames and baseline measurements
   tests/                        runner/parser and evidence-policy checks
+  tests/fixtures/pacing/        recorded frame times the pacing rule must accept or reject
 docs/                          maintained explanations and active assignments
 ```
 
