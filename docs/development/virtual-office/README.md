@@ -7,7 +7,11 @@ status system. [Workflow](../workflow.md) owns implementation procedure and evid
 
 | Sprint | State | Next authorized starting point |
 | --- | --- | --- |
-| [GPU transition](gpu-transition/README.md) | 00–06 complete; 07 not started | 07, when assigned. |
+| None | – | A new sprint, when the user assigns one. |
+
+The GPU transition (00–07) closed on 2026-10-21; its [qualification](../qualification.md) keeps
+the final acceptance, and Git keeps its prompts and handoff
+(`git log -- docs/development/virtual-office/gpu-transition`).
 
 ## Execute one assignment
 

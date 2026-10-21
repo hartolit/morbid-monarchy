@@ -2,7 +2,7 @@
 //! material looks every pass shades with.
 //!
 //! Defaults are the baseline's (`WorldLighting` and the landscape palette of prompt 01's
-//! visual reference, `docs/development/virtual-office/gpu-transition/acceptance.md`). Colours
+//! visual reference, `docs/development/qualification.md`, "Presentation reference"). Colours
 //! are authored in sRGB and shaded in linear light.
 
 use world_model::material::{FluidMat, GranularMat, SurfaceMat, TerrainMat};

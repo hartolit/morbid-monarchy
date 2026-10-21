@@ -10,7 +10,7 @@ Pixel identity is not the goal; a changed look needs a recorded reason.
 | --- | --- | ---: | --- |
 | `qualification-idle-tick300.jpg` | `qualification/idle.toml` (`d031b681`) | 300 | Generated shore at seed 69: grass, the sand band, the lake, fog towards the window edge. |
 | `qualification-coupled-tick900.jpg` | `qualification/coupled.toml` (`03e7f00d`) | 900 | Metal and wood spheres on the sand bank beside the lake, specular water, grass and a pond beyond. |
-| `qualification-mixed-tick1300.jpg` | `qualification/mixed.toml` (`1dcabb20`) | 1300 | The lake frozen at −8 °C, ground burnt by the fire front, and the column that rises where the lava pour meets the lake ([source audit](../../../../docs/development/virtual-office/gpu-transition/source-audit.md#found-while-measuring-01)). |
+| `qualification-mixed-tick1300.jpg` | `qualification/mixed.toml` (`1dcabb20`) | 1300 | The lake frozen at −8 °C, ground burnt by the fire front, and the column that rises where the lava pour meets the lake ([GPU contract](../../../../docs/reference/gpu-contract.md#rule-changes-from-the-baseline-03)). |
 
 ## How they were made
 

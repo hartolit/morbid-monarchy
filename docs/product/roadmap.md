@@ -14,11 +14,11 @@ current qualification lives in [status](status.md). A roadmap entry is not evide
 | 4 | Move bodies and their terrain/liquid interaction to the same fixed-tick world; return usable observations. | 04 — complete |
 | 5 | Make residency changes, snapshots, saves, reloads and failures safe without permanent CPU mirrors. | 05 — complete |
 | 6 | Deliver the native interactive client/renderer and remove the Bevy engine production path. | 06 — complete |
-| 7 | Complete integrated correctness, performance, recovery and removal checks; publish actual qualification. | 07 |
+| 7 | Complete integrated correctness, performance, recovery and removal checks; publish actual qualification. | 07 — complete ([qualification](../development/qualification.md)) |
 
-Execute through [the sprint](../development/virtual-office/gpu-transition/README.md), one prompt at a
-time. Each stage can contain several tested commits and agent sessions. A failed upstream contract
-blocks dependent work; it does not authorize a weaker parallel implementation.
+The transition is complete and its sprint closed; Git keeps its prompts and handoff. What
+remains unqualified, and the measured limits that should steer the next choice, are in
+[status](status.md#known-gaps).
 
 ## After qualification
 

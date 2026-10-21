@@ -25,11 +25,12 @@ The documents below explain that boundary and how to implement it without hiding
 [Upstream sources](reference/upstream-sources.md) explain the external API constraints behind
 GPU guidance; executable code and tests will own exact selected versions and layouts.
 
-## Current assignment
+## Assignments
 
-[GPU transition](development/virtual-office/gpu-transition/README.md) contains prompt 00 (complete)
-and seven sequential implementation stages. Its source audit records the baseline source and its
-reconciliation with the checkout; it does not replace current status. The
-[virtual office](development/virtual-office/README.md) owns temporary assignments, and the
-[whiteboard](development/virtual-office/whiteboard/README.md) keeps unresolved cross-assignment
-questions. Adopt lasting outcomes into the maintained owners before removing a completed sprint.
+No assignment is active. The GPU transition (prompts 00–07) is complete; its
+[qualification](development/qualification.md) records the final acceptance, the preserved
+feature inventory and what became of the baseline, and Git keeps the sprint's prompts and
+handoff. The [virtual office](development/virtual-office/README.md) owns temporary assignments,
+and the [whiteboard](development/virtual-office/whiteboard/README.md) keeps unresolved
+cross-assignment questions. Adopt lasting outcomes into the maintained owners before removing a
+completed sprint.
