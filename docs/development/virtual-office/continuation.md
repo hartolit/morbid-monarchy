@@ -1,7 +1,7 @@
 # Continuation note
 
 **Written 2026-10-21 at the end of the GPU transition, for the next agent; updated the same day
-after two open items were done.** No sprint is active and no successor is authorized: the next
+after three open items were done.** No sprint is active and no successor is authorized: the next
 assignment is the user's to choose. This note says where work stopped, what is open and how to work
 on this machine. It is temporary; replace or remove it when the next assignment starts, and move
 anything lasting into its maintained owner.
@@ -22,6 +22,17 @@ anything lasting into its maintained owner.
   `worlds`) and all three benchmark profiles (5 runs each, none rejected) ran on it; the comparison
   with 07 is in the [budgets](../../reference/performance-budgets.md#client-loop-without-vsync-after-07)
   and its reports under `target/evidence/loop-*`.
+- **Then the command-journal item, decided against a journal:** `4f42879` and `2e1a938` measure
+  replay from a checkpoint and the cost of checkpoint cadence (`streaming` `replay-reproduction`,
+  `checkpoint-cadence-*`); `0ec68c5` records the decision
+  ([ADR 0004](../../decisions/0004-bounded-loss-by-checkpoint-cadence.md), the
+  [whiteboard topic](whiteboard/discussions/command-journal.md)); `b7d86bb` tests version-1
+  worlds against a committed fixture and refuses damaged ones unchanged; `21674ad` keeps the
+  world snapshot's device image between saves; `2932764` autosaves every 60 ticks by default and
+  never off, with the `bounded-loss` case. Measurements in the
+  [budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07), reports under
+  `target/evidence/journal-*`, drafts and helpers (`cost.py`, `table.py` summarize a cadence
+  case's result) under `target/drafts/journal/`.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
   `vulkan-10de-2c05`, NVIDIA 615.78.08, Linux 7.2.11, KWin Wayland). The final acceptance of
   A01–A15, the feature inventory, the baseline's dispositions and the commands are in the
@@ -47,10 +58,14 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    cause is an inference in the budgets). No frame rate is promised there; see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
    body solver.
-3. **No command journal:** changes after the last checkpoint are lost on a crash or device loss;
-   a world whose layout, physics or generator identity changes is refused, not converted, so a
-   format change needs a migration before it reaches a user with saved worlds.
-4. **Unqualified:** every other adapter, driver, compositor and platform.
+3. **Unqualified:** every other adapter, driver, compositor and platform.
+4. **The autosave cadence in the native window:** the `loss` and `worlds` scripts and the frozen
+   benchmarks run with autosave off, as their protocol says, and have not run since `2c63b64`;
+   a diagnostic `native-client bench --autosave 60` would measure the cadence's frame cost in the
+   window (headless it is within the spread between runs). A command journal for a loss below
+   the cadence is parked on the whiteboard with what it needs first; a future change of the
+   format, layout, physics or generator still needs a migration of version-1 worlds, which the
+   `world-store` fixture test enforces.
 
 The [roadmap](../../product/roadmap.md#after-qualification) says how to choose what comes after
 the transition.

@@ -31,7 +31,9 @@ GPU completion of a submission and the CPU decoding its results are reported sep
 Normal command retries with the same ID and payload cannot apply twice within the live session;
 reuse with different payload is rejected. Keep retention bounded: an acknowledged/expired ID has
 an explicit floor or generation rule, not indefinite receipts. A restart creates a new session;
-there is no replay of unsaved commands after a crash (no command journal).
+there is no replay of unsaved commands after a crash (no command journal): periodic checkpoints
+bound what is lost ([world format](world-format.md#exit-interruption-and-device-loss),
+[ADR 0004](../decisions/0004-bounded-loss-by-checkpoint-cadence.md)).
 
 *Implemented (02), the floor rule.* `world_runtime::receipts::Receipts` holds a fixed number of
 receipts (default 4,096). Issuers choose identities. An identity at or above the floor and not

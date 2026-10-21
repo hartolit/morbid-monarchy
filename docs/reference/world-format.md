@@ -131,7 +131,12 @@ build's is refused as unsupported before anything else is read, and the file is 
 conversion exists yet: a different layout reads other fields out of the same bits, and other rules
 or body tuning make it a different physical world. The fingerprints are pinned by tests, so
 changing a listed rule or body constant fails until its revision is raised here and in
-`world_model::identity`. A row of another format version is refused the same way.
+`world_model::identity`. A row of another format version is refused the same way. People keep
+version-1 worlds, so a change that would refuse them needs, before it ships, a tested migration
+that keeps the original bytes and validates the replacement before publishing it, or a recorded
+decision to refuse them; `world-store`'s committed
+[version-1 fixture](../../adapters/world-store/tests/fixtures/v1/README.md) fails any build that
+stops reading it.
 
 *Publication.* Chunk revisions and a checkpoint's body set are written ahead in their own
 transactions (`Durability::Immediate`, redb's default: durable when the commit returns). One
@@ -188,7 +193,8 @@ cargo evidence session --store WORLD.redb --adapter ADAPTER_ID --ticks 600 --edi
 - A session that did not close (killed, timed out, device lost) leaves the store marked unclean.
   The next session to open it reclaims the revisions and body sets no checkpoint reached, reports
   that it did, and starts from the latest complete checkpoint; changes after it are lost, as the
-  loss report of a lost device says (its checkpoint, tick and ticks lost). Nothing is replayed.
+  loss report of a lost device says (its checkpoint, tick, ticks lost and the autosave interval).
+  Nothing is replayed; periodic saves bound the loss ([below](#exit-interruption-and-device-loss)).
 - Every one of these opens only the file it is given. A file that is not a version-1 world (a
   legacy save, another redb file, anything else), and a version-1 world whose header, latest
   checkpoint or latest body set is damaged or from another revision, is refused before it is
@@ -260,6 +266,23 @@ are different evidence cases: `resident-world` step 6 runs them in one trace (an
 a device lost before a save's payloads reached the CPU, and a process ending inside its save
 before and after the publication commits), and each reopen finds exactly the checkpoint the
 boundary names, with its bodies and configuration (07).
+
+*The loss bound (after 07, [ADR 0004](../decisions/0004-bounded-loss-by-checkpoint-cadence.md)).*
+The client checkpoints every 60 ticks by default
+(`world_runtime::checkpoint::DEFAULT_AUTOSAVE_TICKS`, a second at 60 Hz; settable from 60 to 3,600,
+never off), counted from the latest checkpoint's tick, one save at a time. A crash or a lost device
+therefore loses at most the interval and the save in progress: on the nominated machine, with the
+store on its disk, a save published within 10 ticks of its request under the frozen `coupled`
+workloads at radius 6 and 16, and the most a crash at any frame would have lost was 66 and 69 ticks
+(`streaming` `checkpoint-cadence-*`). The `bounded-loss` case measures the worst moments at the
+default interval: a device lost while a save is copying lost 60 ticks, a process ended just before a
+publication committed 63, and every reopened world held exactly the edits of its checkpoint's ticks.
+The bound holds while storage accepts writes: when it fails, saves retry with their payloads kept,
+the exposure grows (151 ticks in that case when it stopped failing, back within the bound 12 ticks
+later) and the save's state says so. Saves cost storage traffic, not frame time: [checkpoint
+cadence](performance-budgets.md#checkpoint-cadence-after-07). The format did not change: version-1
+worlds open as they are, tested against a world an earlier build wrote (`world-store`
+`tests/v1_fixture.rs`).
 
 ## Legacy import and replacement
 

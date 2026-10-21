@@ -750,6 +750,63 @@ the spinning loop spread over the polls of its idle iterations now falls into on
 inference. The capacity profile's p99s are unchanged (43.0 and 51.6 against 43.8 and 52.1 ms); it
 promises no frame rate.
 
+## Checkpoint cadence (after 07)
+
+**Result.** Since `2932764` a person's world is checkpointed every 60 ticks by default (60 to
+3,600, never off; [ADR 0004](../decisions/0004-bounded-loss-by-checkpoint-cadence.md)), because
+that interval bounds what a crash or a lost device loses. Under the frozen `coupled` workloads a
+save every 60 ticks costs no frame time beyond the spread between runs at radius 6 or 16: the
+session frame's 99th percentile CPU time was 0.50 and 0.69 ms against 0.75 and 0.65 ms with saves
+off, the checkpoint owner's share 2 and 5 µs per frame. It costs storage traffic: 1.7 MB/s
+written at radius 6 and 2.6 MB/s at radius 16, redb's pages and syncs included, and 0.28 MB/s
+with nothing happening. A save published within 10 ticks of its request, and a crash at any frame
+would have lost at most 66 and 69 ticks. Keeping the world snapshot's device image between saves
+(`21674ad`) removed the one per-save cost the frame showed: at radius 16 the request allocated a
+36 MB image, about 1.9 ms each, and the 99th percentile stood at 2.58 ms at `2e1a938`.
+
+Executed evidence: `cargo evidence test gpu --suite streaming --adapter vulkan-10de-2c05` on
+`2932764`, a clean tree, 2026-10-21 17:05–17:08 UTC (`target/evidence/journal-stage2-streaming/`),
+cases `checkpoint-cadence-qualification` and `checkpoint-cadence-scale`; host and adapter as in
+[07](#integrated-qualification-07), headless. The world is generated at seed 69 around the
+scenario camera's start chunk; the case's commands are the frozen scenario's, admitted for the
+tick they name (the first sphere is the driven one); the session runs one tick per frame paced at
+60 Hz, 300 warm-up ticks and 900 measured ones per interval; the store is on the workspace's disk
+(btrfs with zstd on LUKS on an NVMe SSD, Kingston SFYRD2000G), since the system's temporary
+directory is a `tmpfs` where a sync costs nothing. Frame CPU is `WorldSession::frame_ticks(1)`, not
+a native frame; storage bytes are the process's `write_bytes` in `/proc/self/io`; allocations are
+the process's, the session's thread and the store's workers separately. "Most ticks exposed" is the
+largest number of ticks after the latest published checkpoint at any measured frame. The created
+world has no tick of its own, hence the large values with saves off.
+
+| Workload, saves | Saves | Chunks per save (median / max) | Device copy per save (MB) | Read back (MB/s) | Written to storage (MB/s) | Ticks to publication (median / max) | Most ticks exposed | Frame CPU p50 / p95 / p99 / max (ms) | Checkpoint owner per frame (µs) | Allocations per frame (session + other threads) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| qualification coupled, off | 0 | – | – | 0 | 0 | – | 1,223 | 0.39 / 0.53 / 0.75 / 2.35 | 0 | 359 + 0 |
+| qualification coupled, every 300 | 3 | 22 / 26 | 5.5 | 0.15 | 0.39 | 6 / 6 | 305 | 0.39 / 0.56 / 0.68 / 2.45 | 1 | 360 + 1.8 |
+| qualification coupled, every 60 | 15 | 18 / 23 | 5.5 | 0.58 | 1.69 | 6 / 7 | 66 | 0.35 / 0.43 / 0.50 / 2.22 | 2 | 362 + 8.7 |
+| qualification idle, every 60 | 15 | 0 / 5 | 5.5 | 0.02 | 0.28 | 4 / 5 | 64 | 0.15 / 0.20 / 0.28 / 2.08 | 1 | 120 + 5.4 |
+| scale coupled, off | 0 | – | – | 0 | 0 | – | 1,338 | 0.43 / 0.55 / 0.65 / 2.25 | 0 | 363 + 0 |
+| scale coupled, every 300 | 3 | 24 / 207 | 35.7 | 0.56 | 1.36 | 6 / 13 | 312 | 0.46 / 0.58 / 0.72 / 7.52 | 2 | 365 + 2.0 |
+| scale coupled, every 60 | 15 | 19 / 80 | 35.7 | 0.89 | 2.55 | 6 / 10 | 69 | 0.43 / 0.57 / 0.69 / 2.44 | 5 | 367 + 10.4 |
+
+The first save of a run writes what changed since the world was generated (207 chunks at radius
+16), later ones what changed since the save before. Storage receives about three times the rows'
+own bytes: each save is several synced redb commits (the rows, the body set, the publication, the
+reclamation of what it superseded), which also make the idle workload's 0.28 MB/s with almost no
+chunk changing. A store write waited up to 154 ms at radius 16 (fsync on this file system), and
+retained payloads peaked at 10.6 MB against the 32 MB budget. One frame of the every-300 run at
+radius 16 took 7.52 ms (2.62 ms in the same run at `2e1a938`); it is not attributed. The native
+window was not measured with saves on: the frozen benchmarks keep their protocol, autosave off,
+and a diagnostic `native-client bench --autosave 60` run is the next evidence if the frame cost
+is questioned.
+
+**The bound under faults** (`bounded-loss`, same run, radius 1, every rule off, a marker edit
+every fifth tick, paced at 60 Hz, store on disk). A device lost while an autosave was copying lost
+60 ticks; a process ended right before a publication committed left the previous checkpoint, 63
+ticks behind its last tick; with every storage write failing, the save was reported failed and
+retrying and the exposure passed 151 ticks, then returned within the bound 12 ticks after writes
+succeeded. After each, the store held exactly the marker edits of its checkpoint's ticks. The case
+fails at more than 90 ticks (the interval and 30 ticks for publication).
+
 ## Structural gates
 
 These gates are independent of an arbitrary FPS target.

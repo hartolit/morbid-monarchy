@@ -66,9 +66,11 @@ from `gpu-world`'s exported declarations and run them on the session's device th
 timeline. The binary installs a counting allocator so steady-state cases can report
 allocations. Each case writes a JSON result with failures, notes and metrics; the runner keeps
 them in `gpu-<suite>/` of its run directory and the metrics in `report.json`. The `streaming`
-cases (`suites/streaming/`) create real redb stores in temporary directories, inject I/O
-failures through `world_store::faults`, and re-run the binary as a child process to interrupt a
-live session at a store barrier; none opens `world_data/`.
+cases (`suites/streaming/`) create real redb stores in temporary directories (the cases that
+measure storage, `checkpoint-cadence-*` and `bounded-loss`, under `target/streaming-scratch/`,
+on the workspace's disk rather than a `tmpfs` where a sync costs nothing), inject I/O failures
+through `world_store::faults`, and re-run the binary as a child process to interrupt a live
+session at a store barrier; none opens `world_data/`.
 
 ## Adding a lane
 
