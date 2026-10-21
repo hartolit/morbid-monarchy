@@ -190,8 +190,10 @@ cargo evidence session --store WORLD.redb --adapter ADAPTER_ID --ticks 600 --edi
   that it did, and starts from the latest complete checkpoint; changes after it are lost, as the
   loss report of a lost device says (its checkpoint, tick and ticks lost). Nothing is replayed.
 - Every one of these opens only the file it is given. A file that is not a version-1 world (a
-  legacy save, another redb file, anything else) is refused before it is opened for writing,
-  unchanged.
+  legacy save, another redb file, anything else), and a version-1 world whose header, latest
+  checkpoint or latest body set is damaged or from another revision, is refused before it is
+  opened for writing, unchanged (the client opens worlds the same way). A damaged chunk row does
+  not refuse the world: that chunk stays out, its row byte for byte.
 
 ## Residency state machine
 

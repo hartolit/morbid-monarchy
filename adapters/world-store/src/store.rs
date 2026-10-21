@@ -209,8 +209,9 @@ impl RedbWorldStore {
     }
 
     /// Opens an existing world. Refuses a header from a format, layout, physics or generator
-    /// revision this build does not read, and (unless allowed) a store without a published
-    /// checkpoint; neither changes the file.
+    /// revision this build does not read, a damaged header, latest checkpoint or latest body
+    /// set, and (unless allowed) a store without a published checkpoint; none of these changes
+    /// the file.
     pub fn open(path: &Path, options: OpenOptionsStore) -> Result<Self, StoreError> {
         if !path.is_file() {
             return Err(StoreError::Io {
@@ -220,7 +221,7 @@ impl RedbWorldStore {
         }
         let db = match options.access {
             Access::ReadWrite => {
-                Self::probe(path)?;
+                Self::probe(path, &options)?;
                 Db::Write(Self::open_write(path, &options.faults)?)
             }
             Access::ReadOnly => Db::Read(
@@ -229,6 +230,11 @@ impl RedbWorldStore {
                     .map_err(io("open store read-only"))?,
             ),
         };
+        Self::over(path, db, options)
+    }
+
+    /// The store over an opened database: its header decoded, its latest checkpoint checked.
+    fn over(path: &Path, db: Db, options: OpenOptionsStore) -> Result<Self, StoreError> {
         let txn = match &db {
             Db::Write(database) => database.begin_read(),
             Db::Read(database) => database.begin_read(),
@@ -269,23 +275,29 @@ impl RedbWorldStore {
     }
 
     /// Opening a file for writing changes its bytes even when nothing is written, so a
-    /// read-only look first confirms it is a saved world: a legacy save, another redb file or
-    /// anything else is refused unchanged. A file redb must repair cannot be looked at without
-    /// that repair; it is opened for writing (redb repairs it without losing committed data) and
-    /// checked after.
-    fn probe(path: &Path) -> Result<(), StoreError> {
+    /// read-only look first checks everything a session reads before it writes: that the file
+    /// is a saved world (a legacy save, another redb file or anything else is not), its header,
+    /// its latest checkpoint and that checkpoint's body set. A world that fails is refused
+    /// unchanged. A file redb must repair cannot be looked at without that repair; it is opened
+    /// for writing (redb repairs it without losing committed data) and checked after.
+    fn probe(path: &Path, options: &OpenOptionsStore) -> Result<(), StoreError> {
         let database = match Builder::new().open_read_only(path) {
             Ok(database) => database,
             Err(redb::DatabaseError::RepairAborted) => return Ok(()),
             Err(error) => return Err(io("open store read-only")(error)),
         };
-        let txn = database.begin_read().map_err(io("begin read"))?;
-        match read_table(&txn, WORLD)? {
-            Some(_) => Ok(()),
-            None => Err(StoreError::Corrupt {
-                item: StoredItem::Header,
-                detail: "no world table: not a saved world",
-            }),
+        let looked = Self::over(
+            path,
+            Db::Read(database),
+            OpenOptionsStore {
+                access: Access::ReadOnly,
+                ..options.clone()
+            },
+        )?;
+        match looked.latest() {
+            Ok(latest) => looked.read_bodies(latest.id).map(|_| ()),
+            Err(StoreError::Incomplete) => Ok(()),
+            Err(error) => Err(error),
         }
     }
 

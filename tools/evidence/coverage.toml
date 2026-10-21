@@ -2498,6 +2498,46 @@ destination = "world-store format, version 1 (05)"
 determinism = "exact"
 
 [[behavior]]
+id = "store.v1.fixture-reads-as-written"
+package = "world-store"
+target = "test:v1_fixture"
+test = "the_v1_fixture_reads_as_written_and_looking_changes_nothing"
+origin = "transition"
+expectation = "The committed version-1 world reads exactly as its content module computes it (header, latest checkpoint and configuration, every published chunk, the reclaimed superseded revision absent, the body set), verifies, and stays byte for byte."
+destination = "world-store format version 1 against bytes an earlier build wrote (after 07)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.v1.world-continues"
+package = "world-store"
+target = "test:v1_fixture"
+test = "a_v1_world_continues_in_a_writing_session_of_this_build"
+origin = "transition"
+expectation = "A copy of the version-1 world opens for play (a clean previous session, its body set), takes a new revision and checkpoint, and reopens with the new and the old chunks intact."
+destination = "world-store format version 1 against bytes an earlier build wrote (after 07)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.v1.damaged-refused-unchanged"
+package = "world-store"
+target = "test:v1_fixture"
+test = "damaged_and_unsupported_v1_worlds_are_refused_before_anything_is_written"
+origin = "transition"
+expectation = "Copies of the version-1 world with a damaged header, latest pointer, latest manifest or latest body set, or a future-version header, are refused with the matching corrupt or unsupported error when opened for play, and stay byte for byte."
+destination = "world-store open: a read-only check before the write open (after 07)"
+determinism = "exact"
+
+[[behavior]]
+id = "store.v1.damaged-chunk-stays-out"
+package = "world-store"
+target = "test:v1_fixture"
+test = "a_damaged_chunk_row_stays_out_and_survives_a_session"
+origin = "transition"
+expectation = "A copy whose chunk row is damaged opens for play; that chunk reads as corrupt, the others as written, and the damaged row survives the session byte for byte."
+destination = "world-store format version 1 against bytes an earlier build wrote (after 07)"
+determinism = "exact"
+
+[[behavior]]
 id = "store.lifecycle.a-created-world-is-complete-and-reopens-identically"
 package = "world-store"
 target = "test:store_lifecycle"
