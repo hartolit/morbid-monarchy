@@ -248,7 +248,7 @@ the tick, every read also requires the writer to be awake in this tick, and a mi
 in the diagnostics (expected zero) and treated as no transfer.
 
 **Activity scheduling.** After `react`, each process tile publishes which cells changed (a value
-change, or an active cell kept awake by immature foliage, fire or a pending phase change) and which
+change, or an active cell kept awake by immature foliage that can grow, fire or a pending phase change) and which
 cells *persist* (unchanged at level 3). The next tick's `wake` gives each cell of a candidate tile
 level 3 when a changed or edited cell lies within 2 cells, level 2 when it persists, and level 1
 when a changed or edited cell lies within 3 cells or a persisting one within 1 — the baseline's
@@ -313,7 +313,7 @@ counted separately in the command phase. The runtime's ledger checks both every 
 totals come from the `MeasureTotals` command, a labelled diagnostic reduction over every resident
 cell, never from a cell download.
 
-#### Rule changes from the baseline (03)
+#### Rule changes from the baseline (03, and after 07)
 
 | Change | Reason and evidence |
 | --- | --- |
@@ -322,6 +322,7 @@ cell, never from a cell download.
 | A receiver accepts only what it can hold; the donor drains the accepted amount. | The baseline donor drained the full proposal even when the receiver raised less bedrock than that at the ceiling. |
 | Changing a simulation rule wakes every resident cell. | The baseline woke only on a temperature change, so a re-enabled rule never resumed in a sleeping region. |
 | Immature foliage and fire keep their cell awake only while biology or fire runs. | With the rule off nothing can advance them, yet the baseline kept them awake for ever: generated terrain (immature foliage) never slept under the deterministic rules, a constant 64% of its tiles at radius 6 (found by the `activity-measurement` case). Switching the rule back on wakes every cell. |
+| Immature foliage keeps its cell awake only while it can grow: watered (mud or water in its column, or water or blood beside it within capillary reach) and not drowned (after 07; physics revision 2). | Dry foliage cannot change until something within its reach does, which wakes it anyway, yet holding it awake kept its whole neighbourhood active: 63% of a generated radius-32 window's tiles for ever, 2.8 ms of every tick (`bodies` measurement on generated terrain, every rule). Consequence: sand and bare ground beside dry foliage now fall asleep like anywhere else, so vegetation spreads only near water or where something changes. `cells` `dry-foliage-sleeps`: watered foliage matures, dry foliage keeps its state, the world then sleeps (it never did), and poured water wakes dry foliage to grow; the CPU reference follows the same rule. |
 | Activated chunks wake themselves and their boundary dependants; retiring a chunk wakes its border. | The baseline never woke a streamed chunk (source audit, found while measuring). |
 | Captures hold the cells at the end of the tick. | A completed tick, the boundary a checkpoint needs. |
 

@@ -203,6 +203,34 @@ fn react_biology(local: vec2<i32>, place: vec2<i32>, old: vec2<u32>, out: ptr<fu
     }
 }
 
+// Whether immature foliage `cell` at `local` could grow: watered as `react_biology` tests it (mud
+// or water in its own column, or water or blood beside it within capillary reach) and not
+// drowned. Neighbours are read as the tick began; one that changes this tick wakes this cell
+// anyway. Dry foliage cannot change until something within its reach does, which wakes it.
+fn foliage_can_grow(local: vec2<i32>, cell: vec2<u32>) -> bool {
+    let fluid = cell_fluid_material(cell);
+    if (fluid != FLUID_EMPTY && cell_fluid_volume(cell) > DROWNING_FLUID_VOLUME) {
+        return false;
+    }
+    if (cell_granular_material(cell) == GRANULAR_MUD || fluid == FLUID_WATER) {
+        return true;
+    }
+    let crust = floor_height(cell);
+    for (var dir = 0u; dir < 8u; dir += 2u) {
+        let neighbor = read_cell(local + DIRS[dir]);
+        if (!neighbor.present) {
+            continue;
+        }
+        let neighbor_crust = floor_height(neighbor.value);
+        let rise = max(crust, neighbor_crust) - min(crust, neighbor_crust);
+        let neighbor_fluid = cell_fluid_material(neighbor.value);
+        if (rise <= MAX_CAPILLARY_LIFT && (neighbor_fluid == FLUID_WATER || neighbor_fluid == FLUID_BLOOD)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The baseline's step_fire with keyed draws.
 fn react_fire(local: vec2<i32>, place: vec2<i32>, old: vec2<u32>, out: ptr<function, Reacted>) {
     let surface = cell_surface_material(old);
@@ -399,11 +427,14 @@ fn react(
         if (value_changed) {
             atomicAdd(&sums[SUM_CHANGED], 1u);
         }
-        // An active cell stays awake while foliage grows, fire burns or a phase change waits,
-        // each only while its rule runs: a rule that is off cannot advance what the cell waits
-        // for, and switching it back on wakes every cell.
+        // An active cell stays awake while its foliage can grow, fire burns or a phase change
+        // waits, each only while its rule runs: a rule that is off cannot advance what the cell
+        // waits for, and switching it back on wakes every cell. Dry foliage cannot grow, and
+        // keeping it awake held most of a generated world awake for ever (after 07).
         let surface = cell_surface_material(updated);
-        let growing = runs(RULE_BIOLOGY) && surface == SURFACE_FOLIAGE && cell_surface_state(updated) < FOLIAGE_MATURE_STATE;
+        let growing = runs(RULE_BIOLOGY) && surface == SURFACE_FOLIAGE
+            && cell_surface_state(updated) < FOLIAGE_MATURE_STATE
+            && foliage_can_grow(local, updated);
         let burning = runs(RULE_FIRE) && surface == SURFACE_FIRE;
         let kept = is_active && (growing || burning || reacted.phase_pending);
         let word = bitmap_word(within);

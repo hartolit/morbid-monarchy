@@ -1944,6 +1944,16 @@ destination = "gpu-world material phases on the selected adapter (03); rerun wit
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.cells.dry-foliage-sleeps"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "dry-foliage-sleeps"
+origin = "transition"
+expectation = "A field of dry young foliage with a level water trench through it: the foliage the trench waters matures, dry foliage keeps state 1, the world then falls asleep, and water poured on dry foliage wakes it and some of it grows; the device equals the CPU reference tick for tick."
+destination = "gpu-world material phases' activity scheduling (rule change after 07, physics revision 2)"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.cells.climate-and-rule-reactivation"
 package = "monarchy-evidence"
 target = "gpu:cells"

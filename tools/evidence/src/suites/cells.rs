@@ -123,6 +123,11 @@ pub const CASES: &[Case] = &[
         run: adversarial::zero_active_tiles,
     },
     Case {
+        name: "dry-foliage-sleeps",
+        summary: "immature foliage stays awake only while it can grow: watered foliage matures, dry foliage keeps its state, the world then sleeps, and water poured on dry foliage wakes it to grow; the device equals the reference",
+        run: adversarial::dry_foliage_sleeps,
+    },
+    Case {
         name: "climate-and-rule-reactivation",
         summary: "climate and rule changes wake a sleeping world once and it resumes",
         run: adversarial::climate_and_rule_reactivation,

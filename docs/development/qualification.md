@@ -183,7 +183,7 @@ The audit's calculated scale (one packed array is `8 N` bytes: 5.28 MiB at radiu
 
 ## Intentional differences
 
-- Rule changes of the material phases: [GPU contract](../reference/gpu-contract.md#rule-changes-from-the-baseline-03).
+- Rule changes of the material phases: [GPU contract](../reference/gpu-contract.md#rule-changes-from-the-baseline-03-and-after-07).
 - Changes of body behaviour, each with the test that would fail without it:
   [GPU contract](../reference/gpu-contract.md#bodies-04).
 - Presentation: the native presentation differences above.

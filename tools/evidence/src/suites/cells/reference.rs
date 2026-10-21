@@ -596,6 +596,28 @@ fn step_biology(
     }
 }
 
+/// Whether immature foliage `cell` at `pos` could grow: watered as `step_biology` tests it (mud or
+/// water in its own column, or water or blood beside it within capillary reach) and not drowned.
+/// Neighbours are the tick's input.
+fn foliage_can_grow(view: &View, pos: IVec2, cell: &WorldCell) -> bool {
+    let fluid = cell.fluid_mat();
+    if fluid != FluidMat::EMPTY && cell.fluid_vol() > DROWNING_FLUID_VOLUME {
+        return false;
+    }
+    if cell.granular_mat() == GranularMat::GRANULAR_MUD || fluid == FluidMat::FLUID_WATER {
+        return true;
+    }
+    let crust = floor_height(cell);
+    CARDINAL_DIRS
+        .into_iter()
+        .filter_map(|dir| view.get(pos + dir))
+        .any(|neighbor| {
+            crust.abs_diff(floor_height(&neighbor)) <= MAX_CAPILLARY_LIFT
+                && (neighbor.fluid_mat() == FluidMat::FLUID_WATER
+                    || neighbor.fluid_mat() == FluidMat::FLUID_BLOOD)
+        })
+}
+
 fn step_fire(view: &View, pos: IVec2, old: &WorldCell, cell: &mut WorldCell, out: &mut CellStep) {
     let surface = old.surface_mat();
     let fluid = old.fluid_mat();
@@ -1009,11 +1031,13 @@ impl ReferenceWorld {
                 let mut changed = cell != old;
                 diagnostics.changed_cells += u64::from(changed);
                 if active && !changed {
-                    // The baseline's keep-alive, each only while its rule runs (03).
+                    // The baseline's keep-alive, each only while its rule runs (03), and for
+                    // foliage only while it can grow (after 07).
                     let surface = cell.surface_mat();
                     changed = (self.rules.biology
                         && surface == SurfaceMat::SURFACE_FOLIAGE
-                        && cell.surface_state() < FOLIAGE_MATURE_STATE)
+                        && cell.surface_state() < FOLIAGE_MATURE_STATE
+                        && foliage_can_grow(&view, pos, &cell))
                         || (self.rules.fire && surface == SurfaceMat::SURFACE_FIRE)
                         || step.phase_pending;
                 }

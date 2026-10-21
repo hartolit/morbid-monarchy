@@ -134,7 +134,8 @@ changing a listed rule or body constant fails until its revision is raised here 
 `world_model::identity`. A row of another format version is refused the same way. Until the
 game is released, saved worlds are test data: a change of the format, the layout, the physics or
 the generator raises its revision, and worlds of the old one are refused, unchanged, not migrated
-(the user's decision, 2026-10-21).
+(the user's decision, 2026-10-21). Physics revision 2 (after 07): immature foliage stays awake
+only while it can grow ([rule changes](gpu-contract.md#rule-changes-from-the-baseline-03-and-after-07)).
 
 *Publication.* Chunk revisions and a checkpoint's body set are written ahead in their own
 transactions (`Durability::Immediate`, redb's default: durable when the commit returns). One

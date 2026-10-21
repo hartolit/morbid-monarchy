@@ -486,6 +486,95 @@ pub fn zero_active_tiles(adapter: &str, check: &mut Check) -> Result<(), String>
     Ok(())
 }
 
+/// Immature foliage stays awake only while it can grow (after 07). A field of dry young foliage
+/// on dirt, with a level water trench through its middle chunk: the foliage the trench waters
+/// grows to maturity, the dry foliage keeps its state, and then the whole world sleeps, which
+/// it never did while dry foliage held its neighbourhood awake. Water poured on dry foliage
+/// wakes it and it grows. The device equals the reference tick for tick throughout.
+pub fn dry_foliage_sleeps(adapter: &str, check: &mut Check) -> Result<(), String> {
+    use world_model::rules::FOLIAGE_MATURE_STATE;
+    let center = ChunkKey::new(2, 2, 0);
+    let young = |column: &mut WorldCell| {
+        column.set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
+        column.set_surface_state(1);
+    };
+    // The trench: two units below the bank (capillary reach), filled level with it, on stone so
+    // nothing takes root in it.
+    let trench = 20..24;
+    let mut chunks = Vec::new();
+    for y in 1..=3 {
+        for x in 1..=3 {
+            let key = ChunkKey::new(x, y, 0);
+            let mut cells = flat(TerrainMat::TERRAIN_DIRT, BED_ELEVATION);
+            for (index, column) in cells.iter_mut().enumerate() {
+                let (cx, _) = (index as i32 % SIZE, index as i32 / SIZE);
+                if key == center && trench.contains(&cx) {
+                    column.set_terrain_mat(TerrainMat::TERRAIN_STONE);
+                    column.set_elevation(BED_ELEVATION - 2);
+                    column.inject_fluid(FluidMat::FLUID_WATER, 2);
+                } else {
+                    young(column);
+                }
+            }
+            chunks.push((key, cells));
+        }
+    }
+    let mut twin = Twin::open(adapter, Setup::new(center, 1), &chunks)?;
+    let asleep = twin.run_until_asleep(4_000)?;
+    check.that(asleep.is_some(), || {
+        format!(
+            "the world never slept: {:?}",
+            twin.last.map(|last| last.cells)
+        )
+    });
+    check.metric("ticks_until_asleep", asleep.unwrap_or(0));
+    let captured = twin.compare_cells(check, "settled")?;
+    let cells = &captured
+        .iter()
+        .find(|(key, _)| *key == center)
+        .ok_or("no centre chunk")?
+        .1;
+    let banks: Vec<u16> = (0..SIZE)
+        .flat_map(|y| [at(19, y as usize), at(24, y as usize)])
+        .map(|index| cells[index].surface_state())
+        .collect();
+    check.that(
+        banks.iter().all(|state| *state == FOLIAGE_MATURE_STATE),
+        || format!("watered foliage did not mature: states {banks:?}"),
+    );
+    let dry: Vec<u16> = [at(5, 5), at(40, 40), at(17, 30), at(26, 30)]
+        .into_iter()
+        .map(|index| cells[index].surface_state())
+        .collect();
+    check.equal("dry foliage states", dry, vec![1, 1, 1, 1]);
+
+    // Water poured on dry foliage far from the trench wakes it, and it grows.
+    let target = cell_of(ChunkKey::new(1, 1, 0), 30, 30);
+    twin.step(&[edit(EditTool::Water, target.x, target.y, 2, 4)])?;
+    check.that(
+        twin.last.is_some_and(|last| last.cells.process_tiles > 0),
+        || "the poured water woke nothing".to_owned(),
+    );
+    twin.run(600)?;
+    let captured = twin.compare_cells(check, "watered")?;
+    let cells = &captured
+        .iter()
+        .find(|(key, _)| *key == ChunkKey::new(1, 1, 0))
+        .ok_or("no watered chunk")?
+        .1;
+    // Growth is a keyed draw per sampled tick, so count the stroke's cells that grew.
+    let grown = (28..33)
+        .flat_map(|y| (28..33).map(move |x| at(x, y)))
+        .filter(|index| cells[*index].surface_state() > 1)
+        .count();
+    check.metric("watered_cells_grown", grown);
+    check.that(grown > 0, || {
+        "no foliage under the poured water grew".to_owned()
+    });
+    twin.finish(check, "dry foliage");
+    Ok(())
+}
+
 /// A sleeping pond wakes when the climate changes, and a sleeping region wakes when a rule is
 /// switched back on (the baseline woke only on climate changes).
 pub fn climate_and_rule_reactivation(adapter: &str, check: &mut Check) -> Result<(), String> {

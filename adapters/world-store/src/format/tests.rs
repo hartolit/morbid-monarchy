@@ -82,7 +82,7 @@ fn a_header_of_another_layout_physics_or_version_is_refused_unchanged() {
         })
     ));
     let mut physics = bytes.clone();
-    physics[20] = 2;
+    physics[20] = physics[20].wrapping_add(1);
     reseal(&mut physics);
     assert!(matches!(
         decode_header(&physics),

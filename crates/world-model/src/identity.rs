@@ -18,7 +18,7 @@ use crate::{body, cell::WorldCell, rules, units};
 pub const CELL_FORMAT_REVISION: u32 = 1;
 
 /// Revision of the material rules and body physics: `rules`, `body` and `units`.
-pub const PHYSICS_REVISION: u32 = 1;
+pub const PHYSICS_REVISION: u32 = 2;
 
 /// Revision of `generation::WorldGenerator`'s terrain: chunks that were never saved are
 /// regenerated from the seed, so a world can only reopen with the generator it was created with.
@@ -290,7 +290,7 @@ mod tests {
     // revision above, record the change in docs/reference/world-format.md and pin the new
     // value. Saved worlds of the old revision are then refused, as they must be.
     const CELL_LAYOUT: u64 = 0x0DE2_75B3_5FC5_4DC9;
-    const PHYSICS: u64 = 0x9B56_BDFA_1FF1_22C3;
+    const PHYSICS: u64 = 0x45AE_D2EF_11B9_F774;
 
     #[test]
     fn identities_are_pinned_to_the_current_layout_and_physics() {
