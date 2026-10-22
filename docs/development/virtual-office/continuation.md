@@ -74,8 +74,11 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    window. What remains: the body
    pass at 4,096 dense bodies, about 5.1 ms a tick (see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
-   body solver); a GPU memory peak 226 MiB higher, 90 MiB of it unattributed; the qualification
-   and scale profiles not run since `2c63b64`. No frame rate is promised there.
+   body solver); and a valid window run of all three profiles: the one on `b766ae9` was rejected
+   because KWin opened the window on the 1,920 × 1,080 display (keep the pointer on a 2,560 ×
+   1,440 display while it runs); as a diagnostic it shows the long frames gone and the cache's gain
+   at every radius. The 226 MiB memory rise is attributed (the closing save's kept world image). No
+   frame rate is promised there.
 3. **Unqualified:** every other adapter, driver, compositor and platform.
 4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
    code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame

@@ -939,11 +939,21 @@ window moves a row (near ticks 230, 485–492 and 622, where the resident chunks
 11.2–11.7 ms with an acquisition wait, so the rest of the frame waits for the device; which of its
 work is not measured. Body-contact's longest frame is 18.66 ms (it was 40–56 ms).
 
-The process's GPU memory peak rose by 226 MiB in idle, flow, mixed and body-contact, more than the
-cache's 136 MiB; the rest is not attributed. Coupled's and streaming's peaks stayed where they were
-(coupled's fourth run 1,836 MiB); why the cache did not raise them is not established. The scripted
-runs pass on the same tree (`target/evidence/capacity-scripts/`, 22:14–22:15 UTC): `features` 41
-checks, `loss` 6 and `worlds` 5. The qualification and scale profiles have not run since `2c63b64`.
+The process's GPU memory peak rose by 226 MiB in idle, flow, mixed and body-contact, and the
+lighting cache did not cause it. With wgpu's allocator report in each run's summary (`565366e`) and
+capacity idle run in the window by three builds in turn (`2c63b64`, `10cf62f` before the cache, and
+`565366e`; `target/drafts/capacity/memory-ab*`, nvidia-smi sampled every 0.25 s), every build holds
+1,007–1,010 MiB through the measured frames, the allocator reserving 1,024 MiB in four device and
+two host blocks, and every build reaches 1,236 MiB at the end, when closing the world saves it: the
+save's 132 MiB world image needs a 256 MiB block of its own. `2c63b64` released the image at once,
+so the bench's 2 s sampler missed that peak; since `21674ad` the image is kept until the world
+drops, and the sampler catches it. The cache's two 68 MiB buffers sit in the free halves of the
+blocks holding `cells` and `flow`, each 132 MiB and otherwise alone in a 256 MiB block: 136 MiB more
+allocated, nothing more reserved. Coupled's and streaming's higher peaks came from window moves
+allocating a second window: with moves in place they fall to 1,296 and 1,236 MiB
+([below](#window-moves)). The scripted runs pass on the same tree
+(`target/evidence/capacity-scripts/`, 22:14–22:15 UTC): `features` 41 checks, `loss` 6 and `worlds`
+5. The qualification and scale profiles have not run since `2c63b64`.
 
 ### Window moves
 
@@ -977,8 +987,23 @@ runs). The woken window had kept 1,800 tiles moving for many ticks after a move:
 not at rest, which the move had nudged. Without the wake they stay asleep, as when the observer
 stands still. The ticks after a move still hold 860–1,450 active tiles; that the retired row's wake
 set them going is an inference, and the case does not record the count at rest. The renderer
-relights every drawn chunk once after a move (7.02 ms of scene). How much of coupled's 32–40 ms
-frames this removes in the window is not measured.
+relights every drawn chunk once after a move (7.02 ms of scene).
+
+**In the window** (diagnostic, not a protocol result). 07's protocol for all three profiles on
+`b766ae9`, a clean tree whose code is `67edbc2`'s, 2026-10-22 08:56–10:25 UTC
+(`target/evidence/move-bench-{capacity,qualification,scale}/`), rejected 119 of 124 attempts: KWin
+placed the window on the 1,920 × 1,080 display, where it gets 1,920 × 1,052; only scale coupled ran
+on a 2,560 × 1,440 display, 5 of 5 valid. The rejected attempts ran their whole scenario with 2.6%
+fewer pixels, so as a diagnostic: capacity coupled's longest frame took 18.2–23.2 ms by run against
+32–40 ms on `76376d8`, with no frame over 25 ms against 14, and frame medians of 10.8–11.0 ms
+(11.3); body-contact 12.0–12.2 ms (12.1), the four others 5.1–5.5 ms. Every run of every profile
+kept 60 ticks/s and discarded no tick. The cache shows at the smaller radii: medians 0.63–0.83 ms at
+radius 6 against 1.06–1.18 ms on `2c63b64`, 1.65–2.02 ms at radius 16 against 4.58–4.93 ms (scale
+coupled's valid runs: 2.02 ms, p95 4.14–10.66, worst p99 10.78). One frame of one qualification
+mixed run took 44.6 ms and one of one scale mixed run 64.5 ms, in each the presenting frame's own
+main-thread time with no tick and no upload in it; neither is attributed (the desktop was in use on
+the display the window opened on). Process GPU memory peaked at 241 MiB at radius 6, 497–556 MiB at
+radius 16 (556–576 for scale coupled on `2c63b64`) and 1,236–1,296 MiB at radius 32.
 
 ## Structural gates
 
