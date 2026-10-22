@@ -271,6 +271,9 @@ pub struct BenchDriver {
     window_end: Option<Mark>,
     /// How old observations were and how much pressure the consumers saw, at the end.
     observation: Value,
+    /// The device memory allocator's account when the window became resident and at the end,
+    /// taken outside the measured frames (a report allocates).
+    allocator: BTreeMap<&'static str, Value>,
     adapter: Value,
     window_physical: Option<[u32; 2]>,
     window_mismatch: Option<String>,
@@ -325,6 +328,7 @@ impl BenchDriver {
             window_start: None,
             window_end: None,
             observation: Value::Null,
+            allocator: BTreeMap::new(),
             adapter: Value::Null,
             window_physical: None,
             window_mismatch: None,
@@ -707,6 +711,7 @@ impl BenchDriver {
             "acquire_over_5ms": self.acquire_ms.iter().filter(|ms| **ms > 5.0).count(),
             "session_frame_ms": distribution(&self.session_ms),
             "observation": self.observation,
+            "allocator": self.allocator,
             "failures": self.failures,
         });
         let text = serde_json::to_string_pretty(&summary).unwrap_or_default();
@@ -714,6 +719,38 @@ impl BenchDriver {
             eprintln!("native-client: write summary: {error}");
         }
     }
+}
+
+/// The device memory allocator's account: the bytes its memory blocks reserve and the bytes
+/// allocations use, and per block its size, use and largest allocations, so device memory a
+/// process holds can be attributed to the buffers in it. Null where the backend gives none.
+fn allocator(running: &mut Running) -> Value {
+    let Some(report) = running.gpu().view().device.generate_allocator_report() else {
+        return Value::Null;
+    };
+    let blocks: Vec<Value> = report
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut held: Vec<_> = report.allocations[block.allocations.clone()].iter().collect();
+            held.sort_by_key(|allocation| std::cmp::Reverse(allocation.size));
+            json!({
+                "size": block.size,
+                "allocated": held.iter().map(|allocation| allocation.size).sum::<u64>(),
+                "allocations": held.len(),
+                "largest": held
+                    .iter()
+                    .take(4)
+                    .map(|allocation| json!([allocation.name, allocation.size]))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "reserved_bytes": report.total_reserved_bytes,
+        "allocated_bytes": report.total_allocated_bytes,
+        "blocks": blocks,
+    })
 }
 
 /// Observation ages and the consumers' pressure over the run.
@@ -761,9 +798,10 @@ impl Driver for BenchDriver {
             .last()
             .is_some_and(|sample| sample.tick >= self.final_tick())
         {
-            if let Some(running) = frame.running.as_deref() {
+            if let Some(running) = frame.running {
                 self.window_end = Some(self.mark(running));
                 self.observation = observation(running);
+                self.allocator.insert("end", allocator(running));
             }
             let status = if self.failures.is_empty() {
                 "completed"
@@ -828,6 +866,7 @@ impl Driver for BenchDriver {
                     return Control::Continue;
                 }
                 self.residency_seconds = Some(self.process_started.elapsed().as_secs_f64());
+                self.allocator.insert("resident", allocator(running));
                 self.stage = Stage::Running {
                     base: Self::next_tick(running),
                 };
