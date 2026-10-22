@@ -484,6 +484,10 @@ pub struct BodyLayout {
     pub fill: u32,
     pub entries: u32,
     pub bounds: u32,
+    /// Each body's candidate count this substep, then its pair list of
+    /// [`PAIR_LIST_CAPACITY`] candidates.
+    pub pair_counts: u32,
+    pub pair_lists: u32,
     pub bin_words: u32,
     /// Word offset of the [`BodyDiagnosticsRecord`] in the diagnostics buffer.
     pub diagnostics: u32,
@@ -492,6 +496,9 @@ pub struct BodyLayout {
 /// Words of the bins buffer's live-bounds record: the largest radius and the farthest travel
 /// of the substep, as float bits.
 pub const BIN_BOUNDS_WORDS: u32 = 4;
+
+/// Candidates a body's pair list holds; a body with more walks the bins in every pass.
+pub const PAIR_LIST_CAPACITY: u32 = 64;
 
 impl BodyLayout {
     /// The regions for `capacity` bodies, `samples` samples per tick and `commands` command
@@ -513,7 +520,9 @@ impl BodyLayout {
         let fill = starts.checked_add(hash_slots)?;
         let entries = fill.checked_add(hash_slots)?;
         let bounds = entries.checked_add(capacity)?;
-        let bin_words = bounds.checked_add(BIN_BOUNDS_WORDS)?;
+        let pair_counts = bounds.checked_add(BIN_BOUNDS_WORDS)?;
+        let pair_lists = pair_counts.checked_add(capacity)?;
+        let bin_words = pair_lists.checked_add(capacity.checked_mul(PAIR_LIST_CAPACITY)?)?;
         let diagnostics = (DiagnosticsRecord::WORDS as u32)
             .checked_add(commands.checked_mul(TotalsRecord::WORDS as u32)?)?;
         Some(Self {
@@ -531,6 +540,8 @@ impl BodyLayout {
             fill,
             entries,
             bounds,
+            pair_counts,
+            pair_lists,
             bin_words,
             diagnostics,
         })
@@ -1407,11 +1418,12 @@ mod tests {
             plan.terrain_bytes,
             plan.cells * 29 + plan.cells / 8 + u64::from(plan.slots) * 44 + 64
         );
-        // Body state: 92 words per body and 26 per sample; bins 3 H + B + 4 words.
+        // Body state: 92 words per body and 26 per sample; bins 3 H + B + 4 words, then a
+        // candidate count and a pair list of 64 per body.
         let bodies = plan.bodies;
         assert_eq!(bodies.hash_slots, 8192);
         assert_eq!(bodies.body_words, 92 * 4096 + 26 * 64);
-        assert_eq!(bodies.bin_words, 3 * 8192 + 4096 + 4);
+        assert_eq!(bodies.bin_words, 3 * 8192 + 4096 + 4 + 4096 * (1 + 64));
         assert_eq!(
             plan.buffer(BufferRole::Bodies).size,
             4 * (92 * 4096 + 26 * 64)

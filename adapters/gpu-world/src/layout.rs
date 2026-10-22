@@ -610,8 +610,8 @@ gpu_record! {
         /// The highest surface any column can have, in world units: rays above it cannot hit
         /// a column that is not resident.
         max_surface: f32,
-        reserved0: u32,
-        reserved1: u32,
+        pair_counts_base: u32,
+        pair_lists_base: u32,
         reserved2: u32,
         reserved3: u32,
         reserved4: u32,
@@ -671,11 +671,14 @@ gpu_record! {
         live: atomic_u32,
         suspended: atomic_u32,
         /// Candidate slots the pair passes examined, before the generation test: the
-        /// broadphase's work.
+        /// broadphase's work in the count pass and for bodies whose candidates overflow their
+        /// pair list, the listed candidates otherwise.
         pair_visits_lo: atomic_u32,
         pair_visits_hi: atomic_u32,
+        /// Body substeps whose candidates did not fit the body's pair list: their passes
+        /// walked the bins instead.
+        pair_list_overflows: atomic_u32,
         reserved0: u32,
-        reserved1: u32,
     }
 }
 
@@ -1136,6 +1139,7 @@ fn write_body_codes(text: &mut String) {
         ("BODY_CONFIG_WORDS", BodyConfig::WORDS as u32),
         ("BODY_SAMPLE_WORDS", BodySampleRecord::WORDS as u32),
         ("BODY_WORK_WORDS", BODY_WORK_WORDS),
+        ("PAIR_LIST_CAPACITY", crate::plan::PAIR_LIST_CAPACITY),
     ];
     for (name, value) in constants {
         let _ = writeln!(text, "const {name}: u32 = {value:#x}u;");

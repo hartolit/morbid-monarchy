@@ -15,8 +15,13 @@
 // generation test rejects. The all-pairs broadphase applies the same generation test to every
 // body, so both solve exactly the same pairs.
 // pairs_count  the contacts each active body has (overlapping or within the slop, or swept):
-//              the solver's scaling. This and the passes below run one workgroup per body,
-//              whose lanes share its candidates (see "One workgroup per body").
+//              the solver's scaling. It also records the body's candidates in its pair list
+//              (PAIR_LIST_CAPACITY of them; the generation test depends only on where the
+//              substep's integration left the bodies, so the candidates are the same in every
+//              pass), and the passes below read the list instead of the bins; a body with more
+//              candidates than the list holds walks the bins in every pass, as without a list.
+//              This and the passes below run one workgroup per body, whose lanes share its
+//              candidates (see "One workgroup per body").
 // pairs_position, pairs_velocity   the session's position and velocity iterations
 //              (`GpuWorldConfig::pair_iterations`), Jacobi passes each. A pass reads every
 //              body from one half of the ping-pong buffers and writes the other, so no body
@@ -253,6 +258,17 @@ struct Gathered {
     fastest: f32,
 }
 
+// A frame whose candidates are its body's pair list (`PairFrame::groups`).
+const LISTED: u32 = 0xffffffffu;
+
+fn pair_count_word(b: u32) -> u32 {
+    return body_params.pair_counts_base + b;
+}
+
+fn pair_list_word(b: u32, k: u32) -> u32 {
+    return body_params.pair_lists_base + b * PAIR_LIST_CAPACITY + k;
+}
+
 // Whether `i` and `j` are a candidate pair this substep (see the top of this module).
 fn generated(i: u32, j: u32) -> bool {
     let bi = work_vec3(i, WORK_BINNED);
@@ -283,7 +299,8 @@ fn separation_target(i: u32, j: u32, normal: vec3<f32>) -> f32 {
 // deterministic.
 
 // The body a pair workgroup serves. `integrated`: active this substep. `gather`: it has
-// candidates to visit in this pass. `groups` candidate groups hold `total` candidates.
+// candidates to visit in this pass. `groups` candidate groups hold `total` candidates, or
+// `groups` is LISTED and the body's pair list holds them.
 struct PairFrame {
     integrated: u32,
     gather: u32,
@@ -303,10 +320,11 @@ var<workgroup> pair_tally: array<atomic<u32>, 5>;
 var<workgroup> pair_extreme: array<atomic<u32>, 2>;
 
 // The workgroup describes body `i`'s pass: whether it takes part and where its candidates
-// are, the hash slots of the 27 bins around it (a slot two bins share is counted once) or every
-// slot, and every lane gets the description. Lane 0 decides and the 27 bins are found by one
-// lane each. `counting` visits every active body's candidates (the count pass); the others
-// visit only a body that has contacts.
+// are, its pair list, the hash slots of the 27 bins around it (a slot two bins share is counted
+// once) or every slot, and every lane gets the description. Lane 0 decides and the 27 bins are
+// found by one lane each. `counting` visits every active body's candidates (the count pass,
+// which fills the pair list); the others visit only a body that has contacts, from its list
+// when its candidates fit.
 var<workgroup> pair_slot: array<u32, 27>;
 var<workgroup> pair_count: array<u32, 27>;
 
@@ -317,7 +335,16 @@ fn pair_prepare(i: u32, li: u32, counting: bool) -> PairFrame {
             frame.integrated = 1u;
             if (counting || bodies[work_word(i, WORK_PAIRS)] > 0u) {
                 frame.gather = 1u;
-                if (body_params.broadphase == BROADPHASE_ALL_PAIRS) {
+                // The count pass walks the bins; the passes after it read the list it filled,
+                // unless the body's candidates overflowed it.
+                var candidates = PAIR_LIST_CAPACITY + 1u;
+                if (!counting) {
+                    candidates = atomicLoad(&bins[pair_count_word(i)]);
+                }
+                if (candidates <= PAIR_LIST_CAPACITY) {
+                    frame.groups = LISTED;
+                    frame.total = candidates;
+                } else if (body_params.broadphase == BROADPHASE_ALL_PAIRS) {
                     pair_first[0] = 0u;
                     pair_end[0] = body_params.body_count;
                     frame.groups = 1u;
@@ -367,9 +394,12 @@ fn pair_prepare(i: u32, li: u32, counting: bool) -> PairFrame {
     return workgroupUniformLoad(&pair_frame);
 }
 
-// Candidate `k` of the workgroup's body: a body slot, or BODY_NONE for an all-pairs slot that
-// holds no binned body.
-fn pair_candidate(frame: PairFrame, k: u32) -> u32 {
+// Candidate `k` of the workgroup's body `i`: a body slot, or BODY_NONE for an all-pairs slot
+// that holds no binned body.
+fn pair_candidate(frame: PairFrame, i: u32, k: u32) -> u32 {
+    if (frame.groups == LISTED) {
+        return atomicLoad(&bins[pair_list_word(i, k)]);
+    }
     if (body_params.broadphase == BROADPHASE_ALL_PAIRS) {
         return select(BODY_NONE, k, binned(k));
     }
@@ -383,15 +413,20 @@ fn pair_candidate(frame: PairFrame, k: u32) -> u32 {
 }
 
 // Every lane adds its share of body `i`'s pairs to the workgroup's sums. mode 0: count
-// contacts; 1: position correction; 2: velocity impulses; 3: residuals. Positions and
-// velocities are read from half `half`.
+// contacts and fill the pair list; 1: position correction; 2: velocity impulses; 3: residuals.
+// Positions and velocities are read from half `half`. A listed candidate passed the generation
+// test when it was listed.
 fn gather_lanes(i: u32, half: u32, mode: u32, frame: PairFrame, li: u32) {
+    let listed = frame.groups == LISTED;
     for (var k = li; k < frame.total; k += 64u) {
-        let j = pair_candidate(frame, k);
-        if (j == i || j == BODY_NONE || !generated(i, j)) {
+        let j = pair_candidate(frame, i, k);
+        if (!listed && (j == i || j == BODY_NONE || !generated(i, j))) {
             continue;
         }
-        atomicAdd(&pair_tally[0], 1u);
+        let candidate = atomicAdd(&pair_tally[0], 1u);
+        if (mode == 0u && candidate < PAIR_LIST_CAPACITY) {
+            atomicStore(&bins[pair_list_word(i, candidate)], j);
+        }
         let pair = pair_contact(i, j, half, mode != 1u);
         if (pair.kind == 0u) {
             continue;
@@ -471,6 +506,10 @@ fn pairs_count(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         let found = gathered();
         add64_body(BDIAG_PAIR_VISITS_LO, frame.total);
         bodies[work_word(i, WORK_PAIRS)] = found.contacts;
+        atomicStore(&bins[pair_count_word(i)], found.candidates);
+        if (found.candidates > PAIR_LIST_CAPACITY) {
+            count_body(BDIAG_PAIR_LIST_OVERFLOWS, 1u);
+        }
         add64_body(BDIAG_CANDIDATE_PAIRS_LO, found.candidates);
         count_body(BDIAG_CONTACT_PAIRS, found.contacts);
         count_body(BDIAG_SWEPT_CONTACTS, found.swept);

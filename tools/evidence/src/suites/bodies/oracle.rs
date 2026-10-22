@@ -9,6 +9,12 @@
 //! and the solver margin, beyond which no contact kind is possible — must have been visited, no
 //! body may be visited twice, and the bins must find exactly the pairs and contacts the
 //! all-pairs traversal finds.
+//!
+//! Then the production `pairs_count` fills the pair lists, and a second probe enumerates each
+//! body's candidates as a solver pass does: from its list when they fit
+//! ([`PAIR_LIST_CAPACITY`]), from the bins otherwise. Every body in contact must find exactly its
+//! generated candidates, from the list exactly when they fit, and the configurations must
+//! exercise both.
 
 use std::{
     collections::BTreeSet,
@@ -21,7 +27,7 @@ use std::{
 
 use gpu_world::{
     layout::{BodyConfig, BodyParams, BodyState, GpuRecord, TickParams, body_work, codes},
-    plan::BodyLayout,
+    plan::{BodyLayout, PAIR_LIST_CAPACITY},
     shader::{Assembly, SourceModule, body_modules},
     world::GpuWorld,
 };
@@ -56,7 +62,7 @@ fn probe_candidates(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocat
     }
     let stride = n + 2u;
     for (var k = li; k < frame.total; k += 64u) {
-        let j = pair_candidate(frame, k);
+        let j = pair_candidate(frame, i, k);
         if (j == i || j == BODY_NONE || !generated(i, j)) {
             continue;
         }
@@ -75,6 +81,35 @@ fn probe_candidates(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocat
         atomicStore(&claims[i * stride + 1u], atomicLoad(&pair_tally[1]));
     }
 }
+
+// After pairs_count, per body in contact, after the first n * (n + 2) words: the candidates a
+// solver pass enumerates, 1 when they came from the pair list, then the candidates.
+@compute @workgroup_size(64, 1, 1)
+fn probe_listed(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let i = wg.x;
+    let n = body_params.body_count;
+    let frame = pair_prepare(i, li, false);
+    if (frame.gather == 0u) {
+        return;
+    }
+    let listed = frame.groups == LISTED;
+    let base = (n + i) * (n + 2u);
+    for (var k = li; k < frame.total; k += 64u) {
+        let j = pair_candidate(frame, i, k);
+        if (!listed && (j == i || j == BODY_NONE || !generated(i, j))) {
+            continue;
+        }
+        let visited = atomicAdd(&pair_tally[0], 1u);
+        if (visited < n) {
+            atomicStore(&claims[base + 2u + visited], j);
+        }
+    }
+    workgroupBarrier();
+    if (li == 0u) {
+        atomicStore(&claims[base], atomicLoad(&pair_tally[0]));
+        atomicStore(&claims[base + 1u], select(0u, 1u, listed));
+    }
+}
 "#;
 
 /// One crafted body: centre, radius and this substep's displacement.
@@ -85,9 +120,11 @@ pub struct Crafted {
     pub travel: Vec3,
 }
 
-/// What the probe found for each body: the visited bodies with their contact kinds.
+/// What the probe found for each body: the visited bodies with their contact kinds, and for a
+/// body in contact the candidates a solver pass enumerates and whether its pair list held them.
 pub struct Found {
     pub visited: Vec<Vec<(u32, u32)>>,
+    pub passes: Vec<Option<(bool, Vec<u32>)>>,
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -197,6 +234,8 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
         entries_base: layout.entries,
         bounds_base: layout.bounds,
         diagnostics_base: layout.diagnostics,
+        pair_counts_base: layout.pair_counts,
+        pair_lists_base: layout.pair_lists,
         ..BodyParams::default()
     };
     let record = |write: &dyn Fn(&mut [u32]), words: usize| {
@@ -224,7 +263,7 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
         words_buffer(world, &vec![0; layout.diagnostics as usize + 64], storage)?,
         words_buffer(world, &[0; 8], storage)?,
     ];
-    let pairs_words = (n * (n + 2)) as usize;
+    let pairs_words = (2 * n * (n + 2)) as usize;
     let output = words_buffer(world, &vec![0; pairs_words], storage | Usage::COPY_SRC)?;
     let mut buffers = buffers;
     buffers[7] = output.clone();
@@ -285,6 +324,8 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
         (pipeline("bins_scan"), 1),
         (pipeline("bins_scatter"), n.div_ceil(64)),
         (pipeline("probe_candidates"), n),
+        (pipeline("pairs_count"), n),
+        (pipeline("probe_listed"), n),
     ];
     let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
         .iter()
@@ -350,7 +391,19 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
                 .collect()
         })
         .collect();
-    Ok(Found { visited })
+    let passes = (0..n as usize)
+        .map(|i| {
+            let base = (n as usize + i) * stride;
+            let count = words[base] as usize;
+            (count > 0).then(|| {
+                let candidates = (0..count.min(n as usize))
+                    .map(|k| words[base + 2 + k])
+                    .collect();
+                (words[base + 1] == 1, candidates)
+            })
+        })
+        .collect();
+    Ok(Found { visited, passes })
 }
 
 /// A fixed pseudo-random sequence in `[0, 1)`.
@@ -448,6 +501,7 @@ fn configurations() -> Vec<(&'static str, Vec<Crafted>)> {
 
 pub fn broadphase_oracle(adapter: &str, check: &mut Check) -> Result<(), String> {
     let mut driver = Driver::open(config(adapter, 1))?;
+    let (mut listed_bodies, mut overflowed_bodies) = (0u64, 0u64);
     for (label, bodies) in configurations() {
         let bins = probe(&mut driver.world, &bodies, false)?;
         let all = probe(&mut driver.world, &bodies, true)?;
@@ -457,6 +511,7 @@ pub fn broadphase_oracle(adapter: &str, check: &mut Check) -> Result<(), String>
         let mut required = 0u64;
         let mut visited_total = 0u64;
         let mut example = None;
+        let (mut pass_mismatches, mut listed, mut overflowed) = (0, 0u64, 0u64);
         for (i, body) in bodies.iter().enumerate() {
             let visited: BTreeSet<u32> = bins.visited[i].iter().map(|(j, _)| *j).collect();
             duplicates += bins.visited[i].len() - visited.len();
@@ -487,6 +542,30 @@ pub fn broadphase_oracle(adapter: &str, check: &mut Check) -> Result<(), String>
             if contacts(&bins) != contacts(&all) {
                 disagreements += 1;
             }
+            // A solver pass enumerates exactly the generated candidates of a body in contact,
+            // from its pair list exactly when they fit; a body without contacts is skipped.
+            let in_contact = bins.visited[i].iter().any(|(_, kind)| *kind != 0);
+            for found in [&bins, &all] {
+                match &found.passes[i] {
+                    Some((from_list, candidates)) => {
+                        let enumerated: BTreeSet<u32> = candidates.iter().copied().collect();
+                        if !in_contact
+                            || enumerated != visited
+                            || enumerated.len() != candidates.len()
+                            || *from_list != (visited.len() <= PAIR_LIST_CAPACITY as usize)
+                        {
+                            pass_mismatches += 1;
+                        }
+                    }
+                    None if in_contact => pass_mismatches += 1,
+                    None => {}
+                }
+            }
+            match &bins.passes[i] {
+                Some((true, _)) => listed += 1,
+                Some((false, _)) => overflowed += 1,
+                None => {}
+            }
         }
         check.equal(&format!("{label}: required pairs not visited"), missed, 0);
         check.equal(&format!("{label}: bodies visited twice"), duplicates, 0);
@@ -495,10 +574,19 @@ pub fn broadphase_oracle(adapter: &str, check: &mut Check) -> Result<(), String>
             disagreements,
             0,
         );
+        check.equal(
+            &format!("{label}: bodies whose solver passes enumerate other candidates"),
+            pass_mismatches,
+            0,
+        );
         if let Some(example) = example {
             check.note(format!("{label}: {example}"));
         }
         let slug = label.replace([' ', '-'], "_");
+        check.metric(&format!("{slug}_listed_bodies"), listed);
+        check.metric(&format!("{slug}_overflowed_bodies"), overflowed);
+        listed_bodies += listed;
+        overflowed_bodies += overflowed;
         check.metric(&format!("{slug}_required_pairs"), required);
         check.metric(&format!("{slug}_candidates_visited"), visited_total);
         check.metric(
@@ -506,5 +594,11 @@ pub fn broadphase_oracle(adapter: &str, check: &mut Check) -> Result<(), String>
             (bodies.len() * (bodies.len() - 1)) as u64,
         );
     }
+    check.that(listed_bodies > 0 && overflowed_bodies > 0, || {
+        format!(
+            "the configurations listed {listed_bodies} bodies' candidates and overflowed \
+             {overflowed_bodies}; both paths must be exercised"
+        )
+    });
     Ok(())
 }

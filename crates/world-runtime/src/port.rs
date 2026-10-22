@@ -752,9 +752,13 @@ pub struct BodyReport {
     /// Candidate pairs the broadphase handed to the narrowphase (each pair counted by both
     /// bodies, summed over substeps and solver passes), and pairs found in contact.
     pub candidate_pairs: u64,
-    /// Candidate slots the pair passes examined to find them (every body slot per body with
-    /// the all-pairs broadphase).
+    /// Candidate slots the pair passes examined to find them: the bins' (every body slot per
+    /// body with the all-pairs broadphase) in the count pass and for a body whose candidates
+    /// overflow its pair list, its listed candidates in the solver's passes otherwise.
     pub pair_visits: u64,
+    /// Body substeps whose candidates overflowed the body's pair list, so that its solver
+    /// passes walked the broadphase again.
+    pub pair_list_overflows: u32,
     pub contact_pairs: u32,
     /// Contacts found only along the swept segments: pairs that would otherwise tunnel.
     pub swept_contacts: u32,
@@ -805,6 +809,9 @@ impl BodyReport {
         self.suspended = tick.suspended;
         self.candidate_pairs += tick.candidate_pairs;
         self.pair_visits += tick.pair_visits;
+        self.pair_list_overflows = self
+            .pair_list_overflows
+            .saturating_add(tick.pair_list_overflows);
         self.contact_pairs = self.contact_pairs.saturating_add(tick.contact_pairs);
         self.swept_contacts = self.swept_contacts.saturating_add(tick.swept_contacts);
         self.terrain_contacts = self.terrain_contacts.saturating_add(tick.terrain_contacts);

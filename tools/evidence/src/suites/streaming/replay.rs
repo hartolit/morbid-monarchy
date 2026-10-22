@@ -436,6 +436,9 @@ fn body_difference(end: &BodyReport, start: &BodyReport) -> BodyReport {
         suspended: end.suspended,
         candidate_pairs: end.candidate_pairs - start.candidate_pairs,
         pair_visits: end.pair_visits - start.pair_visits,
+        pair_list_overflows: end
+            .pair_list_overflows
+            .wrapping_sub(start.pair_list_overflows),
         contact_pairs: end.contact_pairs.wrapping_sub(start.contact_pairs),
         swept_contacts: end.swept_contacts.wrapping_sub(start.swept_contacts),
         terrain_contacts: end.terrain_contacts.wrapping_sub(start.terrain_contacts),

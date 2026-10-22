@@ -446,6 +446,7 @@ pub fn decode_body_diagnostics(bytes: &[u8], substeps: u32) -> BodyReport {
         suspended: r.suspended,
         candidate_pairs: wide(r.candidate_pairs_lo, r.candidate_pairs_hi),
         pair_visits: wide(r.pair_visits_lo, r.pair_visits_hi),
+        pair_list_overflows: r.pair_list_overflows,
         contact_pairs: r.contact_pairs,
         swept_contacts: r.swept_contacts,
         terrain_contacts: r.terrain_contacts,

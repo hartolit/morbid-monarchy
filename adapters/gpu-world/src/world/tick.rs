@@ -256,6 +256,8 @@ impl GpuWorld {
             bounds_base: bodies_layout.bounds,
             diagnostics_base: bodies_layout.diagnostics,
             max_surface,
+            pair_counts_base: bodies_layout.pair_counts,
+            pair_lists_base: bodies_layout.pair_lists,
             ..BodyParams::default()
         };
         let commands_bytes = count as u64 * CommandRecord::BYTES;

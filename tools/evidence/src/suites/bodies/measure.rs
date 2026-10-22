@@ -731,7 +731,8 @@ pub fn pacing(adapter: &str, check: &mut Check) -> Result<(), String> {
 /// The capacity profile's idle and body-contact scenarios (radius 32 of seed-69 terrain, every
 /// rule; 4,096 metal spheres pulled between two points) replayed tick by tick through the GPU
 /// world with timestamps: device time of each phase of a tick (commands, activity scheduling,
-/// material passes, bodies) and the tiles with an active cell, after the scenario's warm-up.
+/// material passes, bodies), the tiles with an active cell and the pair solver's work (slots
+/// visited, candidates, contacts and pair-list overflows), after the scenario's warm-up.
 /// Spawns go in at 200 a tick. Each tick is submitted alone and waited for.
 pub fn capacity_tick_phases(adapter: &str, check: &mut Check) -> Result<(), String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -790,6 +791,8 @@ pub fn capacity_tick_phases(adapter: &str, check: &mut Check) -> Result<(), Stri
         }
         let mut phases: [Vec<f64>; 5] = Default::default();
         let mut active = Vec::new();
+        let mut solver: [Vec<f64>; 3] = Default::default();
+        let mut overflows = 0u64;
         for t in 0..ticks {
             let mut commands: Vec<Command> = spawns.drain(..spawns.len().min(200)).collect();
             for action in &s.actions {
@@ -808,6 +811,15 @@ pub fn capacity_tick_phases(adapter: &str, check: &mut Check) -> Result<(), Stri
                     series.push(value.as_secs_f64() * 1000.0);
                 }
                 active.push(f64::from(sample.report.cells.active_tiles));
+                let b = &sample.bodies;
+                for (series, value) in solver.iter_mut().zip([
+                    b.pair_visits as f64,
+                    b.candidate_pairs as f64,
+                    f64::from(b.contact_pairs),
+                ]) {
+                    series.push(value);
+                }
+                overflows += u64::from(b.pair_list_overflows);
             }
         }
         for (name, mut series) in ["total", "commands", "activity", "material", "bodies"]
@@ -827,6 +839,13 @@ pub fn capacity_tick_phases(adapter: &str, check: &mut Check) -> Result<(), Stri
             &format!("{case}_active_tiles_p50"),
             percentile(&mut active, 0.5),
         );
+        for (name, mut series) in ["pair_visits", "candidate_pairs", "contact_pairs"]
+            .into_iter()
+            .zip(solver)
+        {
+            check.metric(&format!("{case}_{name}_p50"), percentile(&mut series, 0.5));
+        }
+        check.metric(&format!("{case}_pair_list_overflows"), overflows);
         check.metric(&format!("{case}_bodies"), live.len());
         let expected: u32 = s.bodies.iter().map(|group| group.count).sum();
         check.equal(
