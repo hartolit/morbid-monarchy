@@ -732,7 +732,9 @@ fn allocator(running: &mut Running) -> Value {
         .blocks
         .iter()
         .map(|block| {
-            let mut held: Vec<_> = report.allocations[block.allocations.clone()].iter().collect();
+            let mut held: Vec<_> = report.allocations[block.allocations.clone()]
+                .iter()
+                .collect();
             held.sort_by_key(|allocation| std::cmp::Reverse(allocation.size));
             json!({
                 "size": block.size,
