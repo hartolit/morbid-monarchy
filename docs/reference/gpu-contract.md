@@ -258,7 +258,11 @@ its radius reaches), when its chunk or an adjacent one has a wake request, or wh
 everything. Edits mark their changed cells in the tick they run, so the stroke is simulated in the
 same tick. An activated chunk counts as edited throughout, which wakes its boundary dependants; a
 retired chunk counts as edited for its neighbours. A change of ambient temperature or simulation
-rules, and a resize, wake every resident cell once.
+rules, and a resize to another size, wake every resident cell once. A move (a window of the same
+size elsewhere) wakes nothing: the kept chunks keep their tile records, carried to their new
+window positions, and only the chunks it drops and the chunks that arrive wake their reach, as
+any retirement and activation does (after 07; `cells` `window-move-keeps-activity` follows a
+reference that moves cells and wake levels with the window).
 
 `scan` touches one word per window tile and `wake` only candidate tiles; neither touches cells. In
 **dense** execution (a maintained test strategy, `GpuWorldConfig::execution`), every resident tile
@@ -345,11 +349,11 @@ own accounting, not accidental modulo wrapping.
 
 *Implemented (03).* There is no toroidal addressing on the device: kernels address window-local
 cells through the window map, a cell outside the window or in a chunk without a slot is absent to
-every rule, and absolute positions (for the hashes only) are the window's lowest key times 64
-plus the local position, with wrapping arithmetic. Activation and retirement wake the reach of
-the chunk's cells (see [cell phases](#cell-phases-03)); a resize wakes everything once. The
-counts and dispatch arguments never leave the device to schedule work: the per-tick diagnostics
-that report them arrive in the ordinary asynchronous readback.
+every rule, and absolute positions (for the hashes only) are the window's lowest key times 64 plus
+the local position, with wrapping arithmetic. Activation and retirement wake the reach of the
+chunk's cells (see [cell phases](#cell-phases-03)); a resize to another size wakes everything once,
+a move nothing. The counts and dispatch arguments never leave the device to schedule work: the
+per-tick diagnostics that report them arrive in the ordinary asynchronous readback.
 
 ### Bodies
 
@@ -586,8 +590,8 @@ same device (the layout probes) read through `GpuWorld::view` and encode on the 
 
 *Presentation (06).* `GpuWorld::open_presenting` opens the session on an instance of the adapter's
 backend only and creates the window's surface on it, refusing an adapter that cannot present to it;
-a lost surface is created again with `create_surface`, and only the primary backends are offered
-for presenting (`presentable_adapters`). The renderer and the overlay encode a frame through
+a lost surface is created again with `create_surface`, and only the primary backends are offered for
+presenting (`presentable_adapters`). The renderer and the overlay encode a frame through
 `submit_presentation`, on the same timeline after the frame's ticks, with their own bound of two
 uncompleted presentation submissions apart from the world's `max_in_flight`; `presentation_ready`
 refuses a frame while both are in flight, and the client then draws nothing that iteration rather
@@ -597,9 +601,10 @@ and a conformance hold on completions holds here too) and reports whether a pres
 tick would be admitted; with neither, and no tick due, the client waits in its event wait rather
 than run a frame that changes nothing (`render` `presentation-admission`). The renderer reads the
 cells, the window map and body state through the view and replaces its bind groups only when the
-view's buffer generation changes (a resize); it derives visibility, the follow camera and the
-landscape's cached lighting (relit for the chunks whose cells, or whose neighbours toward the sun,
-changed) on the device and never reads physical state back.
+view's buffer generation changes (a resize to another size; a move keeps the buffers, and the
+lighting cache, kept per window position, is relit); it derives visibility, the follow camera and
+the landscape's cached lighting (relit for the chunks whose cells, or whose neighbours toward the
+sun, changed) on the device and never reads physical state back.
 
 The radius-32 decision: the plan requests a larger storage binding. On a device that cannot
 grant it (as with WebGPU's default 128 MiB), a window whose cell array exceeds the granted binding
@@ -632,7 +637,12 @@ retiring advances the generation at once, and the slot is reused only after the 
 it completes. A resize plans the new window, refuses if the old and new window buffers together
 exceed the device budget, if a resident chunk would leave the window, or while slot changes or
 reservations are pending, then copies retained chunks device-to-device and keeps the old buffers
-until that submission completes (`ResizeReport::peak_overlap_bytes`).
+until that submission completes (`ResizeReport::peak_overlap_bytes`). A move, which the residency
+owner makes whenever the observer crosses a chunk boundary, keeps the size and so needs none of
+that (after 07): the window's buffers, the slots and their references stay, the window map is
+rewritten from a small upload, and the tile records, which follow window positions while cells
+follow slots, are carried to their new positions through the window's scratch buffer, which
+holds nothing between ticks. It copies no cell and allocates nothing but the map's upload.
 
 Device loss is reported by wgpu's loss callback; wgpu 29.0.4 panics from `Device::poll` when a
 backend reports a lost device, so the poll is isolated and turned into the lost state. A lost

@@ -19,7 +19,8 @@ The client composes it: `Renderer::new` on the session's `WorldView`, `resize` w
 size, and `encode` inside `GpuWorld::submit_presentation` each frame with a `FrameRequest`
 (camera rig, lighting, cursor, debug views). Pipelines are built once per device; bind groups
 over the world's buffers are rebuilt only when the window's buffers are replaced
-(`WorldView::buffers_generation`), never because cells changed.
+(`WorldView::buffers_generation`, a resize to another size), never because cells changed or the
+window moved; a move relights every drawn chunk, since the cache is kept per window position.
 
 The shaders under `shaders/` are assembled after `gpu-world`'s generated declarations and cell
 accessors (`world_render::shaders`), so the packed layouts have one owner; `cargo evidence check

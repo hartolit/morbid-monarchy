@@ -792,8 +792,10 @@ The first save of a run writes what changed since the world was generated (207 c
 16), later ones what changed since the save before. Storage receives about three times the rows'
 own bytes: each save is several synced redb commits (the rows, the body set, the publication, the
 reclamation of what it superseded), which also make the idle workload's 0.28 MB/s with almost no
-chunk changing. A store write waited up to 154 ms at radius 16 (fsync on this file system), and
-retained payloads peaked at 10.6 MB against the 32 MB budget. One frame of the every-300 run at
+chunk changing. A store write waited up to 154 ms at radius 16 (fsync on this file system); once,
+in a `check all` on 2026-10-22, one waited 5.8 s at radius 6, a save took 352 ticks to publish and
+the case failed with 10 saves, then passed twice alone on the same code and in the next lane.
+Retained payloads peaked at 10.6 MB against the 32 MB budget. One frame of the every-300 run at
 radius 16 took 7.52 ms (2.62 ms in the same run at `2e1a938`); it is not attributed.
 
 **In the native window** (diagnostic, not the frozen protocol, which keeps autosave off). The
@@ -929,7 +931,8 @@ Now that frames are shorter, the 10.09 ms acquisition waits show again
 dense bodies and 7–12% with them, where at `2c63b64` the 18–27 ms frames hid them (none in four
 cases, 3–30 a run in the dense ones); they set the 11.4–11.6 ms p99s of idle, flow and mixed.
 
-The single long frames of dense runs remain in coupled, shorter: the longest of each run takes
+The single long frames of dense runs remain in coupled, shorter ([window moves](#window-moves),
+below, removes their cause headlessly): the longest of each run takes
 32–40 ms (07 and `2c63b64`: 35–83 ms), and all 14 frames over 25 ms in the five runs fall while the
 window moves a row (near ticks 230, 485–492 and 622, where the resident chunks drop from 4,225 to
 4,160 and refill 16 a frame). The presenting iteration's own time in them is 1.0–1.6 ms, or
@@ -941,6 +944,41 @@ cache's 136 MiB; the rest is not attributed. Coupled's and streaming's peaks sta
 (coupled's fourth run 1,836 MiB); why the cache did not raise them is not established. The scripted
 runs pass on the same tree (`target/evidence/capacity-scripts/`, 22:14–22:15 UTC): `features` 41
 checks, `loss` 6 and `worlds` 5. The qualification and scale profiles have not run since `2c63b64`.
+
+### Window moves
+
+Every long frame above came while the window moved a row, and every window move was a resize:
+a second window's buffers allocated, every kept chunk's cells copied into them, the slots
+renumbered, and every resident cell woken for the next tick, with the renderer's bind groups and
+its 142.8 MB lighting cache recreated. Since `67edbc2` a move keeps the window's size and
+happens in place ([GPU contract](gpu-contract.md#cell-phases-03)): the buffers, slots and
+references stay, the tile records move with their chunks, and nothing wakes beyond the arriving
+and leaving rows. `render` `window-move-cost` makes the residency owner's move at radius 32 on
+generated terrain at rest (seed 69, every rule on, 240 ticks settled; the southern row retired in
+a tick, the window moved a row north, the new row loaded 16 chunks a tick) with tick and pass
+timestamps and wgpu's allocator report; before is the same case on `76376d8`'s code
+(`target/drafts/capacity/move-1.json`, a draft tree), after is `check all` on `67edbc2`.
+
+| | Before (resize) | After (move in place) |
+| --- | ---: | ---: |
+| The move's call, main-thread CPU | 11.22 ms | 0.40 ms |
+| Cell bytes copied | 136,314,880 | 0 |
+| Device bytes requested at the peak | 1,013,750,304 | 509,555,640 |
+| Allocator reserved: before / after the move / settled | 1.07 / 1.88 / 1.61 GB | 1.07 / 1.07 / 1.07 GB |
+| First frame after the move: wall (scene) | 15.72 ms (7.09) | 7.79 ms (7.02) |
+| The two ticks after the move | 6.91, 7.11 ms, 266,240 tiles active each | 0.14, 0.14 ms, 1,452 and 934 tiles |
+| Ticks 2–7 after it, active tiles | 13,555 to 1,785 | 908 to 857 |
+| Scene passes over ticks 2–7 | 6.06–6.95 ms | 5.41–5.61 ms |
+| Loading ticks (16 chunks each) | 0.20–0.21 ms | 0.14–0.21 ms |
+
+At rest the case's tick takes 0.13 ms and its scene 5.90 ms (the [frame-cost](#capacity-after-07)
+camera with every rule on; 5.47 ms in the draft run, so the scene varies by about 0.4 ms between
+runs). The woken window had kept 1,800 tiles moving for many ticks after a move: cells asleep while
+not at rest, which the move had nudged. Without the wake they stay asleep, as when the observer
+stands still. The ticks after a move still hold 860–1,450 active tiles; that the retired row's wake
+set them going is an inference, and the case does not record the count at rest. The renderer
+relights every drawn chunk once after a move (7.02 ms of scene). How much of coupled's 32–40 ms
+frames this removes in the window is not measured.
 
 ## Structural gates
 

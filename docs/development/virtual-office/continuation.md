@@ -67,8 +67,11 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    revision 2; the idle tick 3.25 → 0.09 ms) and the landscape's lighting is cached per chunk
    vertex (`63f8ce6`, `d4d2d6c`; the scene passes 14.84 → 4.57 ms), both measured headlessly
    ([capacity](../../reference/performance-budgets.md#capacity-after-07)). In the window the
-   capacity medians fell from 18–27 ms to 5–12 ms and dense runs keep 60 ticks/s. What remains:
-   one 32–40 ms frame in each coupled run as the window moves a row (cause unmeasured); the body
+   capacity medians fell from 18–27 ms to 5–12 ms and dense runs keep 60 ticks/s. The 32–40 ms
+   frame of each coupled run came with a window move, then a full resize that woke every cell;
+   `67edbc2` moves in place and wakes nothing beyond the moved rows (the user's choice,
+   [window moves](../../reference/performance-budgets.md#window-moves)), not yet measured in the
+   window. What remains: the body
    pass at 4,096 dense bodies, about 5.1 ms a tick (see the
    [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
    body solver); a GPU memory peak 226 MiB higher, 90 MiB of it unattributed; the qualification
