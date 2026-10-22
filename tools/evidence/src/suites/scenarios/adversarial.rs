@@ -29,7 +29,7 @@
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use world_model::{
-    body::{BodyHandle, BodyPreset},
+    body::{BodyHandle, BodyPreset, footprint_reach},
     command::{
         AmbientTemperature, BodySpawn, Command, Direction, Drive, EditTool, MaterialEdit, Target,
     },
@@ -37,7 +37,7 @@ use world_model::{
     material::FluidMat,
     observation::{BodyCounters, WorldTotals},
     rules::SimulationRules,
-    spatial::ChunkKey,
+    spatial::{CHUNK_SIZE, ChunkKey},
 };
 use world_runtime::{
     bodies::BodyEvent,
@@ -581,51 +581,189 @@ fn pose_of(poses: &[Pose], body: BodyHandle) -> Option<&Pose> {
 /// The most a body may move over 30 frames and count as still, in world units: settled spheres
 /// creep a few ten-thousandths of a unit a tick.
 const STILL: f64 = 0.02;
-/// The most a still body may move across a window move or a suspension, in world units: the
-/// pile's restless spheres still nudge their neighbours by about a tenth of a unit, and a wrong
-/// origin or resume displaces a body by whole cells (a unit or more).
+/// The most a still body may move in the tick that moves its window or resumes it, in world
+/// units: a wrong origin or resume displaces bodies by a unit or more in that tick (contact
+/// pushes a body out of the terrain it was placed into), while one tick of the pile's own motion
+/// moves a still body by hundredths of a unit.
 const JUMP: f64 = 0.5;
+/// The most the median still body may move over the frames after a change, in world units: a
+/// pile placed above its support moves little in the first tick and falls for the frames after
+/// (about 0.4 units in ten ticks), while restless neighbours nudge a few still bodies, by up to
+/// a few units, but not most of them.
+const DRIFT: f64 = 0.1;
 
-/// Runs frames until at least three quarters of the bodies moved no more than [`STILL`] over
-/// 30 frames; returns the poses at both ends of that span. Some spheres in a crushed pile never
-/// settle (they rock against their neighbours); they are reported, not waited for.
-fn pile_at_rest(story: &mut Story, check: &mut Check) -> Result<(Vec<Pose>, Vec<Pose>), String> {
-    let mut earlier = poses(story);
+/// The pile at rest: the poses at the end of the 30 frames that found it so, and how far each
+/// body strayed from where it was during them.
+struct Rest {
+    poses: Vec<Pose>,
+    strays: BTreeMap<BodyHandle, f64>,
+}
+
+impl Rest {
+    /// The bodies that strayed no more than [`STILL`] at any frame. Being back within it after 30
+    /// frames is not enough: some spheres in a crushed pile rock in a cycle of a few ticks (three
+    /// in the cases traced), back where they were every 30 ticks and up to a third of a unit away
+    /// one tick later.
+    fn still(&self) -> Vec<BodyHandle> {
+        self.strays
+            .iter()
+            .filter(|(_, stray)| **stray <= STILL)
+            .map(|(body, _)| *body)
+            .collect()
+    }
+}
+
+/// Runs frames until at least three quarters of the bodies moved no more than [`STILL`] over 30
+/// frames. Some spheres in a crushed pile never settle (they rock against their neighbours);
+/// they are reported, not waited for.
+fn pile_at_rest(story: &mut Story, check: &mut Check) -> Result<Rest, String> {
     let mut still_counts = Vec::new();
     for round in 1..=60 {
+        let start = poses(story);
+        let mut strays: BTreeMap<BodyHandle, f64> =
+            start.iter().map(|pose| (pose.body, 0.0)).collect();
+        let mut stray = |now: &[Pose]| {
+            for first in &start {
+                let moved = pose_of(now, first.body).map_or(f64::INFINITY, |pose| {
+                    (pose.position - first.position).length()
+                });
+                strays
+                    .entry(first.body)
+                    .and_modify(|stray| *stray = stray.max(moved));
+            }
+        };
         for _ in 0..30 {
             story.frame();
+            stray(&poses(story));
         }
         story.settle()?;
         let now = poses(story);
-        let still = still(&earlier, &now).len();
+        stray(&now);
+        let still = start
+            .iter()
+            .filter(|first| {
+                pose_of(&now, first.body)
+                    .is_some_and(|pose| (pose.position - first.position).length() <= STILL)
+            })
+            .count();
         if still * 4 >= now.len() * 3 {
             check.metric("frames_to_rest", round * 30);
-            return Ok((earlier, now));
+            return Ok(Rest { poses: now, strays });
         }
         still_counts.push(still);
-        earlier = now;
     }
     Err(format!(
         "the pile never came to rest; still bodies after each 30 frames: {still_counts:?}"
     ))
 }
 
-/// The bodies that moved no more than [`STILL`] from `earlier` to `later`.
-fn still(earlier: &[Pose], later: &[Pose]) -> Vec<BodyHandle> {
-    earlier
-        .iter()
-        .filter(|pose| {
-            pose_of(later, pose.body)
-                .is_some_and(|next| (next.position - pose.position).length() <= STILL)
-        })
-        .map(|pose| pose.body)
-        .collect()
+/// Whether `window` holds every cell a resting sphere at `position` reads, with a cell to spare:
+/// the residency edge has no reason to suspend it.
+fn well_inside(window: ResidentWindow, position: DVec3) -> bool {
+    let reach = f64::from(footprint_reach(BodyPreset::Metal.sphere().radius, 0.0)) + 1.0;
+    let low = window.min_key().origin_cell().as_dvec2();
+    let high =
+        low + DVec2::new(f64::from(window.width()), f64::from(window.height())) * CHUNK_SIZE as f64;
+    let cell = DVec2::new(position.x, -position.z);
+    (cell - reach).cmpge(low).all() && (cell + reach).cmplt(high).all()
 }
 
-/// The farthest any of `bodies` moved from `earlier` to `later`.
-fn largest_move_of(bodies: &[BodyHandle], earlier: &[Pose], later: &[Pose]) -> f64 {
-    bodies
+/// Moves the window to `window` a tick a frame, as `Live::move_to` does, and runs on until every
+/// body has a sample after the change, or 60 frames after the move settled. Returns the frames
+/// and, for each body that has one, its last sample before the change and its first after it:
+/// the pile keeps ticking while the window moves, and only the tick between the two samples can
+/// carry the change. `changed` says whether a sample is after it, given the first tick encoded
+/// against the new window.
+fn move_across(
+    story: &mut Story,
+    window: ResidentWindow,
+    changed: impl Fn(&Pose, u64) -> bool,
+) -> Result<(u32, Vec<(Pose, Pose)>), String> {
+    let mut before: BTreeMap<BodyHandle, Pose> = poses(story)
+        .into_iter()
+        .map(|pose| (pose.body, pose))
+        .collect();
+    let mut after = BTreeMap::new();
+    story.live.session.set_window(window);
+    let started = std::time::Instant::now();
+    let mut first_tick = None;
+    let mut frames = 0;
+    let mut settled_frames = 0;
+    loop {
+        story.live.frame_ticks(1);
+        frames += 1;
+        // The window moves after the frame's ticks were submitted: the next is the first
+        // encoded against it.
+        if first_tick.is_none() && story.session().residency().window() == window {
+            first_tick = Some(story.next());
+        }
+        for pose in poses(story) {
+            if first_tick.is_some_and(|first| changed(&pose, first)) {
+                after.entry(pose.body).or_insert(pose);
+            } else if !after.contains_key(&pose.body) {
+                before.insert(pose.body, pose);
+            }
+        }
+        if first_tick.is_some() && story.session().residency().settled() {
+            settled_frames += 1;
+            if after.len() == before.len() || settled_frames > 60 {
+                break;
+            }
+        }
+        if started.elapsed() > super::super::driver::DEVICE_PATIENCE * 3 {
+            return Err(format!(
+                "move: not done after {frames} frames: {:?}",
+                story.session().residency().summary()
+            ));
+        }
+        std::thread::sleep(Duration::from_micros(100));
+    }
+    Ok((
+        frames,
+        before
+            .into_values()
+            .filter_map(|last| after.get(&last.body).map(|first| (last, *first)))
+            .collect(),
+    ))
+}
+
+/// Checks that a change of the window (`change`, `name` in the metrics) left the resting pile
+/// to its own motion: no still body moved more than [`JUMP`] in the tick of the change
+/// (`across`, from [`move_across`]), and the median still body no more than [`DRIFT`] from
+/// `earlier` to `later`, over the frames after it.
+fn pile_unmoved(
+    check: &mut Check,
+    change: &str,
+    name: &str,
+    still: &[BodyHandle],
+    across: &[(Pose, Pose)],
+    earlier: &[Pose],
+    later: &[Pose],
+) {
+    let mut in_the_tick = Vec::new();
+    for body in still {
+        match across.iter().find(|(last, _)| last.body == *body) {
+            Some((last, first)) => in_the_tick.push((
+                (first.position - last.position).length(),
+                *body,
+                first.tick - last.tick,
+            )),
+            None => check.fail(format!("{body:?} has no sample after {change}")),
+        }
+    }
+    let ticks = in_the_tick.iter().map(|(.., ticks)| *ticks).max();
+    check.metric(&format!("ticks_across_{name}"), ticks.unwrap_or(0));
+    let jump = in_the_tick.iter().max_by(|a, b| a.0.total_cmp(&b.0));
+    check.metric(
+        &format!("largest_move_of_still_bodies_in_the_tick_of_{name}"),
+        jump.map_or(0.0, |(moved, ..)| *moved),
+    );
+    if let Some((moved, body, _)) = jump {
+        check.that(*moved <= JUMP, || {
+            format!("{body:?} moved {moved} units in the tick {change}")
+        });
+    }
+    let mut after: Vec<f64> = still
         .iter()
         .map(
             |body| match (pose_of(earlier, *body), pose_of(later, *body)) {
@@ -633,27 +771,40 @@ fn largest_move_of(bodies: &[BodyHandle], earlier: &[Pose], later: &[Pose]) -> f
                 _ => f64::INFINITY,
             },
         )
-        .fold(0.0, f64::max)
+        .collect();
+    after.sort_by(f64::total_cmp);
+    let median = after.get(after.len() / 2).copied().unwrap_or(f64::INFINITY);
+    check.metric(&format!("median_move_of_still_bodies_after_{name}"), median);
+    check.metric(
+        &format!("largest_move_of_still_bodies_after_{name}"),
+        after.last().copied().unwrap_or(f64::INFINITY),
+    );
+    check.that(median <= DRIFT, || {
+        format!("half the still bodies moved more than {DRIFT} units after {change}: {median}")
+    });
 }
 
 /// Part 2: the window's origin moves across negative coordinates under the resting pile, then
 /// the seam leaves (its write held, deliveries reversed) and comes back before the write lands.
 fn negative_rebase(story: &mut Story, probes: Probes, check: &mut Check) -> Result<Probes, String> {
-    let (earlier, resting) = pile_at_rest(story, check)?;
-    let still_bodies = still(&earlier, &resting);
+    let rest = pile_at_rest(story, check)?;
+    let still_bodies = rest.still();
     check.metric("still_bodies", still_bodies.len());
-    for pose in &resting {
-        if still_bodies.contains(&pose.body) {
+    check.that(still_bodies.len() * 4 >= rest.poses.len(), || {
+        format!(
+            "{} of {} bodies stayed still at rest, too few to judge the window's moves by",
+            still_bodies.len(),
+            rest.poses.len()
+        )
+    });
+    for (body, stray) in &rest.strays {
+        if still_bodies.contains(body) {
             continue;
         }
-        if let Some(sample) = story.sample(pose.body) {
+        if let Some(sample) = story.sample(*body) {
             check.note(format!(
-                "{:?} still moving at rest: {:.2} units over 30 frames, speed {:.2}, grounded {}, \
-                 submerged {:.2}, touching {}",
-                pose.body,
-                pose_of(&earlier, pose.body)
-                    .map_or(f64::INFINITY, |first| (pose.position - first.position)
-                        .length()),
+                "{body:?} still moving at rest: strayed {stray:.2} units over 30 frames, speed \
+                 {:.2}, grounded {}, submerged {:.2}, touching {}",
                 sample.speed(),
                 sample.grounded,
                 sample.submerged_fraction,
@@ -671,7 +822,7 @@ fn negative_rebase(story: &mut Story, probes: Probes, check: &mut Check) -> Resu
         .count();
     check.metric("probes_the_pile_changed", reshaped);
     let clear = |cell: &IVec2| {
-        resting.iter().all(|pose| {
+        rest.poses.iter().all(|pose| {
             (DVec2::new(pose.position.x, -pose.position.z) - cell.as_dvec2()).length() >= 10.0
         })
     };
@@ -724,26 +875,37 @@ fn negative_rebase(story: &mut Story, probes: Probes, check: &mut Check) -> Resu
     let before = poses(story);
     let shifted =
         ResidentWindow::new(ChunkKey::new(-1, -1, 0), 2, 2).map_err(|e| format!("{e:?}"))?;
-    frames += story.live.move_to(shifted)?;
+    let (moved, across) = move_across(story, shifted, |pose, first| pose.tick >= first)?;
+    frames += moved;
     story.live.frames(10);
     story.settle()?;
     let shifted_poses = poses(story);
-    check.that(shifted_poses.iter().all(|pose| !pose.suspended), || {
-        "a body was suspended by a move that kept its terrain".to_owned()
-    });
-    let jump = largest_move_of(&still_bodies, &before, &shifted_poses);
-    check.metric("largest_move_of_still_bodies_across_the_rebase", jump);
+    // A sphere that left the pile may rest where the move takes its terrain away, and is
+    // rightly suspended there; every body the shifted window holds keeps its pace.
     check.metric(
-        "largest_move_across_the_rebase",
-        largest_move_of(
-            &before.iter().map(|pose| pose.body).collect::<Vec<_>>(),
-            &before,
-            &shifted_poses,
-        ),
+        "bodies_the_rebase_left_at_the_edge",
+        shifted_poses
+            .iter()
+            .filter(|pose| !well_inside(shifted, pose.position))
+            .count(),
     );
-    check.that(jump <= JUMP, || {
-        format!("a still body moved {jump} units when the origin moved")
+    let suspended: Vec<_> = shifted_poses
+        .iter()
+        .filter(|pose| pose.suspended && well_inside(shifted, pose.position))
+        .map(|pose| (pose.body, pose.position))
+        .collect();
+    check.that(suspended.is_empty(), || {
+        format!("a move that kept their terrain suspended {suspended:?}")
     });
+    pile_unmoved(
+        check,
+        "the origin moved",
+        "the_rebase",
+        &still_bodies,
+        &across,
+        &before,
+        &shifted_poses,
+    );
 
     // Negative keys only: the seam leaves and is captured; every body is suspended and frozen.
     let away = ResidentWindow::new(ChunkKey::new(-4, -4, 0), 2, 2).map_err(|e| format!("{e:?}"))?;
@@ -788,7 +950,8 @@ fn negative_rebase(story: &mut Story, probes: Probes, check: &mut Check) -> Resu
     );
 
     // Home while the write is still held: the captured state returns, the pile resumes.
-    frames += story.live.move_to(home())?;
+    let (moved, across) = move_across(story, home(), |pose, _| !pose.suspended)?;
+    frames += moved;
     check.that(
         story.faults.holding() == Some(Barrier::BeforeChunkCommit),
         || "the write finished before the window came back".to_owned(),
@@ -806,11 +969,15 @@ fn negative_rebase(story: &mut Story, probes: Probes, check: &mut Check) -> Resu
     check.that(resumed.iter().all(|pose| !pose.suspended), || {
         "a body stayed suspended at home".to_owned()
     });
-    let moved = largest_move_of(&still_bodies, &still_poses, &resumed);
-    check.metric("largest_move_of_still_bodies_after_return", moved);
-    check.that(moved <= JUMP, || {
-        format!("a still body resumed {moved} units from where it was frozen")
-    });
+    pile_unmoved(
+        check,
+        "the pile resumed",
+        "the_return",
+        &still_bodies,
+        &across,
+        &still_poses,
+        &resumed,
+    );
     story.faults.release();
     story.live.faults.reverse_deliveries(false);
     story.until("the held writes", |session| !session.residency().busy())?;
