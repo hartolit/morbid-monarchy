@@ -419,7 +419,7 @@ struct DrawState<'a> {
     module: &'a wgpu::ShaderModule,
     vertex: &'static str,
     fragment: Option<&'static str>,
-    buffers: &'a [wgpu::VertexBufferLayout<'a>],
+    buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
     target: Option<wgpu::ColorTargetState>,
     depth: Option<wgpu::DepthStencilState>,
     cull: Option<wgpu::Face>,
@@ -534,7 +534,7 @@ fn pipelines(
         "fluid_fragment",
         Some(wgpu::BlendState::ALPHA_BLENDING),
     );
-    let sphere_buffers = [wgpu::VertexBufferLayout {
+    let sphere_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: 12,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[wgpu::VertexAttribute {
@@ -542,7 +542,7 @@ fn pipelines(
             offset: 0,
             shader_location: 0,
         }],
-    }];
+    })];
     let spheres = render_pipeline(
         device,
         "spheres",

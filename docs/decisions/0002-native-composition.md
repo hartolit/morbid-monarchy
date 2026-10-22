@@ -100,6 +100,16 @@ consumer, not an app.
   chunk manager, superseded by the residency owner), with no fallback flag; `9a3230c` is the last
   commit that builds them. The CPU reference of the cell rules stays in `monarchy-evidence`.
 
+## Dependency upgrade (2026-10-22)
+
+- **wgpu 30.0.1, naga 30.0.1 and egui, egui-wgpu and egui-winit 0.37.0** replace wgpu and naga
+  29.0.4 and egui 0.35.0 together, at the user's choice, because wgpu-hal 29 waited on a fence
+  after every swapchain acquisition, which the NVIDIA driver turned into 10 ms sleeps without
+  vsync ([swapchain acquisition](../reference/performance-budgets.md#swapchain-acquisition-after-07)).
+  `egui-wgpu` 0.37.0 requires wgpu `^30.0` and winit `^0.30.13`, and `egui-winit` 0.37.0 requires
+  winit `^0.30.13`, so winit stays at 0.30.13 and one wgpu device still serves simulation,
+  rendering and UI. The package map is unchanged.
+
 If a proposed package has no actual boundary/consumer, use a module before creating it. A dependency
 cycle, duplicate wgpu device family or interface forcing world copies is evidence that the chosen
 boundary needs correction.

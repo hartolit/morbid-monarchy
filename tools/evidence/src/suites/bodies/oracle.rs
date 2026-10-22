@@ -168,7 +168,8 @@ fn words_buffer(
         for (chunk, word) in chunks.iter_mut().zip(words) {
             *chunk = word.to_le_bytes();
         }
-        buffer.get_mapped_range_mut(..).copy_from_slice(&bytes);
+        gpu_world::context::write_mapped_at_creation("broadphase probe", &buffer, &bytes)
+            .map_err(|error| format!("probe buffer: {error:?}"))?;
     }
     buffer.unmap();
     Ok(buffer)
@@ -371,7 +372,9 @@ pub fn probe(world: &mut GpuWorld, bodies: &[Crafted], all_pairs: bool) -> Resul
         return Err("broadphase readback never mapped".to_owned());
     }
     let words: Vec<u32> = {
-        let view = readback.get_mapped_range(..);
+        let view = readback
+            .get_mapped_range(..)
+            .map_err(|error| format!("broadphase readback: {error}"))?;
         let (chunks, _) = view.as_chunks::<4>();
         chunks
             .iter()

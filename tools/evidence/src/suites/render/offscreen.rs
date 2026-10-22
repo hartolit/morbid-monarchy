@@ -311,7 +311,10 @@ pub fn map_read<T>(
         return Err("the readback did not map".to_owned());
     }
     let value = {
-        let bytes = buffer.slice(..).get_mapped_range();
+        let bytes = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|error| format!("the readback could not be read: {error}"))?;
         read(&bytes)
     };
     buffer.unmap();

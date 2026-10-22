@@ -177,6 +177,11 @@ pub const CASES: &[Case] = &[
         run: lifecycle::device_loss_and_recreation,
     },
     Case {
+        name: "refused-mapped-range",
+        summary: "a mapped range wgpu refuses moves no bytes and faults the session",
+        run: lifecycle::refused_mapped_range,
+    },
+    Case {
         name: "stop-and-drain",
         summary: "an orderly stop delivers outstanding work; a stalled one times out visibly",
         run: lifecycle::stop_and_drain,

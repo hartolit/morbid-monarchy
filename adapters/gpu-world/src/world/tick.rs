@@ -26,7 +26,7 @@
 //! Every refusal happens before the tick reserves anything it keeps, and before any command
 //! takes or frees a body slot. Dispatches run in order:
 //! wgpu places a barrier between dispatches that use the same read-write storage buffer
-//! (wgpu-hal 29.0.4 orders no `STORAGE_READ_WRITE` use), so a later command reads an earlier
+//! (wgpu-hal 30.0.1 orders no `STORAGE_READ_WRITE` use), so a later command reads an earlier
 //! one's result and each material pass reads the finished output of the one before. The three
 //! compute passes each record a begin and an end timestamp when timestamps are enabled. The
 //! readback is mapped right after submission and decoded by a later poll.

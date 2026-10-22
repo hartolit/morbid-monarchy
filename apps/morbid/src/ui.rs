@@ -626,7 +626,7 @@ pub fn world_overlay(
             (Some(cell), None) => format!("({}, {}) tick {}", cell.x, cell.y, target.tick.value()),
             (None, None) => "no surface".to_owned(),
         };
-        egui::Area::new(egui::Id::new("cursor_target"))
+        egui::Area::new(egui::Id::unique("cursor_target"))
             .fixed_pos(pointer + egui::vec2(16.0, 16.0))
             .interactable(false)
             .show(&ctx, |ui| {

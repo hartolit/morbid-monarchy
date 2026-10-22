@@ -40,7 +40,7 @@ pub fn show(ctx: &egui::Context, yaw: f32, pitch_radians: f32, sun_azimuth_degre
     // Yaw turns the forward vector (0, 0, -1) about +Y, so the compass bearing is -yaw.
     let heading = (-yaw).to_degrees().rem_euclid(360.0);
     let pitch = pitch_radians.to_degrees();
-    egui::Area::new(egui::Id::new("navigation_compass"))
+    egui::Area::new(egui::Id::unique("navigation_compass"))
         .anchor(egui::Align2::RIGHT_TOP, ANCHOR_OFFSET)
         .interactable(false)
         .show(ctx, |ui| {

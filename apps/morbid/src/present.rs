@@ -133,6 +133,9 @@ impl Surface {
             desired_maximum_frame_latency: 2,
             alpha_mode: self.alpha,
             view_formats: vec![],
+            // The renderer tone-maps to standard dynamic range in sRGB, which every 8-bit
+            // format the surface offers (the only ones `new` chooses) supports.
+            color_space: wgpu::SurfaceColorSpace::Srgb,
         };
         self.surface.configure(device, &config);
         self.config = Some(config);
@@ -239,15 +242,18 @@ impl Overlay {
         build: impl FnMut(&mut egui::Ui),
     ) {
         let input = self.state.take_egui_input(window);
-        let output = self.ctx.run_ui(input, build);
+        let mut output = self.ctx.run_ui(input, build);
         self.state
             .handle_platform_output(window, output.platform_output);
         self.pixels_per_point = output.pixels_per_point;
         self.paint = self.ctx.tessellate(output.shapes, output.pixels_per_point);
-        for (id, delta) in &output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, delta);
+        // egui checks that every delta was taken: drain both, never drop them unapplied.
+        for (id, deltas) in output.textures_delta.set.drain() {
+            for delta in &deltas {
+                self.renderer.update_texture(device, queue, id, delta);
+            }
         }
-        self.free = output.textures_delta.free;
+        self.free.extend(output.textures_delta.free.drain());
     }
 
     /// Draws the prepared overlay over `target`.
@@ -447,7 +453,7 @@ impl MenuGfx {
         self.overlay
             .encode(&self.device, &self.queue, &mut encoder, &view, size);
         self.queue.submit([encoder.finish()]);
-        texture.present();
+        self.queue.present(texture);
         self.overlay.finish();
         Ok(())
     }

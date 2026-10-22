@@ -15,7 +15,7 @@
 use std::num::NonZeroU64;
 
 use crate::{
-    context::{AllocationError, GpuContext},
+    context::{AllocationError, GpuContext, write_mapped_at_creation},
     layout::{BodyDispatch, BodyParams, DispatchParams, GpuRecord},
     plan::{BODY_DISPATCH_ITERATIONS, BufferRole, ResourcePlan},
     shader::{self, Assembly, ShaderDiagnostic},
@@ -78,14 +78,13 @@ impl WindowBuffers {
                 return Err(error);
             }
         };
-        {
+        let written = {
             let mut entries = vec![0u32; plan.slots as usize];
             slots.write_window_map(&mut entries);
             let mut bytes = Vec::with_capacity(entries.len() * 4);
             for entry in entries {
                 bytes.extend_from_slice(&entry.to_le_bytes());
             }
-            window_map.get_mapped_range_mut(..).copy_from_slice(&bytes);
             let mut record_bytes = vec![0u8; records_plan.size as usize];
             let stride = crate::layout::ChunkSlotRecord::BYTES as usize;
             for (record, out) in slots
@@ -94,9 +93,15 @@ impl WindowBuffers {
             {
                 record.write_bytes(out);
             }
-            slot_records
-                .get_mapped_range_mut(..)
-                .copy_from_slice(&record_bytes);
+            write_mapped_at_creation("window map", &window_map, &bytes).and_then(|()| {
+                write_mapped_at_creation("slot records", &slot_records, &record_bytes)
+            })
+        };
+        if let Err(error) = written {
+            context.release_buffer(cells);
+            context.release_buffer(window_map);
+            context.release_buffer(slot_records);
+            return Err(error);
         }
         window_map.unmap();
         slot_records.unmap();
@@ -286,10 +291,6 @@ impl FixedBuffers {
             };
             params.write_bytes(&mut entry[..DispatchParams::BYTES as usize]);
         }
-        dispatch_params
-            .get_mapped_range_mut(..)
-            .copy_from_slice(&bytes);
-        dispatch_params.unmap();
         let stride = plan.body_dispatch_stride as usize;
         let mut body_bytes = vec![0u8; body_dispatch.size() as usize];
         for (index, entry) in body_bytes.chunks_exact_mut(stride).enumerate() {
@@ -302,9 +303,17 @@ impl FixedBuffers {
             };
             params.write_bytes(&mut entry[..BodyDispatch::BYTES as usize]);
         }
-        body_dispatch
-            .get_mapped_range_mut(..)
-            .copy_from_slice(&body_bytes);
+        let written = write_mapped_at_creation("dispatch parameters", &dispatch_params, &bytes)
+            .and_then(|()| {
+                write_mapped_at_creation("body dispatch parameters", &body_dispatch, &body_bytes)
+            });
+        if let Err(error) = written {
+            for buffer in created {
+                context.release_buffer(buffer);
+            }
+            return Err(error);
+        }
+        dispatch_params.unmap();
         body_dispatch.unmap();
         Ok((
             Self {

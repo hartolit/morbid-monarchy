@@ -286,7 +286,7 @@ impl Viewer {
         {
             let view = gpu.view();
             gfx.overlay.run(&window, view.device, view.queue, |ui| {
-                egui::Area::new(egui::Id::new("scenario caption"))
+                egui::Area::new(egui::Id::unique("scenario caption"))
                     .fixed_pos(egui::pos2(12.0, 12.0))
                     .show(ui.ctx(), |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -316,7 +316,7 @@ impl Viewer {
         });
         if submitted.is_ok() {
             window.pre_present_notify();
-            texture.present();
+            gpu.view().queue.present(texture);
             self.presented += 1;
             self.last_present = Some(Instant::now());
         }
@@ -340,7 +340,7 @@ impl Viewer {
         {
             let view = gpu.view();
             gfx.overlay.run(&window, view.device, view.queue, |ui| {
-                egui::Area::new(egui::Id::new("scenario caption"))
+                egui::Area::new(egui::Id::unique("scenario caption"))
                     .fixed_pos(egui::pos2(12.0, 12.0))
                     .show(ui.ctx(), |ui| {
                         egui::Frame::popup(ui.style()).show(ui, |ui| {

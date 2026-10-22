@@ -914,7 +914,7 @@ impl Client {
         }
         if submitted.is_ok() {
             window.pre_present_notify();
-            texture.present();
+            gpu.view().queue.present(texture);
             running.surface.presented_frames += 1;
         }
         running.overlay.finish();
@@ -972,7 +972,7 @@ impl Client {
                         })
                         .is_ok()
                     {
-                        texture.present();
+                        gpu.view().queue.present(texture);
                     }
                 }
                 overlay.finish();
@@ -1248,7 +1248,10 @@ pub(crate) fn capture_frame(
     );
     let mut rgba = Vec::with_capacity((size[0] * size[1] * 4) as usize);
     {
-        let bytes = buffer.slice(..).get_mapped_range();
+        let bytes = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|error| format!("the capture could not be read back: {error}"))?;
         for y in 0..size[1] as usize {
             let line = &bytes[y * row as usize..][..size[0] as usize * 4];
             for pixel in line.as_chunks::<4>().0 {

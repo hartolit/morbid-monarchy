@@ -1812,6 +1812,16 @@ destination = "gpu-world on the selected adapter (02); rerun with each later GPU
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.transfers.refused-mapped-range"
+package = "monarchy-evidence"
+target = "gpu:transfers"
+test = "refused-mapped-range"
+origin = "transition"
+expectation = "A staging write or read at a misaligned offset moves no bytes, returns its failure and records one uncaptured mapped-range error in the device's health (no loss); an aligned write and read of the same buffers still succeed."
+destination = "gpu-world staging pools (wgpu 30, after 07); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.transfers.stop-and-drain"
 package = "monarchy-evidence"
 target = "gpu:transfers"

@@ -163,7 +163,8 @@ pub fn run(
             for (out, word) in chunks.iter_mut().zip(words.iter()) {
                 *out = word.to_le_bytes();
             }
-            buffer.get_mapped_range_mut(..).copy_from_slice(&bytes);
+            gpu_world::context::write_mapped_at_creation("probe", &buffer, &bytes)
+                .map_err(|error| format!("probe buffer: {error:?}"))?;
         }
         buffer.unmap();
         if sentinel {
@@ -237,7 +238,9 @@ pub fn run(
         let Binding::Output(count) = binding else {
             continue;
         };
-        let view = readback.get_mapped_range(..);
+        let view = readback
+            .get_mapped_range(..)
+            .map_err(|error| format!("probe readback: {error}"))?;
         let (chunks, _) = view.as_chunks::<4>();
         let words: Vec<u32> = chunks
             .iter()

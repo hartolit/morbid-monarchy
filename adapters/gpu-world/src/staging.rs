@@ -18,7 +18,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::context::{AllocationError, GpuContext};
+use crate::context::{AllocationError, GpuContext, Health};
 
 /// A reservation of one staging buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -85,6 +85,8 @@ pub struct StagingPool {
     size: u64,
     buffers: Vec<Buffer>,
     mailbox: Arc<Mutex<Vec<Option<Delivery>>>>,
+    /// Where a mapped range wgpu refuses is recorded, ending the session.
+    health: Arc<Health>,
     high_water: u32,
     stale: u64,
 }
@@ -123,6 +125,7 @@ impl StagingPool {
             size,
             buffers,
             mailbox: Arc::new(Mutex::new(vec![None; count as usize])),
+            health: context.shared_health(),
             high_water: 0,
             stale: 0,
         })
@@ -190,7 +193,9 @@ impl StagingPool {
         self.current(reservation).map(|buffer| &buffer.buffer)
     }
 
-    /// Writes `bytes` at `offset` into a reserved, mapped upload buffer.
+    /// Writes `bytes` at `offset` into a reserved, mapped upload buffer. A range wgpu refuses
+    /// writes nothing and is recorded in the device's health, which ends the session before
+    /// anything it submits is observed.
     pub fn write(&self, reservation: StagingRef, offset: u64, bytes: &[u8]) -> bool {
         let Some(buffer) = self.current(reservation) else {
             return false;
@@ -202,9 +207,16 @@ impl StagingPool {
             return bytes.is_empty();
         }
         let end = offset + bytes.len() as u64;
-        let mut view = buffer.buffer.get_mapped_range_mut(offset..end);
-        view.copy_from_slice(bytes);
-        true
+        match buffer.buffer.get_mapped_range_mut(offset..end) {
+            Ok(mut view) => {
+                view.copy_from_slice(bytes);
+                true
+            }
+            Err(error) => {
+                self.health.record_mapped_range(self.label, &error);
+                false
+            }
+        }
     }
 
     /// Unmaps a written upload buffer before a submission copies from it.
@@ -326,7 +338,8 @@ impl StagingPool {
             .is_some_and(|buffer| buffer.state == State::Ready)
     }
 
-    /// Reads a ready readback buffer's bytes in `range`.
+    /// Reads a ready readback buffer's bytes in `range`. A range wgpu refuses reads nothing
+    /// and is recorded in the device's health, like a refused write.
     pub fn read<T>(
         &self,
         reservation: StagingRef,
@@ -337,8 +350,13 @@ impl StagingPool {
         if buffer.state != State::Ready || range.is_empty() {
             return None;
         }
-        let view = buffer.buffer.get_mapped_range(range);
-        Some(read(&view))
+        match buffer.buffer.get_mapped_range(range) {
+            Ok(view) => Some(read(&view)),
+            Err(error) => {
+                self.health.record_mapped_range(self.label, &error);
+                None
+            }
+        }
     }
 
     /// Ends a reservation: unmaps a readback buffer, or returns an unsubmitted upload buffer

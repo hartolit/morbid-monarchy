@@ -250,7 +250,8 @@ pub struct SessionReport {
 pub struct WorldView<'a> {
     pub session: SessionId,
     pub device: &'a wgpu::Device,
-    /// For small per-frame writes; they land before the next submission on the timeline.
+    /// For small per-frame writes, which land before the next submission on the timeline, and
+    /// for presenting a surface texture after the frame that drew it was submitted.
     pub queue: &'a wgpu::Queue,
     pub cells: &'a wgpu::Buffer,
     pub window_map: &'a wgpu::Buffer,
@@ -640,14 +641,22 @@ impl GpuWorld {
                     available: 0,
                 })
             })?;
-        {
+        let written = {
             let mut entries = vec![0u32; self.plan.slots as usize];
             slots.write_window_map(&mut entries);
             let bytes: Vec<u8> = entries
                 .iter()
                 .flat_map(|entry| entry.to_le_bytes())
                 .collect();
-            upload.get_mapped_range_mut(..).copy_from_slice(&bytes);
+            crate::context::write_mapped_at_creation("window map move", &upload, &bytes)
+        };
+        if written.is_err() {
+            self.context.release_buffer(upload);
+            return Err(Refusal::Unsupported(CapacityLimit {
+                resource: LimitedResource::Allocation,
+                requested: map_bytes,
+                available: 0,
+            }));
         }
         upload.unmap();
         let peak_overlap_bytes = self.context.allocations().requested_bytes;

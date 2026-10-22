@@ -197,7 +197,7 @@ copies: results, events, diagnostics and totals (and resolved pass timestamps) -
         requested captures -> capture staging
 ```
 
-wgpu orders dispatches that use the same read-write storage buffer with a barrier (wgpu-hal 29.0.4
+wgpu orders dispatches that use the same read-write storage buffer with a barrier (wgpu-hal 30.0.1
 treats no `STORAGE_READ_WRITE` use as ordered), so each command reads the results of the commands
 before it, and each material pass reads the finished output of the one before; the copies after
 the pass read the finished results. Uploads therefore activate before the tick's commands, and a
@@ -648,11 +648,13 @@ rewritten from a small upload, and the tile records, which follow window positio
 follow slots, are carried to their new positions through the window's scratch buffer, which
 holds nothing between ticks. It copies no cell and allocates nothing but the map's upload.
 
-Device loss is reported by wgpu's loss callback; wgpu 29.0.4 panics from `Device::poll` when a
-backend reports a lost device, so the poll is isolated and turned into the lost state. A lost
-session, or one with an uncaptured device error or a result failing its identity check, abandons
-every outstanding obligation once and admits nothing; a new session has a later epoch and refuses
-every older slot, ticket and tick as `StaleSession`.
+Device loss is reported by wgpu's loss callback; wgpu 30.0.1 panics from `Device::poll` when a
+backend reports a lost device, so the poll is isolated and turned into the lost state. A mapped
+range of a staging buffer that wgpu refuses (since wgpu 30 an error returned to the caller, before
+it a panic) is recorded as an uncaptured device error. A lost session, or one with an uncaptured
+device error or a result failing its identity check, abandons every outstanding obligation once
+and admits nothing; a new session has a later epoch and refuses every older slot, ticket and tick
+as `StaleSession`.
 
 ## Observations and reliability
 
@@ -760,12 +762,12 @@ the budget without allocating, so the residency owner learns of a refusal before
 
 Execute on real GPU resources: packed-word roundtrip; empty and partial workgroups; repeat/reset;
 stale command/body/slot rejection; ordered edit plus query; delayed map completion; zero/full
-observation queues; repeated resize; controlled device-loss injection; and resource-limit refusal,
-with family-specific physics and cross-family tests. Shader validation or CPU emulation alone
-cannot satisfy this boundary.
+observation queues; repeated resize; controlled device-loss injection; a refused mapped range; and
+resource-limit refusal, with family-specific physics and cross-family tests. Shader validation or
+CPU emulation alone cannot satisfy this boundary.
 
 `cargo evidence test gpu --suite transfers --adapter ID` executes these on the named adapter, one
-process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 28 cases
+process per case; [`coverage.toml`](../../tools/evidence/coverage.toml) lists the 29 cases
 (`target = "gpu:transfers"`) and what each establishes.
 `--suite cells` (03) executes the material phases: rule probes against world-model, the ten
 baseline simulation intentions, adversarial capacity, ceiling, seam, sleeping-receiver,

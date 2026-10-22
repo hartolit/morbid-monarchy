@@ -25,7 +25,6 @@ allow = [
     "BSD-2-Clause", # arrayref, zerocopy
     "BSD-3-Clause", # tiny-skia, moxcms, num_enum (window decorations and icons)
     "BSL-1.0",      # clipboard-win, error-code
-    "CC0-1.0",      # hexf-parse (naga)
     "ISC",          # libloading
     "Unicode-3.0",  # unicode-ident
     "Zlib",         # bytemuck, foldhash, miniz_oxide and others

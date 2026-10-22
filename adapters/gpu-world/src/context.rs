@@ -259,6 +259,10 @@ pub enum ErrorKind {
     OutOfMemory,
     Validation,
     Internal,
+    /// wgpu refused a mapped range of a staging buffer: one not mapped, out of bounds,
+    /// misaligned, overlapping another view or of a destroyed buffer. wgpu returns it to the
+    /// caller rather than to an error scope.
+    MappedRange,
 }
 
 /// Device health, written by wgpu callbacks and read by the owner on its own thread.
@@ -291,6 +295,15 @@ impl Health {
         }
     }
 
+    /// Records a mapped range wgpu refused as an uncaptured error: the session stops admitting
+    /// work and its next poll abandons what it owes.
+    pub fn record_mapped_range(&self, label: &'static str, error: &wgpu::MapRangeError) {
+        self.record_uncaptured(DeviceFault::Uncaptured {
+            kind: ErrorKind::MappedRange,
+            description: format!("{label}: {error}"),
+        });
+    }
+
     pub fn lost(&self) -> Option<DeviceFault> {
         self.0.lock().ok().and_then(|state| state.lost.clone())
     }
@@ -321,6 +334,23 @@ pub enum AllocationError {
         label: &'static str,
         description: String,
     },
+}
+
+/// Writes `bytes` over the whole of a buffer created mapped, before it is unmapped. A mapped
+/// range wgpu refuses leaves the buffer unusable, so it is refused like an invalid allocation.
+pub fn write_mapped_at_creation(
+    label: &'static str,
+    buffer: &wgpu::Buffer,
+    bytes: &[u8],
+) -> Result<(), AllocationError> {
+    let mut view = buffer
+        .get_mapped_range_mut(..)
+        .map_err(|error| AllocationError::Invalid {
+            label,
+            description: error.to_string(),
+        })?;
+    view.copy_from_slice(bytes);
+    Ok(())
 }
 
 /// Requested device bytes, counted where buffers are created and released.
@@ -565,6 +595,11 @@ impl GpuContext {
         &self.health
     }
 
+    /// The health shared with owners that record faults outside a call on the context.
+    pub fn shared_health(&self) -> Arc<Health> {
+        Arc::clone(&self.health)
+    }
+
     pub fn allocations(&self) -> AllocationCounters {
         self.allocations
     }
@@ -703,7 +738,7 @@ impl GpuContext {
     /// Lets the device run its callbacks without waiting. Returns `false` when wgpu reported
     /// the device unusable.
     ///
-    /// wgpu 29.0.4 panics from `Device::poll` when the backend reports a lost device
+    /// wgpu 30.0.1 panics from `Device::poll` when the backend reports a lost device
     /// (`handle_error_fatal`), which would take the whole application down with the device.
     /// The poll is the one place that can observe such a loss, so it is isolated here and
     /// turned into the session's lost state.

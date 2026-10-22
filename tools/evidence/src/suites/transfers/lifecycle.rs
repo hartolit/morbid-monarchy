@@ -1,5 +1,10 @@
 //! Checkpoint C: bounded transfers under pressure, delayed and reordered deliveries, event
-//! overflow, resize, device loss and the orderly stop.
+//! overflow, resize, device loss, refused mapped ranges and the orderly stop.
+
+use gpu_world::{
+    context::{DeviceFault, DeviceNeeds, ErrorKind, GpuContext},
+    staging::{DeliveryOrder, Direction, StagingPool},
+};
 
 use super::*;
 
@@ -706,6 +711,104 @@ pub(super) fn device_loss_and_recreation(adapter: &str, check: &mut Check) -> Re
         column(results[1]).map(|cell| cell.elevation()),
         Some(4),
     );
+    Ok(())
+}
+
+/// A mapped range wgpu refuses (since wgpu 30 an error returned to the caller, before it a
+/// panic) writes or reads nothing and is recorded as an uncaptured error, the record a session's
+/// admission and poll fault on; the buffer stays usable for a valid range.
+pub(super) fn refused_mapped_range(adapter: &str, check: &mut Check) -> Result<(), String> {
+    let (mut context, _) = GpuContext::open(
+        adapter,
+        false,
+        LimitCeiling::Adapter,
+        DeviceNeeds {
+            max_buffer_size: 1 << 20,
+            max_storage_binding: 1 << 20,
+            timestamps: false,
+        },
+        1,
+        None,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let size = 256;
+    let mut uploads = StagingPool::new(
+        &mut context,
+        "refusal uploads",
+        Direction::Upload,
+        1,
+        size,
+        wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let mut readbacks = StagingPool::new(
+        &mut context,
+        "refusal readbacks",
+        Direction::Readback,
+        1,
+        size,
+        wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+    )
+    .map_err(|error| format!("{error:?}"))?;
+    let upload = uploads.reserve().ok_or("no upload buffer")?;
+    // Inside the buffer, but not at a multiple of the map alignment (8).
+    check.that(!uploads.write(upload, 2, &[1, 2, 3, 4]), || {
+        "a misaligned write was accepted".to_owned()
+    });
+    check.equal(
+        "faults after the write",
+        context.health().uncaptured_count(),
+        1,
+    );
+    check.that(uploads.write(upload, 8, &[1, 2, 3, 4]), || {
+        "an aligned write after the refusal failed".to_owned()
+    });
+    // Nothing used the buffer, so its map resolves at the next poll.
+    let readback = readbacks.reserve().ok_or("no readback buffer")?;
+    readbacks.submitted(readback, context.next_serial());
+    let mut completions = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !readbacks.is_ready(readback) && Instant::now() < deadline {
+        context.poll(true);
+        readbacks.collect(DeliveryOrder::default(), &mut completions);
+    }
+    check.that(readbacks.is_ready(readback), || {
+        "the readback never mapped".to_owned()
+    });
+    check.equal(
+        "misaligned read",
+        readbacks.read(readback, 2..6, |bytes| bytes.len()),
+        None,
+    );
+    check.equal(
+        "aligned read",
+        readbacks.read(readback, 8..12, |bytes| bytes.len()),
+        Some(4),
+    );
+    let (faults, count) = context.health().uncaptured();
+    check.equal("recorded refusals", count, 2);
+    for fault in &faults {
+        check.that(
+            matches!(
+                fault,
+                DeviceFault::Uncaptured {
+                    kind: ErrorKind::MappedRange,
+                    ..
+                }
+            ),
+            || format!("not a mapped-range fault: {fault:?}"),
+        );
+    }
+    if let Some(DeviceFault::Uncaptured { description, .. }) = faults.first() {
+        check.metric("refusal", description.clone());
+    }
+    check.that(context.health().lost().is_none(), || {
+        "a refused range was reported as a lost device".to_owned()
+    });
+    uploads.release(upload);
+    readbacks.release(readback);
+    uploads.destroy(&mut context);
+    readbacks.destroy(&mut context);
     Ok(())
 }
 
