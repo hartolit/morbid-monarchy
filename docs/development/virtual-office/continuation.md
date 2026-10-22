@@ -50,6 +50,16 @@ anything lasting into its maintained owner.
   the bodies bit for bit as before (`check all` 162 of 162; [the dense body
   pass](../../reference/performance-budgets.md#the-dense-body-pass); drafts, the per-kernel
   timestamp patch and the run records under `target/drafts/dense/`).
+- **Then the swapchain acquisition item, at the user's choice:** `4485dad` moves the workspace to
+  wgpu 30.0.1, naga 30.0.1 and egui 0.37.0 (wgpu-hal 30 passes the acquisition no fence outside
+  Windows); a mapped range wgpu refuses is now a recorded fault (`transfers`
+  `refused-mapped-range`). `check all` 163 of 163 on `4485dad`; the 15 s radius-6 experiment, all
+  three profiles, the scripts and the native connected scenario (two of three runs; one crossed
+  step 6's rebase margin) ran in the window on it
+  ([budgets](../../reference/performance-budgets.md#the-three-profiles-on-wgpu-30)): no frame
+  waits for a swapchain image, the worst radius-6 p99 is 2.03 ms, and the client spends 0.05–0.15
+  ms more main-thread CPU per frame. Drafts, the table and A/B helpers (`tables.py`, `ab.sh`) under
+  `target/drafts/wgpu30/`, reports under `target/evidence/wgpu30-*`.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
   `vulkan-10de-2c05`, NVIDIA 615.78.08, Linux 7.2.11, KWin Wayland). The final acceptance of
   A01–A15, the feature inventory, the baseline's dispositions and the commands are in the
@@ -65,17 +75,14 @@ anything lasting into its maintained owner.
 None of these is authorized work; propose them to the user. The first comes from 07's
 findings ([status](../../product/status.md#known-gaps) lists the gaps).
 
-1. **The 10.09 ms swapchain acquisition waits** without vsync (up to 22% of presented frames in
-   07, at most 4.2% since `2c63b64`, 3–5% at radius 6 on `6e3f2d9`) set the worst p99 near 10.7 ms.
-   Cause found on 2026-10-22 by sampling the client's main thread
-   ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)): wgpu-hal
-   29.0.4 waits on a fence after each `vkAcquireNextImageKHR`, and when the image is not yet free
-   the NVIDIA driver sleeps 10 ms in `poll` with no file descriptor. A draft wgpu-hal without the
-   wait, and `__NV_DISABLE_EXPLICIT_SYNC=1`, each removed every wait (p99 1.0 and 1.4 ms against
-   10.6). Open, the user's choice: upgrade to wgpu 30 (its fence is Windows-only; egui-wgpu 0.36+
-   is on wgpu 30), patch wgpu-hal 29, set the driver variable, or leave it (vsync never waits).
-   Drafts, the sampler and the draft client under `target/drafts/acquire/`, runs under
-   `target/evidence/acquire/`.
+1. **The 10.09 ms swapchain acquisition waits — done.** They were a 10 ms sleep in the NVIDIA
+   driver under the fence wgpu-hal 29.0.4 waited on after each `vkAcquireNextImageKHR`; the user
+   chose the upgrade to wgpu 30 (`4485dad`), and since then no frame of any profile waits
+   ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)). Open from it:
+   which part of the upgrade costs 0.05–0.15 ms of main-thread CPU and 35 allocations per frame
+   (wgpu-core, the driver, or egui 0.37), and step 6's rebase check (`JUMP`, 0.5 units), which a
+   restless sphere crossed once in three native runs. The sampler, the drafts and the earlier
+   clients under `target/drafts/acquire/`, runs under `target/evidence/acquire/`.
 2. **Capacity limits, the frame and tick costs done:** dry foliage sleeps (`10cf62f`, physics
    revision 2), the landscape's lighting is cached per chunk vertex (`63f8ce6`, `d4d2d6c`) and a
    window move happens in place without waking the window (`67edbc2`, the user's choice). 07's
@@ -88,8 +95,8 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    `920d097`, `target/evidence/dense-bench-capacity/`). What remains of it is the solver's 64
    passes (about 0.93 ms; fewer would be a physics change, see the [dense-pile
    discussion](whiteboard/discussions/dense-pile-convergence.md)) and the terrain contact (about
-   1.2 ms, mostly the bodies that reach the ground); 3–5% of radius-6 frames still wait 10.09 ms
-   for a swapchain image (item 1). Benchmark runs need
+   1.2 ms, mostly the bodies that reach the ground); since `4485dad` (wgpu 30) no frame waits for a
+   swapchain image (item 1). Benchmark runs need
    the pointer on a 2,560 × 1,440 display and the screen lock off: KWin opens the window on the
    active display, and a run on `6e3f2d9` had single frames of up to 478 ms that twelve runs without
    the lock did not. No frame rate is promised at radius 32.
@@ -97,7 +104,7 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
 4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
    code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame
    times of autosave off ([budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07));
-   the scripts last ran on `6e3f2d9`'s tree, and the frozen benchmark protocol still saves never. A
+   the scripts last ran on `4485dad`'s tree, and the frozen benchmark protocol still saves never. A
    command journal for a loss below the cadence is parked on the whiteboard with what it needs
    first.
 

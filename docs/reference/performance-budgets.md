@@ -819,7 +819,7 @@ contention checks. Frame time does not move:
 | scale | every 60 | 5.01–5.02 | 7.67–8.36 | 11.08–11.22 | 12.24–13.15 | 1.10–1.19 | 1119–1124 | 3.5–3.7 | 2.54–2.68 |
 
 Every run kept 60 ticks/s with no tick discarded and no frame over 16.67 ms; the p99s are the
-10.09 ms acquisition waits ([known gaps](../product/status.md#known-gaps)). Saving adds 18–20
+10.09 ms acquisition waits ([swapchain acquisition](#swapchain-acquisition-after-07)). Saving adds 18–20
 allocations per presented frame at radius 6 and about 48 at radius 16 (the readback's payloads
 and the workers' writes), and at radius 16 about 0.06 ms of main-thread CPU, inside the spread of
 the runs without saves. The snapshot readback with autosave off is the window's evictions as the
@@ -936,7 +936,7 @@ the capacity profile does not promise. The diagnostic runs' tick device time is 
 median without dense bodies and 5.04–5.31 ms with them (the body pass 4.85–5.17 ms).
 
 Now that frames are shorter, the 10.09 ms acquisition waits show again
-([known gaps](../product/status.md#known-gaps)): over 5 ms on 2–5% of the presented frames without
+([swapchain acquisition](#swapchain-acquisition-after-07)): over 5 ms on 2–5% of the presented frames without
 dense bodies and 7–12% with them, where at `2c63b64` the 18–27 ms frames hid them (none in four
 cases, 3–30 a run in the dense ones); they set the 11.4–11.6 ms p99s of idle, flow and mixed.
 
@@ -1067,8 +1067,8 @@ with screen locking off and other applications closed, neither binary had one: t
 10.9–12.4 ms and no tick was discarded (`target/drafts/capacity/stall-ab/`). The person reports the
 screen may have locked during the run; that this caused them is an inference. The p95 of three
 qualification body-contact runs is 10.6 ms: 4.6–5.4% of their frames waited 10.09 ms for a swapchain
-image (3–5% in the other radius-6 cases, none at radius 16), the waits of the [known
-gaps](../product/status.md#known-gaps).
+image (3–5% in the other radius-6 cases, none at radius 16), the waits wgpu 30 removed
+([swapchain acquisition](#swapchain-acquisition-after-07)).
 
 The scripted runs pass on the same tree (`target/evidence/move-scripts/`, 11:57 UTC): `features` 41
 checks, `loss` 6 and `worlds` 5.
@@ -1177,8 +1177,8 @@ acquisition](#swapchain-acquisition-after-07).
 
 ## Swapchain acquisition (after 07)
 
-**Result.** The constant 10.09 ms waits for a swapchain image without vsync are a 10 ms sleep in
-the NVIDIA driver, inside the `vkWaitForFences` that wgpu-hal 29.0.4 calls after every
+**Result.** The constant 10.09 ms waits for a swapchain image without vsync were a 10 ms sleep in
+the NVIDIA driver, inside the `vkWaitForFences` that wgpu-hal 29.0.4 called after every
 `vkAcquireNextImageKHR` on the fence the acquisition signals (`NativeSwapchain::acquire`; the
 wait was added for frame pacing on Windows' DXGI swapchains, gfx-rs/wgpu issues 8310 and 8354).
 When the acquired image is not yet free, the driver sleeps in `poll` with no file descriptor and
@@ -1186,19 +1186,21 @@ a 10 ms timeout instead of waiting for the fence, so the frame loses 10 ms howev
 image frees (that it checks the fence only between such sleeps is an inference from the call
 and the constant length; the driver's source was not inspected). Turning off the driver's
 explicit synchronization on Wayland (`__NV_DISABLE_EXPLICIT_SYNC=1`) or not waiting on the
-acquisition's fence (a draft wgpu-hal) removes every wait. wgpu-hal 30.0.1 creates that fence on
-Windows only, so a client on wgpu 30 would not wait this way (read in its source, not measured).
-With vsync (FIFO), a person's default, no frame waits.
+acquisition's fence (a draft wgpu-hal) removes every wait. Since `4485dad` the client is on wgpu
+30.0.1, whose wgpu-hal waits on that fence on Windows only (30.0.0, gfx-rs/wgpu 9486) and passes
+none elsewhere (30.0.1, 9855): in the same scenario no frame waits, the frame p99 is 1.05–1.06
+ms against 10.64, and the sampler finds no 10 ms sleep. With vsync (FIFO), a person's default, no
+frame waited before either.
 
 Executed evidence: 07g's 15 s radius-6 idle scenario without vsync (mailbox, 1,920 × 1,080 on a
-2,560 × 1,440 display), two runs of each client below, 2026-10-22 14:22–14:31 UTC, with
-`7f9d267`'s client, the person away from the desktop (`target/evidence/acquire/`). A sampler
-(`target/drafts/acquire/sample.py`) ran the client as its child and read its main thread's
-current system call (`/proc/PID/task/PID/syscall`) every 0.2 ms, recording every call that
-blocked for 3 ms or more with its arguments, what they point at and the return addresses on its
-stack.
+2,560 × 1,440 display), two runs of each client below, `7f9d267`'s three at 14:22–14:31 UTC with
+the person away from the desktop and `4485dad`'s at 17:18–17:19 UTC with the user's go for an idle
+desktop, 2026-10-22 (`target/evidence/acquire/`). A sampler (`target/drafts/acquire/sample.py`) ran
+the client as its child and read its main thread's current system call
+(`/proc/PID/task/PID/syscall`) every 0.2 ms, recording every call that blocked for 3 ms or more
+with its arguments, what they point at and the return addresses on its stack.
 
-**What blocks.** In the two runs of the client as shipped, 751 and 695 calls (the frames whose
+**What blocked.** In the two runs of the client on wgpu 29, 751 and 695 calls (the frames whose
 acquisition took over 5 ms, 669 and 616 of the measured ones, and the warm-up's) were
 `poll(fds, 0, 10)`: no file descriptor and a 10 ms timeout, 9.78–10.31 ms each, and the stacks
 of all but 16 held return addresses in `libnvidia-glcore.so.615.78.08` under
@@ -1206,29 +1208,138 @@ of all but 16 held return addresses in `libnvidia-glcore.so.615.78.08` under
 wgpu-hal's `NativeSwapchain::acquire`, at the call after `vkAcquireNextImageKHR` that passes the
 device, one fence, wait-all and the timeout (`vkWaitForFences`, by disassembly). Apart from the
 start and the close of a run (shader compilation, the world's creation, the closing save), no
-other system call blocked for 3 ms or more.
+other system call blocked for 3 ms or more. On wgpu 30 no `poll` blocked; between the start and
+the close one or two calls a run blocked 5.0–5.2 ms in the kernel's DRM syncobj wait (the
+driver's explicit sync, under an `ioctl` on the render node), and nothing else for 3 ms or more.
 
 | Client, two runs | Frames presented | Frame median | p95 | p99 | Max | Acquisitions over 5 ms | 10 ms sleeps in the driver | Main-thread CPU per frame |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| As shipped (wgpu-hal 29.0.4) | 12,567, 13,495 | 0.64, 0.63 ms | 10.57, 1.03 ms | 10.64, 10.64 ms | 10.93, 10.97 ms | 669, 616 | 751, 695 | 0.48, 0.47 ms |
+| wgpu 29.0.4 (`7f9d267`) | 12,567, 13,495 | 0.64, 0.63 ms | 10.57, 1.03 ms | 10.64, 10.64 ms | 10.93, 10.97 ms | 669, 616 | 751, 695 | 0.48, 0.47 ms |
 | `__NV_DISABLE_EXPLICIT_SYNC=1` | 14,506, 14,530 | 1.00, 1.00 ms | 1.17, 1.15 ms | 1.41, 1.38 ms | 2.07, 2.85 ms | 0, 0 | 0, 0 | 0.44, 0.44 ms |
-| Draft wgpu-hal: no fence on the acquisition | 23,179, 22,474 | 0.62, 0.66 ms | 0.82, 0.83 ms | 0.98, 0.98 ms | 2.72, 2.55 ms | 0, 0 | 0, 0 | 0.53, 0.54 ms |
+| Draft wgpu-hal 29: no fence on the acquisition | 23,179, 22,474 | 0.62, 0.66 ms | 0.82, 0.83 ms | 0.98, 0.98 ms | 2.72, 2.55 ms | 0, 0 | 0, 0 | 0.53, 0.54 ms |
+| wgpu 30.0.1 (`4485dad`) | 21,694, 21,776 | 0.68, 0.68 ms | 0.88, 0.88 ms | 1.06, 1.05 ms | 3.71, 3.24 ms | 0, 0 | 0, 0 | 0.58, 0.55 ms |
 
 The draft is wgpu-hal 29.0.4 with `vkAcquireNextImageKHR` given no fence and the wait on it
 removed (`target/drafts/acquire/wgpu-hal-nowait.patch`), built with a `[patch.crates-io]` entry
 that was not committed. The frame's rendering
 still waits on the acquisition's semaphore on the device, so only the CPU's wait goes (read in
-wgpu-hal's source). Without explicit sync no frame sleeps, but the median frame is 1.00 ms
-against 0.64 ms; why is not measured. How often an acquired image is still in use, and so why
-the waits come at 3–5% of radius 6's frames, none of radius 16's and up to 1.9% of radius 32's,
-is not explained either. The 07 measurement of the same constant wait through Xwayland fits the
-same fence wait; it was not sampled.
+wgpu-hal's source); wgpu 30.0.1 does the same. On wgpu 30 the frame median is 0.68 ms against the
+draft's 0.62–0.66 and main-thread CPU 0.55–0.58 ms per frame against 0.53–0.54; the rest of the
+upgrade differs from the draft, and what costs the difference is not measured. Without explicit
+sync no frame sleeps, but the median frame is 1.00 ms against 0.64 ms; why is not measured. How
+often an acquired image is still in use, and so why the waits came at 3–5% of radius 6's frames,
+none of radius 16's and up to 1.9% of radius 32's, is not explained either. The 07 measurement of
+the same constant wait through Xwayland fits the same fence wait; it was not sampled.
 
-**Remedies, none applied (the user's choice).** Upgrading to wgpu 30 (egui-wgpu 0.36 and 0.37
-are on wgpu 30) removes the fence wait on Linux with the rest of the upgrade's changes, and
-would need the whole gate and the window profiles again; a patched wgpu-hal 29 is what the draft
-measured; setting `__NV_DISABLE_EXPLICIT_SYNC` in the client is specific to one driver and
-gives up the synchronization NVIDIA added for Wayland; or nothing, since vsync never waits.
+**Remedy, the user's choice (2026-10-22): the upgrade to wgpu 30** (`4485dad`, with naga 30.0.1
+and egui 0.37.0), measured in all three profiles [below](#the-three-profiles-on-wgpu-30). The
+alternatives were a patched wgpu-hal 29 (what the draft measured), setting
+`__NV_DISABLE_EXPLICIT_SYNC` in the client (specific to one driver, and it gives up the
+synchronization NVIDIA added for Wayland) or nothing, since vsync never waited.
+
+### The three profiles on wgpu 30
+
+**Result.** On wgpu 30.0.1 (`4485dad`) no frame of any profile waits for a swapchain image: at
+radius 6 the worst p99 is 0.98–2.03 ms (10.64–10.72 on `6e3f2d9`) and every run's p95 1.64 ms or
+less (up to 10.59), and the most acquisitions over 5 ms in a run of any case is 4 (up to 1,209).
+Every attempt was valid, every case ran at 60 ticks/s and discarded no tick. The device's work
+did not change: headless, the scene and post passes and every tick phase took what they took on
+`7f9d267` (`render` `frame-cost`, `bodies` `capacity-tick-phases`), and the cells, bodies and
+contacts the cases count are identical. What the upgrade costs is CPU on the client's side: in the
+same session, alternating with `7f9d267`'s client at radius 16, 0.67–0.78 ms of main-thread CPU
+per presented frame against 0.62–0.63, 0.83–1.22 ms of process CPU against 0.65–0.66, and 35 more
+allocations per frame (883 against 848, on the main thread); the frame median is the same. The
+radius-16 and radius-32 medians in the tables are 2–10% above `6e3f2d9`'s because that session was
+faster: `7f9d267`'s client, run again in this one, took 1.81 ms at scale idle (1.64 then). The
+median of capacity's dense cases moved from one of their two alternating frame lengths toward the
+other (8.72 and 8.88 ms against 7.04 and 7.27); their mean frame is 8.35 and 8.40 ms against 8.18
+and 8.24, with 2% fewer frames (1,198 and 1,191 a run against 1,223 and 1,214).
+
+Executed evidence: `cargo evidence bench --profile capacity|qualification|scale --adapter
+vulkan-10de-2c05 --runs 5` on `4485dad`, a clean tree, 2026-10-22 17:19–18:20 UTC; host, adapter,
+presentation and protocol as in [07](#integrated-qualification-07), with the user's go for an
+idle desktop with the pointer on a 2,560 × 1,440 display and the screen lock off. Every attempt
+was valid and none contended (`target/evidence/wgpu30-bench-{capacity,qualification,scale}/`).
+Values on `6e3f2d9` ([above](#the-three-profiles-after-the-window-move)), and for capacity's
+body-contact and coupled on `920d097` ([the dense body pass](#the-dense-body-pass)), are in
+parentheses. The same-session comparison: three alternating pairs of scale idle with `7f9d267`'s
+client and `4485dad`'s, 18:23–18:27 UTC (`target/evidence/wgpu30-ab/scale-idle/`,
+`target/drafts/wgpu30/ab.sh`).
+
+**qualification**
+
+| Case | Median | Run p95s | Worst p99 | Max | Acquisitions over 5 ms a run | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 0.65 (0.64) | 0.82–0.84 (0.98–1.12) | 0.98 (10.64) | 3.32 (11.56) | 0 (1,120–1,209) | 60.0 (60.0) | 0 (0) | 0.55 (0.47) ms | 834 (796) | 242 (241) MiB |
+| flow | 0.67 (0.68) | 0.94–0.97 (1.17–1.19) | 1.19 (10.66) | 7.07 (12.49) | 0 (920–1,041) | 60.0 (60.0) | 0 (0) | 0.56 (0.48) ms | 839 (803) | 242 (241) MiB |
+| body-contact | 0.78 (0.80) | 1.32–1.44 (2.08–10.59) | 1.81 (10.72) | 24.51 (12.59) | 0–1 (1,035–1,150) | 60.0 (60.0) | 0 (0) | 0.62 (0.52) ms | 854 (835) | 300 (241) MiB |
+| mixed | 0.66 (0.65) | 0.89–0.92 (1.08–1.12) | 1.12 (10.64) | 2.98 (12.45) | 0 (972–1,064) | 60.0 (60.0) | 0 (0) | 0.58 (0.48) ms | 835 (799) | 242 (241) MiB |
+| streaming | 0.67 (0.67) | 0.94–0.97 (0.86–1.18) | 1.18 (10.67) | 2.93 (11.88) | 0 (0–1,070) | 60.0 (60.0) | 0 (0) | 0.55 (0.50) ms | 840 (803) | 242 (241–242) MiB |
+| coupled | 0.84 (0.79) | 1.48–1.64 (1.30–1.57) | 2.03 (1.97) | 8.67 (435.74) | 0–4 (0–1) | 60.0 (59.4) | 0 (0–19) | 0.65 (0.60) ms | 859 (816) | 300–318 (300–318) MiB |
+
+**scale**
+
+| Case | Median | Run p95s | Worst p99 | Max | Acquisitions over 5 ms a run | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 1.76 (1.64) | 2.00–2.01 (1.71–1.72) | 2.30 (2.04) | 3.46 (2.23) | 0 (0) | 60.0 (60.0) | 0 (0) | 0.79 (0.67) ms | 882 (835) | 498 (498) MiB |
+| flow | 1.82 (1.66) | 2.27–2.29 (2.12–2.13) | 2.44 (2.18) | 2.97 (2.52) | 0 (0) | 60.0 (60.0) | 0 (0) | 0.75 (0.69) ms | 893 (847) | 498 (498) MiB |
+| body-contact | 2.02 (1.84) | 3.16–3.26 (3.13–3.16) | 3.54 (3.42) | 9.88 (9.52) | 0–1 (0) | 60.0 (60.0) | 0 (0) | 0.83 (0.81) ms | 926 (889) | 574 (556) MiB |
+| mixed | 1.79 (1.65) | 2.64–2.68 (2.41–2.42) | 2.97 (2.81) | 4.99 (4.29) | 0 (0) | 60.0 (60.0) | 0 (0) | 0.78 (0.69) ms | 891 (844) | 498 (498) MiB |
+| streaming | 1.82 (1.66) | 2.30–2.33 (2.13–2.14) | 2.56 (2.26) | 3.47 (3.05) | 0 (0) | 60.0 (60.0) | 0 (0) | 0.84 (0.74) ms | 900 (854) | 498 (498) MiB |
+| coupled | 2.06 (1.89) | 3.31–3.36 (3.28–3.33) | 3.62 (3.55) | 5.05 (197.43) | 0 (0) | 60.0 (59.8) | 0 (0–5) | 0.87 (0.79) ms | 936 (900) | 576 (556) MiB |
+
+**capacity**
+
+| Case | Median | Run p95s | Worst p99 | Max | Acquisitions over 5 ms a run | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 5.11 (4.99) | 6.50–6.68 (6.32–7.04) | 7.36 (11.44) | 8.03 (12.16) | 0–1 (0–34) | 60.0 (60.0) | 0 (0) | 1.60 (1.43) ms | 1016 (977) | 1,236 (1,236) MiB |
+| flow | 5.14 (5.06) | 6.43–6.65 (6.62–6.66) | 7.45 (7.31) | 7.97 (8.52) | 0 (0) | 60.0 (60.0) | 0 (0) | 1.46 (1.46) ms | 1045 (1004) | 1,236 (1,236) MiB |
+| body-contact | 8.72 (7.04) | 10.75–10.89 (10.51–10.66) | 11.21 (10.97) | 12.02 (13.50) | 0 (0) | 60.0 (60.0) | 0 (0) | 1.81 (1.73) ms | 1213 (1216) | 1,296–1,308 (1,294) MiB |
+| mixed | 5.11 (5.04) | 8.04–8.15 (7.74–7.83) | 8.69 (8.52) | 12.95 (12.80) | 0 (0) | 60.0 (60.0) | 0 (0) | 1.41 (1.41) ms | 1036 (993) | 1,236 (1,236) MiB |
+| streaming | 5.20 (5.14) | 6.76–6.99 (6.68–6.90) | 8.17 (7.90) | 8.96 (9.73) | 0 (0) | 60.0 (60.0) | 0 (0) | 1.73 (1.47) ms | 1083 (1048) | 1,236 (1,236) MiB |
+| coupled | 8.88 (7.27) | 10.74–10.81 (10.25–10.60) | 11.25 (10.97) | 12.58 (12.93) | 0 (0) | 60.0 (60.0) | 0 (0) | 2.00 (1.73) ms | 1242 (1241) | 1,296 (1,294–1,296) MiB |
+
+**The same session, both clients.** Scale idle, three alternating pairs:
+
+| Client | Frames presented | Mean frame | Frame median | Acquisitions over 5 ms | Main-thread CPU per frame | Process CPU per frame | Allocations per frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| wgpu 29.0.4 (`7f9d267`) | 13,345–13,451 | 2.23–2.25 ms | 1.81–1.82 ms | 636–654 | 0.62–0.63 ms | 0.65–0.66 ms | 847–849 |
+| wgpu 30.0.1 (`4485dad`) | 16,532–16,789 | 1.79–1.82 ms | 1.78–1.81 ms | 0 | 0.67–0.78 ms | 0.83–1.22 ms | 882–884 |
+
+In this session wgpu 29's client waited 10 ms for 4.8% of its images at radius 16, where none of
+`6e3f2d9`'s scale runs did: how often an acquired image is still in use depends on more than the
+radius. Which part of the upgrade costs the CPU (wgpu-core, the driver's threads under it, or
+egui 0.37's interface, whose style also lays the panels out roomier) is not measured; the frames
+at radius 16 and 32 wait for the device, not for that CPU (the loop waits 4–26 times a frame).
+
+**Other changes seen.** The `check all` on `4485dad` (163 of 163 items, 16:41–16:48 UTC,
+`target/evidence/wgpu30-check-all/`) counts about 30% fewer allocations per submitted tick than
+on `7f9d267` (242 against 347 in the dense body workloads, 108 against 116 for an idle sparse
+tick), and wgpu 30 reports the adapter's largest buffer as 4 GiB (4,294,967,295 bytes) where wgpu
+29 reported 1 TiB; the largest plan needs 138,444,800. In that run `streaming`
+`checkpoint-cadence-scale` published its saves every 300 ticks in 55 ticks at the median (5–8 in
+eight earlier runs); two runs of the case right after took 6. The slow saves waited 0.77–1.02 s
+for their storage writes (`write_age_ms_max`, the storage worker's write of the encoded rows to
+the file, which no device work is part of), as long as one of `move-check-draft`'s writes on wgpu
+29 (675 ms): the disk, a btrfs at 91% with 27 GiB unallocated, not the upgrade (an inference from
+where the time went). The process GPU memory peak of radius 6's body-contact is 300 MiB in every
+run, as coupled's already was (241 before); the allocator's account at residency and at the end
+is unchanged (256 MiB reserved, 83.1 MiB allocated against 82.1), so the difference is transient
+and outside it; it is not attributed. One qualification body-contact run had a single 24.5 ms
+frame and discarded no tick; it is not attributed either.
+
+The scripted runs pass on the same tree (`target/evidence/wgpu30-scripts/`, 18:21–18:23 UTC):
+`features` 41 checks, `loss` 6 and `worlds` 5. Their captures match `6e3f2d9`'s but for egui
+0.37's roomier panels. The connected scenario with the native consumer (`cargo evidence run
+--scenario resident-world --consumer native`, whose viewer presents through the queue since the
+upgrade) passed two of three runs, 18:29–18:31 UTC (`target/evidence/wgpu30-native-scenario*`):
+in the first, step 6's resting pile had a still sphere move 0.51 units across the window's
+negative rebase, past the check's 0.5 (`JUMP`); the two runs after moved one 0.06 and 0.03.
+Restless spheres in the pile nudge their neighbours (one moved 1.95 units in the 30 frames
+before the rebase, another 0.51), and earlier passing runs reached 0.46 (07's native run on
+`20499d1`) and 0.22 headless, while headless on `4485dad` the case moved one 0.02 with every
+cell, body and contact count as on `7f9d267`: the margin, not the upgrade (an inference; the
+check's margin is open).
 
 ## Structural gates
 
