@@ -818,7 +818,13 @@ pub fn plan(
             Binding::Storage,
         ),
         bound(BufferRole::Flow, flow_bytes, storage, Binding::Storage),
-        bound(BufferRole::Scratch, cell_bytes, storage, Binding::Storage),
+        // Copy usages: a window move carries the tile records through it between ticks.
+        bound(
+            BufferRole::Scratch,
+            cell_bytes,
+            storage | Usage::COPY_SRC | Usage::COPY_DST,
+            Binding::Storage,
+        ),
         bound(
             BufferRole::Activity,
             activity_bytes,

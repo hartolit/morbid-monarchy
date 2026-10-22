@@ -1275,6 +1275,16 @@ destination = "gpu-world (02)"
 determinism = "exact"
 
 [[behavior]]
+id = "gpu.slots.move-keeps-references"
+package = "gpu-world"
+target = "lib"
+test = "slots::tests::a_move_keeps_slots_and_references_and_claims_the_new_positions"
+origin = "transition"
+expectation = "A move to a window of the same size keeps every slot, generation and reference, claims the kept chunks' new window positions and writes them to the window map; it refuses to drop a resident chunk."
+destination = "gpu-world window moves in place (after 07)"
+determinism = "exact"
+
+[[behavior]]
 id = "gpu.slots.resize-keeps-inside"
 package = "gpu-world"
 target = "lib"
@@ -1981,6 +1991,16 @@ test = "rebased-window"
 origin = "transition"
 expectation = "The same nine absolute chunks at negative keys in a radius-1 and a radius-2 window, with every rule on, give identical cells after 150 ticks."
 destination = "gpu-world material phases on the selected adapter (03); rerun with each later GPU stage"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.cells.window-move-keeps-activity"
+package = "monarchy-evidence"
+target = "gpu:cells"
+test = "window-move-keeps-activity"
+origin = "transition"
+expectation = "Two window moves of the same size (north, then east and south at once) over chaotic terrain with flowing water, every rule on: the kept chunks keep their slot references, the GPU equals a reference that moves cells and wake levels with the window in every tick's report and every cell, and the tick after a move does not wake every resident cell."
+destination = "gpu-world window moves in place (after 07)"
 determinism = "exact"
 
 [[behavior]]
@@ -3147,7 +3167,7 @@ package = "monarchy-evidence"
 target = "gpu:render"
 test = "lighting-cache-matches"
 origin = "transition"
-expectation = "At four poses over generated terrain with water and flames the cached terrain lighting draws within one 8-bit level of per-vertex lighting; an unchanged frame relights no chunk, one edit relights its neighbourhood only, a moved sun relights every drawn chunk, and a chunk edited out of view is relit when drawn again."
+expectation = "At four poses over generated terrain with water and flames the cached terrain lighting draws within one 8-bit level of per-vertex lighting; an unchanged frame relights no chunk, one edit relights its neighbourhood only, a moved sun relights every drawn chunk, a chunk edited out of view is relit when drawn again, and after a window move of the same size (no bind group created) every drawn chunk is relit and a chunk first drawn later is relit then."
 destination = "world-render terrain lighting cache (after 07)"
 determinism = "exact"
 
@@ -3159,4 +3179,14 @@ test = "frame-cost"
 origin = "transition"
 expectation = "Device time of the scene and post passes (culled and unculled; cached lighting, per-vertex lighting and every drawn chunk relit each frame), CPU encode time and renderer memory with the lighting cache at radius 6, 16 and 32 (measurement)."
 destination = "world-render on gpu-world's device (06)"
+determinism = "exact"
+
+[[behavior]]
+id = "gpu.render.window-move-cost"
+package = "monarchy-evidence"
+target = "gpu:render"
+test = "window-move-cost"
+origin = "transition"
+expectation = "A window move by a row at radius 32 on generated terrain at rest, every rule on, keeps the window's buffers and the renderer's bind groups, copies no cells and leaves the next ticks far from waking the window; it records the move's CPU time, the ticks and scene passes after it, the loading ticks and the allocator's reserved and allocated device memory (measurement)."
+destination = "gpu-world window moves and world-render after them (after 07)"
 determinism = "exact"

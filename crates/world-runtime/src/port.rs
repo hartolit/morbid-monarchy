@@ -305,8 +305,9 @@ pub struct ResizeRequest {
     pub window: ResidentWindow,
 }
 
-/// A successful resize. Chunks that remain inside the new window keep their cells (moved on
-/// the device) under new slot references; every earlier slot reference is stale.
+/// A successful resize. Chunks that remain inside the new window keep their cells under the
+/// slot references in `retained`: after a change of size they are new and every earlier one is
+/// stale; a move to a window of the same size keeps them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResizeReport {
     pub retained: Vec<(ChunkKey, SlotRef)>,

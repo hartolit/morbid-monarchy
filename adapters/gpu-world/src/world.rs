@@ -595,6 +595,124 @@ impl GpuWorld {
         Ok((world, surface))
     }
 
+    /// Whether `window` has the current window's size, so that a resize to it is a move in
+    /// place.
+    fn moves_in_place(&self, window: ResidentWindow) -> bool {
+        let current = self.slots.window();
+        window.radius_x() == current.radius_x() && window.radius_y() == current.radius_y()
+    }
+
+    /// Whether a capture or snapshot is requested and not yet encoded: it names slots the next
+    /// tick copies, so the slots must not change before it.
+    fn slot_copies_requested(&self) -> bool {
+        self.captures
+            .iter()
+            .any(|capture| capture.state == CaptureState::Requested)
+            || self.snapshots.has_requested()
+    }
+
+    /// A resize to a window of the same size elsewhere. The window's buffers, the slots and the
+    /// chunks in them stay; the window map is rewritten and the tile records, which follow
+    /// window positions, move with their chunks through the window's scratch buffer (which
+    /// holds nothing between ticks). Nothing wakes: the kept chunks keep their activity, and
+    /// the chunks arriving and leaving wake their reach when they activate and retire.
+    fn move_in_place(&mut self, window: ResidentWindow) -> Result<ResizeReport, Refusal> {
+        if self.slot_copies_requested() {
+            return Err(self.refuse(Pressure::SlotChanges));
+        }
+        let slots = self.slots.moved(window)?;
+        if !self.context.has_submission_capacity() {
+            return Err(self.refuse(Pressure::InFlightSubmissions));
+        }
+        let map_bytes = self.plan.buffer(BufferRole::WindowMap).size;
+        let upload = self
+            .context
+            .create_buffer(
+                "window map move",
+                map_bytes,
+                wgpu::BufferUsages::COPY_SRC,
+                true,
+            )
+            .map_err(|_| {
+                Refusal::Unsupported(CapacityLimit {
+                    resource: LimitedResource::Allocation,
+                    requested: map_bytes,
+                    available: 0,
+                })
+            })?;
+        {
+            let mut entries = vec![0u32; self.plan.slots as usize];
+            slots.write_window_map(&mut entries);
+            let bytes: Vec<u8> = entries
+                .iter()
+                .flat_map(|entry| entry.to_le_bytes())
+                .collect();
+            upload.get_mapped_range_mut(..).copy_from_slice(&bytes);
+        }
+        upload.unmap();
+        let peak_overlap_bytes = self.context.allocations().requested_bytes;
+        let old = self.slots.window();
+        let (width, height) = (i64::from(window.width()), i64::from(window.height()));
+        let dx = i64::from(window.min_key().key.x) - i64::from(old.min_key().key.x);
+        let dy = i64::from(window.min_key().key.y) - i64::from(old.min_key().key.y);
+        let (records, chunk_bytes) = self.plan.activity.chunk_records(0);
+        let records_bytes = chunk_bytes * u64::from(window.chunk_count());
+        debug_assert!(records_bytes <= self.plan.buffer(BufferRole::Scratch).size);
+        let mut encoder =
+            self.context
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("window move"),
+                });
+        encoder.copy_buffer_to_buffer(&upload, 0, &self.window.window_map, 0, map_bytes);
+        encoder.copy_buffer_to_buffer(
+            &self.window.activity,
+            records,
+            &self.window.scratch,
+            0,
+            records_bytes,
+        );
+        encoder.clear_buffer(&self.window.activity, records, Some(records_bytes));
+        let mut copied = records_bytes;
+        // The chunk at old window position (x, y) is at (x - dx, y - dy) now: one run per kept
+        // row, every position the move leaves empty cleared.
+        let columns = width - dx.abs();
+        if columns > 0 {
+            let first = (-dx).max(0);
+            for row in (-dy).max(0)..(height - dy).min(height) {
+                let from = ((row + dy) * width + first + dx) as u64 * chunk_bytes;
+                let to = records + (row * width + first) as u64 * chunk_bytes;
+                let bytes = columns as u64 * chunk_bytes;
+                encoder.copy_buffer_to_buffer(
+                    &self.window.scratch,
+                    from,
+                    &self.window.activity,
+                    to,
+                    bytes,
+                );
+                copied += bytes;
+            }
+        }
+        self.context.submit([encoder.finish()]);
+        self.note_submission();
+        // The copy holds the upload until it completes.
+        self.context.release_buffer(upload);
+        let retained = slots
+            .resident()
+            .map(|(key, slot, _)| (key, slots.slot_ref_for(slot)))
+            .collect();
+        self.slots = slots;
+        self.counters.device_copy_bytes += copied;
+        self.counters.upload.metadata += map_bytes;
+        self.refresh_counters();
+        Ok(ResizeReport {
+            retained,
+            migrated_bytes: 0,
+            requested_bytes: self.context.allocations().requested_bytes,
+            peak_overlap_bytes,
+        })
+    }
+
     /// Plans `request` and checks the old and new allocations together against the budget.
     /// The slots' readiness is the resize's own check: a preflight runs before the caller has
     /// retired the chunks the new window drops.
@@ -1086,19 +1204,20 @@ impl PhysicalWorld for GpuWorld {
     fn preflight_resize(&self, request: &ResizeRequest) -> Result<(), Refusal> {
         self.admission()?;
         self.check_session(request.session)?;
+        if self.moves_in_place(request.window) {
+            return Ok(());
+        }
         self.plan_resize(request).map(|_| ())
     }
 
     fn resize(&mut self, request: &ResizeRequest) -> Result<ResizeReport, Refusal> {
         self.admission()?;
         self.check_session(request.session)?;
+        if self.moves_in_place(request.window) {
+            return self.move_in_place(request.window);
+        }
         let next = self.plan_resize(request)?;
-        if self
-            .captures
-            .iter()
-            .any(|capture| capture.state == CaptureState::Requested)
-            || self.snapshots.has_requested()
-        {
+        if self.slot_copies_requested() {
             return Err(self.refuse(Pressure::SlotChanges));
         }
         let (slots, moves) = self.slots.resized(request.window)?;
@@ -1152,8 +1271,8 @@ impl PhysicalWorld for GpuWorld {
         self.bind_groups = self
             .pipelines
             .bind_groups(&self.context, &self.fixed, &self.window);
-        // The new window's activity starts empty: wake everything once, as the baseline's
-        // resize did.
+        // The new window's tile records start empty: wake everything once, as the baseline's
+        // resize did. (A move keeps them: `move_in_place`.)
         self.wake_all_pending = true;
         self.plan = next;
         self.slots = slots;

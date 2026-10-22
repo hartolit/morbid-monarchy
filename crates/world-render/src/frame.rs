@@ -327,10 +327,13 @@ impl FrameUniform {
     }
 
     /// What the cached terrain lighting was computed under besides the cells: the sun's
-    /// direction, the shadow and occlusion strengths and the elevation scale, as bits. When it
-    /// changes, every chunk's lighting is out of date.
-    pub(crate) fn lighting_key(&self) -> [u32; 6] {
+    /// direction, the shadow and occlusion strengths, the elevation scale, as bits, and the
+    /// window's lowest key (the cache is kept per window position, which a window move gives to
+    /// other chunks). When it changes, every chunk's lighting is out of date.
+    pub(crate) fn lighting_key(&self) -> [u32; 8] {
         [
+            self.window[0] as u32,
+            self.window[1] as u32,
             self.sun_direction[0].to_bits(),
             self.sun_direction[1].to_bits(),
             self.sun_direction[2].to_bits(),

@@ -263,6 +263,37 @@ impl Twin {
         Ok(())
     }
 
+    /// Moves the window to `center`, keeping its size: the chunks it drops retire in one tick,
+    /// then both move, the GPU in place. The kept chunks keep their slots and activity, and the
+    /// next tick wakes nothing the move did not drop.
+    pub fn move_window(&mut self, center: ChunkKey) -> Result<(), String> {
+        let window = ResidentWindow::new(center, self.setup.radius_x, self.setup.radius_y)
+            .map_err(|error| format!("{error:?}"))?;
+        let leaving: Vec<ChunkKey> = self
+            .slots
+            .iter()
+            .map(|(key, _)| *key)
+            .filter(|key| !window.contains(*key))
+            .collect();
+        for key in &leaving {
+            self.retire(*key)?;
+        }
+        if !leaving.is_empty() {
+            self.step(&[])?;
+        }
+        let session = self.driver.session();
+        let report = self
+            .driver
+            .world
+            .resize(&world_runtime::port::ResizeRequest { session, window })
+            .map_err(|refusal| format!("move: {refusal:?}"))?;
+        self.slots = report.retained;
+        let min = window.min_key();
+        self.reference.move_to(IVec2::new(min.key.x, min.key.y));
+        self.setup.center = center;
+        Ok(())
+    }
+
     /// Runs one tick of `commands` on both and compares the tick's report. Returns the GPU's
     /// command results in order.
     pub fn step(&mut self, commands: &[Command]) -> Result<Vec<CommandResult>, String> {

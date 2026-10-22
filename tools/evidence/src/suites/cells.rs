@@ -143,6 +143,11 @@ pub const CASES: &[Case] = &[
         run: adversarial::rebased_window,
     },
     Case {
+        name: "window-move-keeps-activity",
+        summary: "a window move of the same size keeps the kept chunks' slots and activity: the GPU follows a reference that moves cells and wake levels with the window, and the tick after a move does not wake the window",
+        run: adversarial::window_move_keeps_activity,
+    },
+    Case {
         name: "tick-rollover",
         summary: "the rules follow the reference across the low tick word's rollover",
         run: adversarial::tick_rollover,

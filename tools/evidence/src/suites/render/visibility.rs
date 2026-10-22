@@ -3,13 +3,15 @@
 use world_model::{
     command::{Command, EditTool, MaterialEdit},
     glam::{DVec3, IVec2},
+    rules::SimulationRules,
+    spatial::ChunkKey,
 };
 use world_render::CameraRig;
 
 use super::{
     super::Check,
     cases::draw_counts,
-    measure::generated,
+    measure::{generated, generated_with, load, move_window},
     offscreen::{Offscreen, colour, ndc_of, request},
 };
 
@@ -171,7 +173,7 @@ fn difference(a: &super::offscreen::Image, b: &super::offscreen::Image) -> (u8, 
 /// neighbourhood of an edit, every drawn chunk when the sun moves or the window does, and a chunk
 /// edited out of view once it is drawn again. Flames, lit per vertex, are among the edits.
 pub fn lighting_cache_matches(adapter: &str, check: &mut Check) -> Result<(), String> {
-    let mut driver = generated(adapter, 6)?;
+    let (mut driver, mut slots) = generated_with(adapter, 6, SimulationRules::NONE)?;
     // Water across the corner of four chunks and a burning patch.
     for edit in [
         MaterialEdit::new(EditTool::Water, IVec2::new(256, 256), 6, 30),
@@ -284,6 +286,38 @@ pub fn lighting_cache_matches(adapter: &str, check: &mut Check) -> Result<(), St
     check.that(worst <= 1, || {
         format!("an edit made out of view is drawn with stale lighting: up to {worst} levels ({differing} values)")
     });
+
+    // A window move (same size) keeps the window's buffers, so the renderer keeps its bind
+    // groups and its cache, which is kept per window position: every drawn chunk is relit, and
+    // one drawn only later is relit then.
+    let groups = offscreen.renderer.counters().world_bind_groups_created;
+    let (_, _, arriving) = move_window(&mut driver, &mut slots, ChunkKey::new(4, 3, 0))?;
+    load(&mut driver, &mut slots, &arriving, |_| Ok(()))?;
+    let cached = offscreen.image(&mut driver.world, &frame)?;
+    let after_move = relit(&mut driver.world, &offscreen)?;
+    let drawn_now = draw_counts(&mut driver.world, &offscreen)?[0];
+    check.equal("chunks relit after a window move", after_move, drawn_now);
+    check.equal(
+        "world bind groups after a window move",
+        offscreen.renderer.counters().world_bind_groups_created,
+        groups,
+    );
+    offscreen.renderer.set_lighting_cache(false);
+    let live = offscreen.image(&mut driver.world, &frame)?;
+    offscreen.renderer.set_lighting_cache(true);
+    let (worst, differing) = difference(&cached, &live);
+    check.that(worst <= 1, || {
+        format!("after a window move the cached frame differs by up to {worst} levels ({differing} values)")
+    });
+    let cached = offscreen.image(&mut driver.world, &back)?;
+    offscreen.renderer.set_lighting_cache(false);
+    let live = offscreen.image(&mut driver.world, &back)?;
+    offscreen.renderer.set_lighting_cache(true);
+    let (worst, differing) = difference(&cached, &live);
+    check.that(worst <= 1, || {
+        format!("a chunk first drawn after a window move is drawn with stale lighting: up to {worst} levels ({differing} values)")
+    });
+    check.metric("chunks_relit_after_move", after_move);
     check.metric(
         "lighting_cache_bytes",
         offscreen.renderer.counters().lighting_bytes,

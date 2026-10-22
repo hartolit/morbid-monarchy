@@ -234,7 +234,7 @@ pub struct Renderer {
     lighting_cache: bool,
     /// What the cache was last computed under (`FrameUniform::lighting_key`); `None` relights
     /// everything on the next frame.
-    lighting_key: Option<[u32; 6]>,
+    lighting_key: Option<[u32; 8]>,
     post_params: wgpu::Buffer,
     linear_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,

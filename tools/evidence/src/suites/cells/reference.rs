@@ -956,6 +956,41 @@ impl ReferenceWorld {
         changed
     }
 
+    /// Moves the window, keeping its size, so that `min_key` is its lowest chunk: the chunks
+    /// inside both windows keep their cells and their wake levels for the tick being prepared,
+    /// and nothing wakes. The caller retires the chunks the move drops first.
+    pub fn move_to(&mut self, min_key: IVec2) {
+        let size = CHUNK_SIZE as i32;
+        let origin = IVec2::new(min_key.x.wrapping_mul(size), min_key.y.wrapping_mul(size));
+        let shift = (origin - self.origin) / size;
+        let (width, chunks) = (self.width(), self.resident.len());
+        let mut resident = vec![false; chunks];
+        let mut cells = vec![WorldCell::default(); self.cells.len()];
+        let mut wake = vec![0; self.cells.len()];
+        for y in 0..self.chunks_y {
+            for x in 0..self.chunks_x {
+                let from = IVec2::new(x, y) + shift;
+                if from.x < 0 || from.y < 0 || from.x >= self.chunks_x || from.y >= self.chunks_y {
+                    continue;
+                }
+                let old = (from.y * self.chunks_x + from.x) as usize;
+                resident[(y * self.chunks_x + x) as usize] = self.resident[old];
+                for row in 0..size {
+                    let source = ((from.y * size + row) * width + from.x * size) as usize;
+                    let target = ((y * size + row) * width + x * size) as usize;
+                    let run = size as usize;
+                    cells[target..target + run].copy_from_slice(&self.cells[source..source + run]);
+                    wake[target..target + run]
+                        .copy_from_slice(&self.next_wake[source..source + run]);
+                }
+            }
+        }
+        self.origin = origin;
+        self.resident = resident;
+        self.cells = cells;
+        self.next_wake = wake;
+    }
+
     /// Wakes every resident cell for the tick being prepared.
     pub fn wake_everything(&mut self) {
         for index in 0..self.cells.len() {

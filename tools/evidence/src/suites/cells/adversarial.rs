@@ -736,6 +736,79 @@ pub fn rebased_window(adapter: &str, check: &mut Check) -> Result<(), String> {
     Ok(())
 }
 
+/// A window move keeps the window's size: the GPU moves in place, the kept chunks keep their
+/// slots and their activity, and only the chunks arriving and leaving wake their reach. Two
+/// moves (north, then east and south at once) while water flows over chaotic terrain, every
+/// rule on: the GPU follows a reference that moves its cells and wake levels with the window,
+/// tick by tick (its reports, awake cells included) and cell for cell.
+pub fn window_move_keeps_activity(adapter: &str, check: &mut Check) -> Result<(), String> {
+    let chunk = |x: i32, y: i32| {
+        let key = ChunkKey::new(x, y, 0);
+        let mut cells = chaotic(0x30E5 + (x * 37 + y) as u64);
+        cells[at(20, 20)].set_surface_mat(SurfaceMat::SURFACE_FOLIAGE);
+        (key, cells)
+    };
+    let mut chunks = Vec::new();
+    for y in -2..=2 {
+        for x in -2..=2 {
+            chunks.push(chunk(x, y));
+        }
+    }
+    let mut twin = Twin::open(adapter, Setup::new(ChunkKey::new(0, 0, 0), 2), &chunks)?;
+    twin.step(&[edit(EditTool::Water, 10, 10, 6, 80)])?;
+    twin.run(60)?;
+    let resident_cells = |twin: &Twin| (twin.slots.len() * CHUNK_CELL_COUNT) as u32;
+    for (step, (center, arriving)) in [
+        (
+            ChunkKey::new(0, 1, 0),
+            (-2..=2).map(|x| chunk(x, 3)).collect::<Vec<_>>(),
+        ),
+        (
+            ChunkKey::new(1, 0, 0),
+            (-1..=3)
+                .map(|x| chunk(x, -2))
+                .chain((-1..=2).map(|y| chunk(3, y)))
+                .collect(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let kept: Vec<_> = twin.slots.clone();
+        twin.move_window(center)?;
+        let unchanged = kept
+            .iter()
+            .filter(|(key, slot)| twin.slots.iter().any(|kept| kept == &(*key, *slot)))
+            .count();
+        check.equal(
+            &format!("move {step}: kept chunks keep their slot references"),
+            unchanged,
+            twin.slots.len(),
+        );
+        twin.step(&[])?;
+        let awake = twin.last.map_or(0, |last| last.cells.awake_cells);
+        let window = resident_cells(&twin);
+        // The twin's report comparison holds the count to the reference's; a wake of the
+        // whole window would make it every resident cell.
+        check.that(awake < window, || {
+            format!("move {step}: the tick after it woke all {window} resident cells")
+        });
+        check.metric(&format!("move_{step}_awake_after"), awake);
+        twin.activate(&arriving)?;
+        twin.step(&[edit(
+            EditTool::Water,
+            center.key.x * SIZE + 30,
+            center.key.y * SIZE + 30,
+            5,
+            60,
+        )])?;
+        twin.run(40)?;
+        twin.compare_cells(check, &format!("after move {step}"))?;
+    }
+    twin.finish(check, "moved window");
+    Ok(())
+}
+
 /// Across the low tick word's rollover the keys change and the granular cadence continues; the
 /// GPU follows the reference through it.
 pub fn tick_rollover(adapter: &str, check: &mut Check) -> Result<(), String> {

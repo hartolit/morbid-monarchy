@@ -79,4 +79,9 @@ pub const CASES: &[Case] = &[
         summary: "device time of the scene and post passes, CPU encode time and renderer memory at radius 6, 16 and 32 on generated terrain, with cached and per-vertex lighting and every chunk relit (measurement)",
         run: measure::frame_cost,
     },
+    Case {
+        name: "window-move-cost",
+        summary: "what moving the radius-32 window by a row costs on generated terrain at rest, every rule on: the move, the ticks and frames after it and the allocator's device memory (measurement)",
+        run: measure::window_move_cost,
+    },
 ];

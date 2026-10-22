@@ -496,6 +496,29 @@ impl SlotTable {
         Ok((table, moves))
     }
 
+    /// The same slots under `window`, a window of the same size elsewhere: every chunk keeps its
+    /// slot and generation, so references stay valid; only the window positions change.
+    pub fn moved(&self, window: ResidentWindow) -> Result<Self, Refusal> {
+        self.check_resize(window)?;
+        debug_assert_eq!(window.chunk_count(), self.window.chunk_count());
+        let mut table = Self {
+            session: self.session,
+            window,
+            slots: self.slots.clone(),
+            claimed: vec![codes::SLOT_NONE; self.claimed.len()],
+            patch_capacity: self.patch_capacity,
+            pending_patches: 0,
+        };
+        let resident: Vec<(ChunkKey, u32)> =
+            table.resident().map(|(key, slot, _)| (key, slot)).collect();
+        for (key, slot) in resident {
+            if let Some(position) = table.window_index(key) {
+                table.claimed[position as usize] = slot;
+            }
+        }
+        Ok(table)
+    }
+
     /// Whether the slots allow a resize to `window` now: no change in flight, no unfilled
     /// reservation, no resident chunk outside it.
     pub fn check_resize(&self, window: ResidentWindow) -> Result<(), Refusal> {
@@ -663,6 +686,50 @@ mod tests {
             slots.retire(foreign),
             Err(Refusal::StaleSession { .. })
         ));
+    }
+
+    #[test]
+    fn a_move_keeps_slots_and_references_and_claims_the_new_positions() {
+        let mut slots = table();
+        let kept = ChunkKey::new(1, 1, 0);
+        let slot = slots.reserve(kept).expect("slot");
+        slots.stage(slot, ChunkRevision::new(2), UPLOAD);
+        let (mut uploads, mut patches, mut activated) = (Vec::new(), Vec::new(), Vec::new());
+        slots.encode(1, Tick::new(0), &mut uploads, &mut patches);
+        slots.completed(1, &mut activated);
+        let east = ResidentWindow::new(ChunkKey::new(1, 0, 0), 1, 1).expect("window");
+        let moved = slots.moved(east).expect("the chunk stays inside");
+        assert_eq!(moved.window(), east);
+        assert_eq!(
+            moved.resident().collect::<Vec<_>>(),
+            slots.resident().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            moved.slot_ref_for(slot.index()),
+            slot,
+            "the reference stays valid"
+        );
+        assert_eq!(
+            moved.window_index(kept),
+            Some(7),
+            "row 2, column 1 of the moved 3 x 3 window"
+        );
+        let mut map = vec![0; 9];
+        moved.write_window_map(&mut map);
+        assert_eq!(map[7], slot.index());
+        assert_eq!(
+            map.iter()
+                .filter(|entry| **entry != codes::SLOT_NONE)
+                .count(),
+            1
+        );
+        let away = ResidentWindow::new(ChunkKey::new(-2, 0, 0), 1, 1).expect("window");
+        assert_eq!(
+            slots.moved(away).err(),
+            Some(Refusal::InvalidPayload(
+                PayloadError::ResidentOutsideNewWindow { count: 1 }
+            ))
+        );
     }
 
     #[test]
