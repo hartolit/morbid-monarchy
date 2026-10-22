@@ -1338,8 +1338,25 @@ negative rebase, past the check's 0.5 (`JUMP`); the two runs after moved one 0.0
 Restless spheres in the pile nudge their neighbours (one moved 1.95 units in the 30 frames
 before the rebase, another 0.51), and earlier passing runs reached 0.46 (07's native run on
 `20499d1`) and 0.22 headless, while headless on `4485dad` the case moved one 0.02 with every
-cell, body and contact count as on `7f9d267`: the margin, not the upgrade (an inference; the
-check's margin is open).
+cell, body and contact count as on `7f9d267`: the margin, not the upgrade (an inference).
+
+The margin was the check's, and `b145fc9` replaces it. Traced tick by tick, some spheres of the
+crushed pile rock in a cycle of three ticks: back where they were every 30 ticks, so the 30-frame
+stillness test counted them still, and up to a third of a unit away one tick later; over the ten
+frames after a move, restless neighbours nudge still spheres by up to 3.1 units. A sphere now
+counts as still only if it stayed within 0.02 units at every frame, and step 6 judges each window
+move by the tick that carries it, each body's last sample before against its first after (no
+still sphere may move 0.5), and by the median still sphere over the frames after (0.1). Headless
+on `b145fc9`'s tree, 20 of 20 runs passed (`target/evidence/b145fc9-scenario-*`, 19:36–19:38 UTC)
+and `check all` 163 of 163 (`target/evidence/b145fc9-check-all/`, 19:38–19:44 UTC): the largest
+move of a still sphere in the tick of a move is 0.028 units, the median over the frames after
+0.006 at most. Draft faults, never committed (`target/drafts/rebase-check/`), fail it in every
+run: the body pass keeping the old origin (16.7 units in the tick), the origin cell one cell off
+(1.45), a resume one cell east (1.04) and bodies placed a unit high (0.02 in the tick, a median of
+0.45 over the frames after, which only the median catches). A sphere that rolled off to x = 132,
+outside the shifted window's reach, is rightly suspended by the move (one of 30 runs before the
+fix flagged it); the check now holds only the bodies the shifted window holds to their pace. The
+native consumer has not run on `b145fc9`.
 
 ## Structural gates
 

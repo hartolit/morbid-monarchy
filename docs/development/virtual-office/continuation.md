@@ -55,7 +55,7 @@ anything lasting into its maintained owner.
   Windows); a mapped range wgpu refuses is now a recorded fault (`transfers`
   `refused-mapped-range`). `check all` 163 of 163 on `4485dad`; the 15 s radius-6 experiment, all
   three profiles, the scripts and the native connected scenario (two of three runs; one crossed
-  step 6's rebase margin) ran in the window on it
+  step 6's rebase margin, a flaw of the check fixed in `b145fc9`) ran in the window on it
   ([budgets](../../reference/performance-budgets.md#the-three-profiles-on-wgpu-30)): no frame
   waits for a swapchain image, the worst radius-6 p99 is 2.03 ms, and the client spends 0.05–0.15
   ms more main-thread CPU per frame. Drafts, the table and A/B helpers (`tables.py`, `ab.sh`) under
@@ -80,9 +80,13 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    chose the upgrade to wgpu 30 (`4485dad`), and since then no frame of any profile waits
    ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)). Open from it:
    which part of the upgrade costs 0.05–0.15 ms of main-thread CPU and 35 allocations per frame
-   (wgpu-core, the driver, or egui 0.37), and step 6's rebase check (`JUMP`, 0.5 units), which a
-   restless sphere crossed once in three native runs. The sampler, the drafts and the earlier
-   clients under `target/drafts/acquire/`, runs under `target/evidence/acquire/`.
+   (wgpu-core, the driver, or egui 0.37). Step 6's rebase check, which a sphere crossed once in
+   three native runs, is fixed in `b145fc9`: the sphere rocked in a three-tick cycle the 30-frame
+   stillness test missed; each window move is now judged by the tick that carries it and the
+   median still sphere after it (20 of 20 headless runs, `check all` 163 of 163, draft origin and
+   resume faults failing it; drafts under `target/drafts/rebase-check/`); the native consumer has
+   not run on it. The sampler, the drafts and the earlier clients under `target/drafts/acquire/`,
+   runs under `target/evidence/acquire/`.
 2. **Capacity limits, the frame and tick costs done:** dry foliage sleeps (`10cf62f`, physics
    revision 2), the landscape's lighting is cached per chunk vertex (`63f8ce6`, `d4d2d6c`) and a
    window move happens in place without waking the window (`67edbc2`, the user's choice). 07's
