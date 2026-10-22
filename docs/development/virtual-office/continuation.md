@@ -41,7 +41,9 @@ anything lasting into its maintained owner.
   lighting per chunk vertex (`render` `lighting-cache-matches`, `frame-cost` at radius 32) and
   `bodies` `capacity-tick-phases` times radius 32's tick by phase. `check all` (160 of 160)
   ran on `d4d2d6c`, the capacity profile (5 runs a case, none rejected) and the three scripts in
-  the window on `76376d8`'s tree. Measurements in the
+  the window on `76376d8`'s tree. Then `67edbc2` moves the window in place (`check all` 162 of 162),
+  `565366e` adds the allocator's account to bench summaries, and all three profiles and the scripts
+  ran in the window on `6e3f2d9`. Measurements in the
   [budgets](../../reference/performance-budgets.md#capacity-after-07), drafts and the recorded
   before/after case results under `target/drafts/capacity/`.
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
@@ -63,27 +65,24 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    07, at most 4.2% since `2c63b64`) set the worst p99 near 10.7 ms. Measured on KWin Wayland
    (mailbox) and Xwayland (immediate), absent with FIFO, unchanged by one more swapchain image;
    blaming the NVIDIA driver is an inference. Next evidence would be another compositor or driver.
-2. **Capacity limits, partly done:** at radius 32 dry foliage now sleeps (`10cf62f`, physics
-   revision 2; the idle tick 3.25 → 0.09 ms) and the landscape's lighting is cached per chunk
-   vertex (`63f8ce6`, `d4d2d6c`; the scene passes 14.84 → 4.57 ms), both measured headlessly
-   ([capacity](../../reference/performance-budgets.md#capacity-after-07)). In the window the
-   capacity medians fell from 18–27 ms to 5–12 ms and dense runs keep 60 ticks/s. The 32–40 ms
-   frame of each coupled run came with a window move, then a full resize that woke every cell;
-   `67edbc2` moves in place and wakes nothing beyond the moved rows (the user's choice,
-   [window moves](../../reference/performance-budgets.md#window-moves)), not yet measured in the
-   window. What remains: the body
-   pass at 4,096 dense bodies, about 5.1 ms a tick (see the
-   [dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the
-   body solver); and a valid window run of all three profiles: the one on `b766ae9` was rejected
-   because KWin opened the window on the 1,920 × 1,080 display (keep the pointer on a 2,560 ×
-   1,440 display while it runs); as a diagnostic it shows the long frames gone and the cache's gain
-   at every radius. The 226 MiB memory rise is attributed (the closing save's kept world image). No
-   frame rate is promised there.
+2. **Capacity limits, the frame and tick costs done:** dry foliage sleeps (`10cf62f`, physics
+   revision 2), the landscape's lighting is cached per chunk vertex (`63f8ce6`, `d4d2d6c`) and a
+   window move happens in place without waking the window (`67edbc2`, the user's choice). 07's
+   protocol on `6e3f2d9`
+   ([budgets](../../reference/performance-budgets.md#the-three-profiles-after-the-window-move)):
+   frame medians 0.64–0.80 ms at radius 6, 1.64–1.89 ms at radius 16 and 4.99–11.72 ms at radius 32,
+   the dense radius-32 runs at 60 ticks/s with no tick discarded and the longest capacity frame 23.8
+   ms. What remains: the body pass at 4,096 dense bodies, about 5.1 ms a tick (see the [dense-pile
+   discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the body solver);
+   3–5% of radius-6 frames still wait 10.09 ms for a swapchain image (item 1). Benchmark runs need
+   the pointer on a 2,560 × 1,440 display and the screen lock off: KWin opens the window on the
+   active display, and a run on `6e3f2d9` had single frames of up to 478 ms that twelve runs without
+   the lock did not. No frame rate is promised at radius 32.
 3. **Unqualified:** every other adapter, driver, compositor and platform.
 4. **After the autosave cadence:** the `loss` and `worlds` scripts passed again on `dfeb530`'s
    code and the frozen `coupled` scenarios ran in the window with `--autosave 60` at the frame
    times of autosave off ([budgets](../../reference/performance-budgets.md#checkpoint-cadence-after-07));
-   the scripts last ran on `76376d8`'s tree, and the frozen benchmark protocol still saves never. A
+   the scripts last ran on `6e3f2d9`'s tree, and the frozen benchmark protocol still saves never. A
    command journal for a loss below the cadence is parked on the whiteboard with what it needs
    first.
 

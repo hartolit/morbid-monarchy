@@ -989,21 +989,80 @@ stands still. The ticks after a move still hold 860–1,450 active tiles; that t
 set them going is an inference, and the case does not record the count at rest. The renderer
 relights every drawn chunk once after a move (7.02 ms of scene).
 
-**In the window** (diagnostic, not a protocol result). 07's protocol for all three profiles on
-`b766ae9`, a clean tree whose code is `67edbc2`'s, 2026-10-22 08:56–10:25 UTC
-(`target/evidence/move-bench-{capacity,qualification,scale}/`), rejected 119 of 124 attempts: KWin
-placed the window on the 1,920 × 1,080 display, where it gets 1,920 × 1,052; only scale coupled ran
-on a 2,560 × 1,440 display, 5 of 5 valid. The rejected attempts ran their whole scenario with 2.6%
-fewer pixels, so as a diagnostic: capacity coupled's longest frame took 18.2–23.2 ms by run against
-32–40 ms on `76376d8`, with no frame over 25 ms against 14, and frame medians of 10.8–11.0 ms
-(11.3); body-contact 12.0–12.2 ms (12.1), the four others 5.1–5.5 ms. Every run of every profile
-kept 60 ticks/s and discarded no tick. The cache shows at the smaller radii: medians 0.63–0.83 ms at
-radius 6 against 1.06–1.18 ms on `2c63b64`, 1.65–2.02 ms at radius 16 against 4.58–4.93 ms (scale
-coupled's valid runs: 2.02 ms, p95 4.14–10.66, worst p99 10.78). One frame of one qualification
-mixed run took 44.6 ms and one of one scale mixed run 64.5 ms, in each the presenting frame's own
-main-thread time with no tick and no upload in it; neither is attributed (the desktop was in use on
-the display the window opened on). Process GPU memory peaked at 241 MiB at radius 6, 497–556 MiB at
-radius 16 (556–576 for scale coupled on `2c63b64`) and 1,236–1,296 MiB at radius 32.
+**In the window.** A first run of 07's protocol on `b766ae9` was rejected for 119 of its 124
+attempts because KWin opened the window on the 1,920 × 1,080 display, where it gets 1,920 × 1,052
+(`target/evidence/move-bench-*/`); the run below kept the pointer on a 2,560 × 1,440 display.
+Capacity coupled's longest frame is 23.8 ms (32–40 ms by run on `76376d8`), no capacity frame
+reaches 25 ms, and its frames over 16.67 ms fell from 54 to 12 in five runs; the [three
+profiles](#the-three-profiles-after-the-window-move) have the rest.
+
+### The three profiles after the window move
+
+**Result.** With the dry foliage asleep, the terrain lighting cached and the window moved in place,
+07's protocol finds every profile faster than on `2c63b64`: frame medians 0.64–0.80 ms at radius 6
+(1.06–1.18), 1.64–1.89 ms at radius 16 (4.58–4.93) and 4.99–11.72 ms at radius 32 (18.11–27.05), the
+dense radius-32 runs at 60 ticks/s with no tick discarded (52, and 80–92 discarded a run), and every
+profile's p95 and p99 inside the qualification budget. Main-thread CPU per presented frame fell by
+24–33% at radius 16 and 36–57% at radius 32; at radius 6 it is unchanged.
+
+Executed evidence: `cargo evidence bench --profile capacity|qualification|scale --adapter
+vulkan-10de-2c05 --runs 5` on `6e3f2d9`, a clean tree whose code is `67edbc2`'s, 2026-10-22
+10:35–11:35 UTC; host, adapter, presentation and protocol as in [07](#integrated-qualification-07),
+the person away from the desktop with the pointer on a 2,560 × 1,440 display. Every attempt was
+valid and none contended (`target/evidence/move2-bench-{capacity,qualification,scale}/`). The values
+on `2c63b64` ([above](#client-loop-without-vsync-after-07)) are in parentheses; GPU memory peaks
+there missed the closing save's image ([capacity in the window](#capacity-in-the-window)), so radius
+32's are not comparable except coupled's and streaming's, which window moves set.
+
+**qualification**
+
+| Case | Median | Run p95s | Worst p99 | Max | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 0.64 (1.08) | 0.98–1.12 (1.38–1.47) | 10.64 (10.69) | 11.56 (12.27) | 60.0 (60.0) | 0 (0) | 0.47 (0.48) ms | 796 (827) | 241 (241) MiB |
+| flow | 0.68 (1.13) | 1.17–1.19 (1.46–1.49) | 10.66 (10.63) | 12.49 (12.44) | 60.0 (60.0) | 0 (0) | 0.48 (0.49) ms | 803 (835) | 241 (241) MiB |
+| body-contact | 0.80 (1.15) | 2.08–10.59 (2.16–2.21) | 10.72 (10.67) | 12.59 (12.42) | 60.0 (60.0) | 0 (0) | 0.52 (0.51) ms | 835 (862) | 241 (241) MiB |
+| mixed | 0.65 (1.06) | 1.08–1.12 (1.39–1.42) | 10.64 (10.65) | 12.45 (11.77) | 60.0 (60.0) | 0 (0) | 0.48 (0.48) ms | 799 (830) | 241 (241) MiB |
+| streaming | 0.67 (1.14) | 0.86–1.18 (1.47–1.48) | 10.67 (10.64) | 11.88 (12.95) | 60.0 (60.0) | 0 (0) | 0.50 (0.50) ms | 803 (838) | 241–242 (241–242) MiB |
+| coupled | 0.79 (1.18) | 1.30–1.57 (2.09–2.41) | 1.97 (10.65) | 435.74 (11.69) | 59.4 (60.0) | 0–19 (0) | 0.60 (0.60) ms | 816 (860) | 300–318 (241–300) MiB |
+
+**scale**
+
+| Case | Median | Run p95s | Worst p99 | Max | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 1.64 (4.63) | 1.71–1.72 (5.51–5.54) | 2.04 (5.93) | 2.23 (6.71) | 60.0 (60.0) | 0 (0) | 0.67 (0.97) ms | 835 (975) | 498 (498) MiB |
+| flow | 1.66 (4.69) | 2.12–2.13 (5.59–5.61) | 2.18 (5.99) | 2.52 (6.77) | 60.0 (60.0) | 0 (0) | 0.69 (1.01) ms | 847 (999) | 498 (498) MiB |
+| body-contact | 1.84 (4.79) | 3.13–3.16 (6.76–6.83) | 3.42 (7.24) | 9.52 (8.35) | 60.0 (60.0) | 0 (0) | 0.81 (1.06) ms | 889 (1090) | 556 (574) MiB |
+| mixed | 1.65 (4.58) | 2.41–2.42 (5.68–5.70) | 2.81 (6.05) | 4.29 (6.75) | 60.0 (60.0) | 0 (0) | 0.69 (0.98) ms | 844 (986) | 498 (498) MiB |
+| streaming | 1.66 (4.72) | 2.13–2.14 (5.90–5.94) | 2.26 (7.19) | 3.05 (8.31) | 60.0 (60.0) | 0 (0) | 0.74 (1.10) ms | 854 (1049) | 498 (498) MiB |
+| coupled | 1.89 (4.93) | 3.28–3.33 (6.90–6.97) | 3.55 (7.47) | 197.43 (10.93) | 59.8 (60.0) | 0–5 (0) | 0.79 (1.11) ms | 900 (1110) | 556 (556–576) MiB |
+
+**capacity**
+
+| Case | Median | Run p95s | Worst p99 | Max | Ticks/s (min) | Ticks discarded a run | Main-thread CPU per frame | Allocations per frame | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| idle | 4.99 (18.37) | 6.32–7.04 (21.28–21.67) | 11.44 (22.01) | 12.16 (22.61) | 60.0 (60.0) | 0 (0) | 1.43 (2.22) ms | 977 (1514) | 1,236 (1,009–1,010) MiB |
+| flow | 5.06 (18.43) | 6.62–6.66 (21.37–21.49) | 7.31 (21.96) | 8.52 (22.32) | 60.0 (60.0) | 0 (0) | 1.46 (2.29) ms | 1004 (1561) | 1,236 (1,009–1,010) MiB |
+| body-contact | 11.72 (26.86) | 13.52–13.98 (34.45–42.00) | 14.75 (43.03) | 17.85 (56.13) | 60.0 (52.0) | 0 (87–92) | 1.93 (3.61) ms | 1342 (2369) | 1,294–1,296 (1,060–1,070) MiB |
+| mixed | 5.04 (18.11) | 7.74–7.83 (21.18–21.32) | 8.52 (23.22) | 12.80 (24.64) | 60.0 (60.0) | 0 (0) | 1.41 (2.31) ms | 993 (1538) | 1,236 (1,009–1,010) MiB |
+| streaming | 5.14 (18.83) | 6.68–6.90 (25.39–25.81) | 7.90 (29.36) | 9.73 (30.99) | 60.0 (60.0) | 0 (0) | 1.47 (3.38) ms | 1048 (2337) | 1,236 (1,521–1,778) MiB |
+| coupled | 10.55 (27.05) | 14.41–14.79 (37.54–48.65) | 16.17 (51.61) | 23.80 (82.93) | 60.0 (52.0) | 0 (80–88) | 1.86 (3.56) ms | 1360 (2461) | 1,294–1,296 (1,582) MiB |
+
+**Single long frames.** Five frames of qualification coupled's runs (56–436 ms) and one of scale
+coupled's (197 ms), and in the diagnostic runs two of qualification coupled (53 and 456 ms) and one
+of qualification streaming (478 ms), waited for the device: their presenting iteration took 0.4–0.8
+ms, acquisition and the session's frame were short, the ticks around them took their usual device
+time, and the frames after them caught up three ticks and discarded the rest (5–19 ticks in the runs
+that had one). The same code on `b766ae9` had none, and in twelve alternating runs of qualification
+coupled and streaming with `76376d8`'s binary (before the move) and this one, the desktop untouched
+with screen locking off and other applications closed, neither binary had one: the longest frame was
+10.9–12.4 ms and no tick was discarded (`target/drafts/capacity/stall-ab/`). The person reports the
+screen may have locked during the run; that this caused them is an inference. The p95 of three
+qualification body-contact runs is 10.6 ms: 4.6–5.4% of their frames waited 10.09 ms for a swapchain
+image (3–5% in the other radius-6 cases, none at radius 16), the waits of the [known
+gaps](../product/status.md#known-gaps).
+
+The scripted runs pass on the same tree (`target/evidence/move-scripts/`, 11:57 UTC): `features` 41
+checks, `loss` 6 and `worlds` 5.
 
 ## Structural gates
 
