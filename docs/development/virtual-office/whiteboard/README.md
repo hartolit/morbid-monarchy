@@ -8,7 +8,7 @@ duplicate every acceptance item here.
 
 | Topic | State | Next action | Assignment | Last evaluated |
 | --- | --- | --- | --- | --- |
-| [Convergence of the body solver in dense piles](discussions/dense-pile-convergence.md) | parked | Revisit if the native client's piles (06) show visible interpenetration or a rule needs contact depth. | None. | 2026-10-18 |
+| [Convergence of the body solver in dense piles](discussions/dense-pile-convergence.md) | open | The user decides on over-relaxing the position passes (a draft measured: deeper and cheaper dense piles, physics revision 3) or no change. | None. | 2026-10-22 |
 | [A command journal for recovery shorter than the checkpoint cadence](discussions/command-journal.md) | parked | Revisit if a loss bound below the autosave cadence is required, or checkpoint storage traffic limits a workload; the topic lists what a journal needs first. | None ([ADR 0004](../../../decisions/0004-bounded-loss-by-checkpoint-cadence.md) chose the cadence). | 2026-10-21 |
 
 00 found nothing outside the active sprint's scope. Relevant findings discovered during

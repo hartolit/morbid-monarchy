@@ -101,9 +101,12 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    ms. The body pass at 4,096 dense bodies then fell from 5.0–5.1 to 2.3 ms with the same results
    (`7f9d267`), and the dense window cases' frame medians from 10.6–11.7 to 7.0–7.3 ms (on
    `920d097`, `target/evidence/dense-bench-capacity/`). What remains of it is the solver's 64
-   passes (about 0.93 ms; fewer would be a physics change, see the [dense-pile
-   discussion](whiteboard/discussions/dense-pile-convergence.md)) and the terrain contact (about
-   1.2 ms, mostly the bodies that reach the ground); since `4485dad` (wgpu 30) no frame waits for a
+   passes (about 0.93 ms) and the terrain contact (about 1.2 ms, mostly the bodies that reach the
+   ground). A draft that over-relaxes the position passes for bodies with two or more corrections
+   (factor 1.6) left 3.6 deep pairs in `dense-cluster` against 13 and the dense 4,096 body pass at
+   2.79 ms against 3.80, all `bodies` cases passing; it is a physics change awaiting the user's
+   decision ([dense-pile discussion](whiteboard/discussions/dense-pile-convergence.md), draft
+   under `target/drafts/dense2/`); since `4485dad` (wgpu 30) no frame waits for a
    swapchain image (item 1). Benchmark runs need
    the pointer on a 2,560 × 1,440 display and the screen lock off: KWin opens the window on the
    active display, and a run on `6e3f2d9` had single frames of up to 478 ms that twelve runs without
