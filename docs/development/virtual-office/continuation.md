@@ -45,7 +45,11 @@ anything lasting into its maintained owner.
   `565366e` adds the allocator's account to bench summaries, and all three profiles and the scripts
   ran in the window on `6e3f2d9`. Measurements in the
   [budgets](../../reference/performance-budgets.md#capacity-after-07), drafts and the recorded
-  before/after case results under `target/drafts/capacity/`.
+  before/after case results under `target/drafts/capacity/`. Then `7f9d267` lists each body's
+  pair candidates once a substep: the body pass at 4,096 dense bodies fell from 5.0–5.1 to 2.3 ms,
+  the bodies bit for bit as before (`check all` 162 of 162; [the dense body
+  pass](../../reference/performance-budgets.md#the-dense-body-pass); drafts, the per-kernel
+  timestamp patch and the run records under `target/drafts/dense/`).
 - **The GPU transition (00–07) is complete and qualified** on the nominated desktop (RTX 5070 Ti,
   `vulkan-10de-2c05`, NVIDIA 615.78.08, Linux 7.2.11, KWin Wayland). The final acceptance of
   A01–A15, the feature inventory, the baseline's dispositions and the commands are in the
@@ -72,9 +76,12 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    ([budgets](../../reference/performance-budgets.md#the-three-profiles-after-the-window-move)):
    frame medians 0.64–0.80 ms at radius 6, 1.64–1.89 ms at radius 16 and 4.99–11.72 ms at radius 32,
    the dense radius-32 runs at 60 ticks/s with no tick discarded and the longest capacity frame 23.8
-   ms. What remains: the body pass at 4,096 dense bodies, about 5.1 ms a tick (see the [dense-pile
-   discussion](whiteboard/discussions/dense-pile-convergence.md) before touching the body solver);
-   3–5% of radius-6 frames still wait 10.09 ms for a swapchain image (item 1). Benchmark runs need
+   ms. The body pass at 4,096 dense bodies then fell from 5.0–5.1 to 2.3 ms with the same results
+   (`7f9d267`, headless; the window has not measured it). What remains of it is the solver's 64
+   passes (about 0.93 ms; fewer would be a physics change, see the [dense-pile
+   discussion](whiteboard/discussions/dense-pile-convergence.md)) and the terrain contact (about
+   1.2 ms, mostly the bodies that reach the ground); 3–5% of radius-6 frames still wait 10.09 ms
+   for a swapchain image (item 1). Benchmark runs need
    the pointer on a 2,560 × 1,440 display and the screen lock off: KWin opens the window on the
    active display, and a run on `6e3f2d9` had single frames of up to 478 ms that twelve runs without
    the lock did not. No frame rate is promised at radius 32.

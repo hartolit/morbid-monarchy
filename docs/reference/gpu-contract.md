@@ -133,7 +133,7 @@ little-endian 32-bit word, so field `n` is at byte `4n` in both languages:
 | `BodySampleRecord` | 96 | Per selected body and tick: status, the echoed handle, flags, anchored position, velocity, ground normal, submerged fraction, liquid, touching, counters. |
 | `BodyParams` | 128 | Uniform per tick: body extent and capacity, substeps and their length, elevation scale, samples, broadphase, hash mask, the regions of the bodies and bins buffers. |
 | `BodyDispatch` | 16 | Uniform, one entry per (substep, pass) at the offset alignment: substep, pass, ping-pong parity. |
-| `BodyDiagnosticsRecord` | 128 | Per tick: candidate pairs and pair visits (64-bit), contacts, swept contacts, terrain contacts, residual overlap and approach, speed-limited substeps, the body accounting (64-bit), craters, ruts, splashes, wakes, lost claims, live and suspended bodies. |
+| `BodyDiagnosticsRecord` | 128 | Per tick: candidate pairs and pair visits (64-bit), pair-list overflows, contacts, swept contacts, terrain contacts, residual overlap and approach, speed-limited substeps, the body accounting (64-bit), craters, ruts, splashes, wakes, lost claims, live and suspended bodies. |
 
 Kernels see window-local coordinates only: cell `(0, 0)` is the first cell of the window's lowest
 chunk. A window map holds one slot index per window chunk, or `SLOT_NONE`, which every kernel treats
@@ -426,7 +426,11 @@ slot, so both solve exactly the same pairs and give bit-identical bodies (`dense
 centres, a lattice on the bin edges and fast bodies.
 
 *Solver.* A per-body Jacobi gather with explicit limits: `GpuWorldConfig::pair_iterations`
-position and velocity passes per substep (each even, 2–16, default 16 and 16). Each pass runs one
+position and velocity passes per substep (each even, 2–16, default 16 and 16). The count pass
+walks each body's bins and records its candidates in its pair list (64 per body, in the bins
+buffer); the position, velocity and residual passes read the list, and a body with more
+candidates walks its bins in every pass instead, counted as a pair-list overflow (since
+`7f9d267`; before, every pass walked the bins). Each pass runs one
 64-lane workgroup per body; the lanes share its candidates and every contribution meets the
 others as an integer (fixed-point sums at 2⁻¹⁶ units and 2⁻¹² units/s, counts) or as the bits of
 a non-negative float (maxima), so the result is independent of order and deterministic. Position

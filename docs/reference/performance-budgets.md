@@ -259,14 +259,17 @@ world at the same tick as the 30, 60 and 144 Hz runs, which discarded nothing.
 **Resources.** Body state is sized by the body capacity `B` (default 4,096) and the samples per
 tick `S` (default 64), not by the window: the bodies buffer holds `92 B + 26 S` words (state 32,
 configuration 4 and solver work 56 words per body; observe list and sample records), the bins
-`3 H + B + 4` words with `H` the hash table, a power of two at least `2 B`, and the dispatch
-table one 256-byte entry per (substep, pass), 192 entries. At the defaults that is 1,513,984 B of
-bodies, 114,704 B of bins and 49,152 B of dispatch table: 1.6 MiB in all. The window gains one
+`3 H + 66 B + 4` words with `H` the hash table, a power of two at least `2 B` (`3 H + B + 4`
+until `7f9d267` added each body's candidate count and its [pair list](#the-dense-body-pass) of
+64), and the dispatch table one 256-byte entry per (substep, pass), 192 entries. At the defaults
+that is 1,513,984 B of bodies, 1,179,664 B of bins (114,704 B before the pair lists) and 49,152 B
+of dispatch table: 2.6 MiB in all (1.6 MiB before). The window gains one
 claim word per cell (`4 N`), so terrain-related state is `29.125 N + 40 C + 64` bytes against the
 `48 N + 64 C` envelope: 20,167,848 B at radius 6, 129,956,968 B at radius 16 and 504,194,664 B at
 radius 32. Nothing is appended and no list has a capacity a cluster can exceed: bins have no
-per-bin capacity, a footprint fits its workgroup's 27 × 27 cells by the radius limit, and the
-event and sample buffers are bounded with their overflow counted.
+per-bin capacity, a body whose candidates overflow its pair list walks its bins instead (counted),
+a footprint fits its workgroup's 27 × 27 cells by the radius limit, and the event and sample
+buffers are bounded with their overflow counted.
 
 **Per-tick traffic.** On top of 03's, each tick uploads the 128-byte body parameters and 8 B per
 sampled body (handle) and reads back the 128-byte body diagnostics, 96 B per sample and, with
@@ -838,8 +841,10 @@ to 0.09 ms of device time (170,151 active tiles to 54). The landscape marched it
 shadows and occlusion for every vertex of every drawn chunk every frame; since `63f8ce6` the
 renderer keeps that lighting per chunk vertex and relights only the chunks whose cells, or whose
 neighbours toward the sun, changed, and the scene passes at radius 32 fell from 14.84 ms to
-4.57 ms (from 4.30 to 1.47 ms at radius 16). What remains is the dense pile: with 4,096 dense
-bodies the body pass still takes 5.12 ms of a 5.23 ms tick (8.20 ms before).
+4.57 ms (from 4.30 to 1.47 ms at radius 16). With 4,096 dense bodies the body pass still took
+5.12 ms of a 5.23 ms tick (8.20 ms before); since `7f9d267` the pair solver reads each body's
+candidates from a list made once a substep, and it takes 2.29 ms of a 2.41 ms tick ([the dense
+body pass](#the-dense-body-pass)).
 
 Executed evidence, offscreen and headless on the RTX 5070 Ti (Vulkan, NVIDIA 615.78.08, Linux
 7.2.11): `bodies` `capacity-tick-phases` and `render` `frame-cost` and `lighting-cache-matches` in
@@ -860,14 +865,16 @@ with the 95th percentile in parentheses, in device milliseconds:
 | idle, after | 54 | 0.09 (0.24) | 0.02 | 0.05 (0.18) | – |
 | body-contact (4,096 bodies), before | 169,313 | 8.20 (9.64) | 0.44 | 2.73 (3.16) | 5.01 (6.27) |
 | body-contact (4,096 bodies), after | 559 | 5.23 (6.18) | 0.03 | 0.07 (0.22) | 5.12 (6.06) |
+| body-contact, pair lists (`7f9d267`) | 559 | 2.41 (2.81) | 0.03 | 0.07 (0.23) | 2.29 (2.70) |
 
 The foliage rule and its consequences are in the
 [GPU contract](gpu-contract.md#rule-changes-from-the-baseline-03-and-after-07); `cells`
 `dry-foliage-sleeps` shows the generated world falling asleep and poured water waking dry foliage.
-The body pass at 4,096 dense bodies is the solver's convergence on a crushed pile
-([bodies](#bodies-04)); the
+The last row is the median of five runs ([the dense body pass](#the-dense-body-pass)); what
+remains of the body pass is the solver's 64 passes over a crushed pile ([bodies](#bodies-04)) and
+the terrain contact, and the
 [dense-pile discussion](../development/virtual-office/whiteboard/discussions/dense-pile-convergence.md)
-holds what would change it.
+holds what would change the passes.
 
 **The scene passes.** `frame-cost` as in [06](#native-client-06), now at radius 32 too, each
 window in three lighting modes: the cache (the renderer's path), every vertex lit per frame (the
@@ -1063,6 +1070,90 @@ gaps](../product/status.md#known-gaps).
 
 The scripted runs pass on the same tree (`target/evidence/move-scripts/`, 11:57 UTC): `features` 41
 checks, `loss` 6 and `worlds` 5.
+
+### The dense body pass
+
+**Result.** With 4,096 dense bodies at radius 32 the body pass took 5.02–5.10 ms of device time
+of a 5.14–5.23 ms tick; since `7f9d267` it takes 2.28–2.29 ms of a 2.40–2.42 ms tick (p95 2.69–2.72
+ms, was 5.99–6.11), and the bodies end exactly where they did. The pair solver's 32 passes a substep
+walked each body's 27 bins and ran the generation test again in every pass, although its inputs
+(where the substep's integration left the bodies, and their radii) do not change during the solve:
+89% of the 37.1 million bin slots the passes visited a tick were rejected. Now `pairs_count`, which
+walks the bins once a substep, records each body's candidates in a pair list of 64, and the
+position, velocity and residual passes read the list ([GPU contract](gpu-contract.md#bodies-04)).
+A body with more candidates walks its bins in every pass, as before, and is counted
+(`BodyReport::pair_list_overflows`); the capacity workload has none.
+
+Executed evidence, headless on the RTX 5070 Ti (Vulkan, NVIDIA 615.78.08, Linux 7.2.11):
+`bodies` `capacity-tick-phases` with `54f454b`'s `gpu-suite` and `7f9d267`'s in five alternating
+pairs, 2026-10-22 12:55–12:56 UTC; `body-scaling-bins`, `body-legacy-workloads` and `body-pacing`
+with both binaries right after; `cargo evidence check all --adapter vulkan-10de-2c05` on `7f9d267`
+(passed, 162 of 162 items, 12:58–13:04 UTC, `target/evidence/dense-check-all/`). Records of the
+draft runs are in `target/drafts/dense/`.
+
+**Where the time went.** A draft patch (`target/drafts/dense/kernel-times.patch` on `54f454b`,
+`kernel-times-7f9d267.patch` on `7f9d267`, not committed) writes a timestamp after every body dispatch (`TIMESTAMP_QUERY_INSIDE_PASSES`) and adds about
+0.2 ms to the pass. Medians per tick of the measured ticks, both substeps, in milliseconds:
+
+| Kernels | Dispatches per tick | Before (`54f454b`) | After (`7f9d267`) |
+| --- | ---: | ---: | ---: |
+| `pairs_position` | 32 | 1.92 | 0.45 |
+| `pairs_velocity` | 32 | 1.72 | 0.48 |
+| `pairs_count`, `pairs_residual` | 4 | 0.19 | 0.12 |
+| `contact_prepare`, `contact_apply`, `contact_response` | 6 | 1.09 | 1.18 |
+| `claims_clear`, `displace_prepare`, `displace_apply` | 8 | 0.13 | 0.13 |
+| Bins, integration (`body_begin`, `body_end`) and `body_observe` | 13 | 0.09 | 0.09 |
+| The body pass, instrumented | 95 | 5.25–5.32 | 2.51 |
+
+Three alternating runs of each binary, 2026-10-22 13:05 UTC; the runs agree within 0.04 ms
+a row. `contact_response` takes 0.58 ms before and 0.70 ms after in every run, `contact_prepare`
+0.40 and 0.37 ms, although neither kernel changed; why is not measured.
+
+The solver's work per tick, from its diagnostics: 37,086,238 bin slots visited before and 5,318,679
+after, the same 4,167,348 candidates and 91,998 contacts.
+
+**The same computation.** Each pair's contribution is summed in fixed point or compared as the
+bits of a non-negative float, so the result does not depend on the order candidates are found in,
+and the list holds exactly the candidates the bins yield (`broadphase-oracle` now runs
+`pairs_count` and checks that every body in contact enumerates exactly its generated candidates in
+a solver pass, from its list exactly when they fit: 241 bodies of its dense cluster listed, 15
+overflowed). After the capacity case, hashes of every body slot's state and configuration and of
+the window's 138 MB of cells (a draft readback) are those of `54f454b`'s binary, and every
+workload below reports the same candidates, contacts and residuals with both binaries. The rules
+compute what they did, so the physics revision stays 2.
+
+| Workload (`body-scaling-bins`, `body-legacy-workloads`) | Body pass median before / after | p95 before / after | Pair slots visited per tick before / after |
+| --- | ---: | ---: | ---: |
+| Dense 64 | 0.67 / 0.50 ms | 0.71 / 0.55 ms | 165,387 / 31,726 |
+| Dense 256 | 1.40 / 0.96 ms | 1.52 / 1.14 ms | 1,286,819 / 175,158 |
+| Dense 1,024 | 2.09 / 1.44 ms | 2.23 / 1.59 ms | 7,883,352 / 871,444 |
+| Dense 4,096 | 8.09 / 3.78 ms | 8.44 / 4.06 ms | 73,400,940 / 6,745,527 |
+| Dense 4,096, 8 + 8 passes | 9.83 / 6.79 ms | 10.31 / 7.23 ms | 99,348,557 / 64,626,905 |
+| Dense 4,096, 4 + 4 passes | 11.79 / 11.12 ms | 12.27 / 11.81 ms | 129,476,422 / 123,164,485 |
+| Distributed 64–4,096 | 0.24–0.93 / 0.24–0.92 ms | – | unchanged (no contacts) |
+| Legacy qualification (64 bodies, radius 6) | 0.62 / 0.45 ms | 0.82 / 0.65 ms | 95,518 / 29,061 |
+| Legacy scale (256 bodies, radius 16) | 0.82 / 0.60 ms | 1.21 / 0.86 ms | 648,231 / 153,228 |
+
+With fewer passes the pile stays more compressed, and most bodies' candidates overflow their
+lists, so 4 + 4 gains little; the default 16 + 16 is now the cheapest of the three by more than
+before. `body-pacing` keeps 60 ticks/s with no tick discarded with both.
+
+**Tried and not kept.** Four bodies per pair workgroup, 16 lanes each, left the position passes
+at 0.46 ms and made the velocity passes slower (0.59 against 0.49 ms): with the lists, the passes
+are not short of lanes. A test that skips a body's terrain probes when no vertex of its probe box
+lies within reach of it (exact, since no point of a triangle lies above its highest vertex) found
+about 630 of the 4,096 bodies a substep within reach of the ground, and saved 0.065 ms a tick
+(`contact_prepare` 0.39 to 0.35, `contact_response` 0.69 to 0.66 ms, one run each): not worth
+the second path.
+
+**What remains.** The 64 position and velocity passes take about 0.93 ms, some 15 µs a dispatch
+over 4,096 workgroups; fewer passes would change what the solver computes (a physics revision, the
+[dense-pile discussion](../development/virtual-office/whiteboard/discussions/dense-pile-convergence.md)),
+and 8 + 8 is slower anyway. Terrain contact takes about 1.2 ms, now half the pass, most of it in
+the bodies that reach the ground, which probe it up to six times a substep in order (the
+baseline's manifold); an extra probe for them costs about 0.03 ms a dispatch. No window run has
+measured the frame times since; the dense radius-32 frame medians of 10.55–11.72 ms
+([above](#the-three-profiles-after-the-window-move)) predate it.
 
 ## Structural gates
 

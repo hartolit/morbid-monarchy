@@ -18,7 +18,9 @@ the mean of its partners' corrections, so a correction propagates through a pile
 pass; a heavy body with many partners moves little per pass. Equal position splits, the terrain
 slide and the 16-pass default each reduced the residual measurably during 04; more passes cost
 little in this case (the dense 4,096 pile is cheaper at 16 + 16 than at 4 + 4, because it is less
-compressed).
+compressed). Since `7f9d267` the passes read each body's candidates from a list made once a
+substep: at 4,096 dense bodies the 64 passes take about 0.93 ms of a 2.3 ms body pass, some 15 µs
+each ([the dense body pass](../../../../reference/performance-budgets.md#the-dense-body-pass)).
 
 **Alternatives.** (1) No change: the limit is declared and tested, and piles of frictionless
 spheres (the baseline has no body friction) keep flowing anyway. (2) Raise the pass limit above
