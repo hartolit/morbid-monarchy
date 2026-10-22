@@ -84,9 +84,9 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    three native runs, is fixed in `b145fc9`: the sphere rocked in a three-tick cycle the 30-frame
    stillness test missed; each window move is now judged by the tick that carries it and the
    median still sphere after it (20 of 20 headless runs, `check all` 163 of 163, draft origin and
-   resume faults failing it; drafts under `target/drafts/rebase-check/`); the native consumer has
-   not run on it. The sampler, the drafts and the earlier clients under `target/drafts/acquire/`,
-   runs under `target/evidence/acquire/`.
+   resume faults failing it; drafts under `target/drafts/rebase-check/`), and with the native
+   consumer three of three runs on `1c900d0`. The sampler, the drafts and the earlier clients under
+   `target/drafts/acquire/`, runs under `target/evidence/acquire/`.
 2. **Capacity limits, the frame and tick costs done:** dry foliage sleeps (`10cf62f`, physics
    revision 2), the landscape's lighting is cached per chunk vertex (`63f8ce6`, `d4d2d6c`) and a
    window move happens in place without waking the window (`67edbc2`, the user's choice). 07's

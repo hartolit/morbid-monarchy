@@ -1355,8 +1355,10 @@ run: the body pass keeping the old origin (16.7 units in the tick), the origin c
 (1.45), a resume one cell east (1.04) and bodies placed a unit high (0.02 in the tick, a median of
 0.45 over the frames after, which only the median catches). A sphere that rolled off to x = 132,
 outside the shifted window's reach, is rightly suspended by the move (one of 30 runs before the
-fix flagged it); the check now holds only the bodies the shifted window holds to their pace. The
-native consumer has not run on `b145fc9`.
+fix flagged it); the check now holds only the bodies the shifted window holds to their pace. With
+the native consumer on `1c900d0`'s tree (`b145fc9`'s code), three of three runs passed, 20:30–20:31
+UTC (`target/evidence/1c900d0-native-scenario-*`): the largest move in the tick of a move 0.022,
+the medians after 0.004 at most.
 
 ## Structural gates
 
