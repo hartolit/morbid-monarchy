@@ -11,8 +11,8 @@ world at rest no longer keeps dry foliage awake (`10cf62f`, physics revision 2) 
 lighting is cached per chunk vertex and relit only where cells changed (`63f8ce6`, `d4d2d6c`), and a
 window move keeps the window's buffers and wakes nothing beyond its rows (`67edbc2`), all measured
 again in the window with 07's protocol on `6e3f2d9`; since then the body solver lists each body's
-pair candidates once a substep instead of walking its bins in every pass (`7f9d267`, measured
-headless). The native client (`morbid-app`, `apps/morbid`)
+pair candidates once a substep instead of walking its bins in every pass (`7f9d267`, the dense
+capacity cases measured again in the window on `920d097`). The native client (`morbid-app`, `apps/morbid`)
 is the application: a winit window with an egui overlay over the runtime's `WorldSession`, the saved
 world in `world-store`, the GPU owner `gpu-world` and the renderer `world-render`, all on one
 device. The GPU owns cells and bodies; the CPU issues intent, manages residency and saves. 06
@@ -46,27 +46,33 @@ The Bevy baseline, measured at `6e108d6` on the nominated machine (Ryzen 9 5950X
 Vulkan, KDE Wayland), five valid runs per case, missed the qualification budget in body-contact
 (p95 18.7 ms) and coupled (p95 28.6 ms, p99 32.1 ms) and fell behind real time in every active
 scale case (17–30 ticks/s). The native client, measured on 2026-10-22 with the same protocol at
-`67edbc2`'s code (five valid runs per case of every profile, a clean tree, the person away from the
-desktop; 07's qualification at `eb9d8fb` and the runs between are in the budgets):
+`67edbc2`'s code and capacity's body-contact and coupled again at `7f9d267`'s (five valid runs per
+case, a clean tree, the person away from the desktop; 07's qualification at `eb9d8fb` and the runs
+between are in the budgets):
 
 | Profile | Frame median native / baseline | p95 native / baseline | Worst p99 | Ticks/s native / baseline | CPU per tick (simulation) | Grid transfer |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Qualification (radius 6, 64 bodies) | 0.64–0.80 / 3.57–17.12 ms | 0.9–10.6 / 6.1–28.6 ms | 10.72 ms | 59.4–60 / 60 | 0.07–0.28 / 2.1–13.1 ms | none / 0.60–0.85 GiB/s |
 | Scale (radius 16, 256 bodies) | 1.64–1.89 / 27.0–223.8 ms | 1.7–3.3 / 36.7–252.6 ms | 3.55 ms | 59.8–60 / 17–60 | 0.30 with bodies / 7.6–51.6 ms | none / 0.76–3.15 GiB/s |
-| Capacity (radius 32, up to 4,096 bodies) | 4.99–11.72 ms | 6.3–14.0 ms | 16.17 ms | 60 | – | none |
+| Capacity (radius 32, up to 4,096 bodies) | 4.99–7.27 ms | 6.3–10.7 ms | 11.44 ms | 60 | – | none |
 
 Every profile's p95s and p99s are inside the qualification budget (p95 ≤ 16.67 ms, p99 ≤ 25 ms),
 which only the qualification profile promises; capacity admits its workloads and reports when it
 falls behind (counted discarded ticks, pressure) instead of truncating physics, and since `10cf62f`,
 `63f8ce6` and `67edbc2` it keeps 60 ticks/s with 4,096 dense bodies (medians before them 18.1–27.1
-ms, worst p99 51.6 ms, 52 ticks/s). Seven frames of 53–478 ms in radius-6 and radius-16 coupled and
+ms, worst p99 51.6 ms, 52 ticks/s), and since `7f9d267` at frame medians of 7.04–7.27 ms
+(10.55–11.72 before it) with no frame over 16.67 ms
+([budgets](../reference/performance-budgets.md#the-dense-body-pass)). Seven frames of 53–478 ms in radius-6 and radius-16 coupled and
 streaming runs waited for the device, a few ticks were discarded after them, and twelve alternating
 runs with the screen lock off had none, with or without the window move; the person's screen may
 have locked
 ([budgets](../reference/performance-budgets.md#the-three-profiles-after-the-window-move)). Without
 vsync, as the frozen profiles present, some frames wait 10.09 ms for a swapchain image: 3–5% of the
 frames at radius 6, so they set the worst p99 near 10.7 ms there and, in three body-contact runs
-over 5%, the p95; they do not occur with vsync. The loop runs one frame per presented frame at
+over 5%, the p95; they do not occur with vsync. They are a 10 ms sleep in the NVIDIA driver's
+wait on the fence wgpu 29 passes to each acquisition, measured on 2026-10-22: without that wait or
+without the driver's explicit sync no frame waits
+([budgets](../reference/performance-budgets.md#swapchain-acquisition-after-07)). The loop runs one frame per presented frame at
 radius 6 (1.1 at radius 16, 1.3–1.5 at radius 32) and spends 0.5–0.6 ms of main-thread CPU per
 presented frame at radius 6, 0.7–0.8 ms at radius 16 and 1.4–1.9 ms at radius 32. Simulation CPU per
 tick is the encoding and submission of a tick and the session's owners, measured by the GPU suites.
@@ -80,14 +86,18 @@ since [after them](../reference/performance-budgets.md#the-three-profiles-after-
   frames wait a constant 10.09 ms for a swapchain image: up to 22% of a run's frames in 07's
   measurements, at most 4.2% on `2c63b64` and 3–5.4% at radius 6 on `6e3f2d9` (none at radius
   16, at most 1.9% at radius 32), which set the worst p99 near 10.7 ms and, in three runs over 5%,
-  the p95. The wait does not depend on the swapchain's length and does not occur with vsync;
-  attributing it to the driver is an inference.
+  the p95. It does not occur with vsync. Sampled on Wayland: wgpu-hal 29.0.4 waits on a fence after
+  every acquisition, and when the image is not yet free the driver sleeps 10 ms in `poll` with no
+  file descriptor; a draft wgpu-hal without that wait, and `__NV_DISABLE_EXPLICIT_SYNC=1`, each
+  removed every wait. wgpu 30 waits on that fence on Windows only; no remedy is applied
+  ([swapchain acquisition](../reference/performance-budgets.md#swapchain-acquisition-after-07)).
 - The loop's 250 µs idle wait delays the fastest frames by about 0.1 ms at radius 6 (the frame
   median is unchanged).
 - With 4,096 dense bodies at radius 32 the body pass takes 2.3 ms of device time per tick since
   `7f9d267` (5.0–5.1 ms before), half of it the solver's 64 passes and half the terrain contact;
-  fewer passes would change the physics. The window kept 60 ticks/s at 10.6–11.7 ms frame medians
-  before the change and has not run since. A window move was a full resize (a second
+  fewer passes would change the physics. In the window the dense cases keep 60 ticks/s at
+  7.04–7.27 ms frame medians (10.6–11.7 ms before), their frames alternating between about 6.5 ms
+  and 10.5 ms, two to a tick. A window move was a full resize (a second
   window, every chunk copied, every cell woken) and made one 32–40 ms frame in each coupled run on
   `76376d8`; since `67edbc2` it happens in place and the longest capacity frame is 23.8 ms ([window
   moves](../reference/performance-budgets.md#window-moves)). Process GPU memory at radius 32 reaches
@@ -128,7 +138,7 @@ constraints above ([roadmap](roadmap.md#after-qualification)).
 | GPU correctness and buffer layout | Passed (after 07, every suite) | `cargo evidence check all --adapter vulkan-10de-2c05` on `7f9d267`'s tree (162 of 162 items, 2026-10-22 12:58–13:04 UTC, `target/evidence/dense-check-all/`): `transfers` (28 cases), `cells` (33), `bodies` (33), `streaming` (23), `render` (15) on the RTX 5070 Ti, NVIDIA 615.78.08, Linux 7.2.11. |
 | Connected scenario | Passed (headless after 07; native in 07) | `cargo evidence run --scenario resident-world --adapter vulkan-10de-2c05`: all six steps, step 6 the adversarial repeat, headless on `7f9d267`'s tree (in `check all`) and with `--consumer native` on `eb9d8fb`'s (07; its viewer has its own loop, which `2c63b64` did not change). |
 | Native interactive client | Passed (after 07, scripted in the real window) | `native-client script features` (41 checks), `loss` (6) and `worlds` (5) on `6e3f2d9`'s tree, `67edbc2`'s code (`target/evidence/move-scripts/`); `features` three times on `2c63b64`; the packaged fresh start outside the repository on `eb9d8fb` (07). |
-| Primary hardware performance | Qualified (07), measured again after it | `cargo evidence bench --profile qualification`, `scale` and `capacity` with `--runs 5` at `eb9d8fb` (07), compared with the baseline's summaries in `tools/evidence/baselines/legacy-6e108d6/` ([budgets](../reference/performance-budgets.md#integrated-qualification-07)), and at `2c63b64` against 07 ([budgets](../reference/performance-budgets.md#client-loop-without-vsync-after-07)); radius 32's tick phases and scene passes headlessly on `d4d2d6c` and `capacity` with `--runs 5` on `76376d8`'s tree after them ([budgets](../reference/performance-budgets.md#capacity-after-07)); all three profiles on `b766ae9`, 119 of 124 attempts rejected for the window's size (KWin's placement), and again on `6e3f2d9`, every attempt valid ([budgets](../reference/performance-budgets.md#the-three-profiles-after-the-window-move)). |
+| Primary hardware performance | Qualified (07), measured again after it | `cargo evidence bench --profile qualification`, `scale` and `capacity` with `--runs 5` at `eb9d8fb` (07), compared with the baseline's summaries in `tools/evidence/baselines/legacy-6e108d6/` ([budgets](../reference/performance-budgets.md#integrated-qualification-07)), and at `2c63b64` against 07 ([budgets](../reference/performance-budgets.md#client-loop-without-vsync-after-07)); radius 32's tick phases and scene passes headlessly on `d4d2d6c` and `capacity` with `--runs 5` on `76376d8`'s tree after them ([budgets](../reference/performance-budgets.md#capacity-after-07)); all three profiles on `b766ae9`, 119 of 124 attempts rejected for the window's size (KWin's placement), and again on `6e3f2d9`, every attempt valid ([budgets](../reference/performance-budgets.md#the-three-profiles-after-the-window-move)); capacity's body-contact and coupled with `--runs 5` on `920d097` (code `7f9d267`), every attempt valid ([budgets](../reference/performance-budgets.md#the-dense-body-pass)). |
 | Fault recovery and legacy save import | Passed (07; the loss bound after it) | `streaming` cases, since `2932764` `bounded-loss` at the client's autosave cadence (a lost device, an interrupted process and failing storage, each within or reporting the bound); `resident-world` step 6 (failed writes, a failed and retried save, device loss, process interruption before and after publication, orderly close, fresh reopen); `world-store` tests, since `b7d86bb` damaged and foreign worlds refused before the file is opened for writing; the `loss` and `worlds` scripts (on `2c63b64`); a damaged legacy save refused by the start screen and by `world-store import-legacy`. |
 | Secondary GPU / Windows / other platforms | Unqualified | No compatibility claim. Hosted CI runs the CPU and static lanes on Linux only. |
 

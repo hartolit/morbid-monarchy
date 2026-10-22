@@ -482,7 +482,8 @@ immediate present mode (about 94 frames a second) and on 369 of about 2,400 with
 400 frames a second); submission took 0.3 ms and the present call 0.06 ms. The interval matches
 no display's refresh, so it is not pacing by the compositor's frame rate; the client now prefers
 mailbox. These waits are the 10.6–11 ms frames that set every case's p95; 07 measured them on
-other paths ([below](#integrated-qualification-07)).
+other paths ([below](#integrated-qualification-07)), and what they wait for is in [swapchain
+acquisition](#swapchain-acquisition-after-07).
 
 ## Integrated qualification (07)
 
@@ -636,7 +637,8 @@ frames set the 95th percentile:
 The same constant wait on two window systems, insensitive to the swapchain's length and absent
 whenever presentation follows the display, points at the driver's wait for a free image when
 frames outrun the compositor (an inference: neither the driver's nor KWin's source was
-inspected). A person's client presents with vsync by default and never waits in this way; the
+inspected). Since sampled: a 10 ms sleep in the driver's wait on the fence wgpu passes to each
+acquisition ([swapchain acquisition](#swapchain-acquisition-after-07)). A person's client presents with vsync by default and never waits in this way; the
 qualification budget holds either way.
 
 **The loop's iterations.** Without vsync the client's loop never blocks: while both
@@ -1151,9 +1153,82 @@ over 4,096 workgroups; fewer passes would change what the solver computes (a phy
 [dense-pile discussion](../development/virtual-office/whiteboard/discussions/dense-pile-convergence.md)),
 and 8 + 8 is slower anyway. Terrain contact takes about 1.2 ms, now half the pass, most of it in
 the bodies that reach the ground, which probe it up to six times a substep in order (the
-baseline's manifold); an extra probe for them costs about 0.03 ms a dispatch. No window run has
-measured the frame times since; the dense radius-32 frame medians of 10.55–11.72 ms
-([above](#the-three-profiles-after-the-window-move)) predate it.
+baseline's manifold); an extra probe for them costs about 0.03 ms a dispatch.
+
+**In the window.** `cargo evidence bench --profile capacity --adapter vulkan-10de-2c05 --runs 5
+--case body-contact --case coupled` on `920d097`, a clean tree whose code is `7f9d267`'s,
+2026-10-22 14:25–14:29 UTC; host, adapter, presentation and protocol as in
+[07](#integrated-qualification-07), the person away from the desktop with the pointer on a
+2,560 × 1,440 display and the screen lock off. Every attempt was valid and none contended
+(`target/evidence/dense-bench-capacity/`). The values on `6e3f2d9`
+([above](#the-three-profiles-after-the-window-move)) are in parentheses, except in the diagnostic
+column, where the parenthesis is the body pass of the same run:
+
+| Case | Median | Run p95s | Worst p99 | Max | Frames > 16.67 ms | Ticks/s, discarded | Main-thread CPU per frame | Allocations per frame | Diagnostic run's tick (its body pass) | GPU memory peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| body-contact | 7.04 (11.72) | 10.51–10.66 (13.52–13.98) | 10.97 (14.75) | 13.50 (17.85) | 0 (1) | 60.0, 0 (60.0, 0) | 1.73 (1.93) ms | 1216 (1342) | 2.70 ms (2.56) | 1,294 (1,294–1,296) MiB |
+| coupled | 7.27 (10.55) | 10.25–10.60 (14.41–14.79) | 10.97 (16.17) | 12.93 (23.80) | 0 (12) | 60.0, 0 (60.0, 0) | 1.73 (1.86) ms | 1241 (1360) | 2.58 ms (2.40) | 1,294–1,296 (1,294–1,296) MiB |
+
+Frames alternate between about 6.5 ms, the frame that submits a tick, and about 10.5 ms, the
+frame after it: two frames a tick, as on `6e3f2d9` at about 6 and 11–13 ms. No frame waited for a
+swapchain image (the acquisition's p99 is at most 0.05 ms in every run), so the run p95s near
+10.5 ms are that alternation, not the waits of [swapchain
+acquisition](#swapchain-acquisition-after-07).
+
+## Swapchain acquisition (after 07)
+
+**Result.** The constant 10.09 ms waits for a swapchain image without vsync are a 10 ms sleep in
+the NVIDIA driver, inside the `vkWaitForFences` that wgpu-hal 29.0.4 calls after every
+`vkAcquireNextImageKHR` on the fence the acquisition signals (`NativeSwapchain::acquire`; the
+wait was added for frame pacing on Windows' DXGI swapchains, gfx-rs/wgpu issues 8310 and 8354).
+When the acquired image is not yet free, the driver sleeps in `poll` with no file descriptor and
+a 10 ms timeout instead of waiting for the fence, so the frame loses 10 ms however soon the
+image frees (that it checks the fence only between such sleeps is an inference from the call
+and the constant length; the driver's source was not inspected). Turning off the driver's
+explicit synchronization on Wayland (`__NV_DISABLE_EXPLICIT_SYNC=1`) or not waiting on the
+acquisition's fence (a draft wgpu-hal) removes every wait. wgpu-hal 30.0.1 creates that fence on
+Windows only, so a client on wgpu 30 would not wait this way (read in its source, not measured).
+With vsync (FIFO), a person's default, no frame waits.
+
+Executed evidence: 07g's 15 s radius-6 idle scenario without vsync (mailbox, 1,920 × 1,080 on a
+2,560 × 1,440 display), two runs of each client below, 2026-10-22 14:22–14:31 UTC, with
+`7f9d267`'s client, the person away from the desktop (`target/evidence/acquire/`). A sampler
+(`target/drafts/acquire/sample.py`) ran the client as its child and read its main thread's
+current system call (`/proc/PID/task/PID/syscall`) every 0.2 ms, recording every call that
+blocked for 3 ms or more with its arguments, what they point at and the return addresses on its
+stack.
+
+**What blocks.** In the two runs of the client as shipped, 751 and 695 calls (the frames whose
+acquisition took over 5 ms, 669 and 616 of the measured ones, and the warm-up's) were
+`poll(fds, 0, 10)`: no file descriptor and a 10 ms timeout, 9.78–10.31 ms each, and the stacks
+of all but 16 held return addresses in `libnvidia-glcore.so.615.78.08` under
+`wgpu::Surface::get_current_texture` and
+wgpu-hal's `NativeSwapchain::acquire`, at the call after `vkAcquireNextImageKHR` that passes the
+device, one fence, wait-all and the timeout (`vkWaitForFences`, by disassembly). Apart from the
+start and the close of a run (shader compilation, the world's creation, the closing save), no
+other system call blocked for 3 ms or more.
+
+| Client, two runs | Frames presented | Frame median | p95 | p99 | Max | Acquisitions over 5 ms | 10 ms sleeps in the driver | Main-thread CPU per frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| As shipped (wgpu-hal 29.0.4) | 12,567, 13,495 | 0.64, 0.63 ms | 10.57, 1.03 ms | 10.64, 10.64 ms | 10.93, 10.97 ms | 669, 616 | 751, 695 | 0.48, 0.47 ms |
+| `__NV_DISABLE_EXPLICIT_SYNC=1` | 14,506, 14,530 | 1.00, 1.00 ms | 1.17, 1.15 ms | 1.41, 1.38 ms | 2.07, 2.85 ms | 0, 0 | 0, 0 | 0.44, 0.44 ms |
+| Draft wgpu-hal: no fence on the acquisition | 23,179, 22,474 | 0.62, 0.66 ms | 0.82, 0.83 ms | 0.98, 0.98 ms | 2.72, 2.55 ms | 0, 0 | 0, 0 | 0.53, 0.54 ms |
+
+The draft is wgpu-hal 29.0.4 with `vkAcquireNextImageKHR` given no fence and the wait on it
+removed (`target/drafts/acquire/wgpu-hal-nowait.patch`), built with a `[patch.crates-io]` entry
+that was not committed. The frame's rendering
+still waits on the acquisition's semaphore on the device, so only the CPU's wait goes (read in
+wgpu-hal's source). Without explicit sync no frame sleeps, but the median frame is 1.00 ms
+against 0.64 ms; why is not measured. How often an acquired image is still in use, and so why
+the waits come at 3–5% of radius 6's frames, none of radius 16's and up to 1.9% of radius 32's,
+is not explained either. The 07 measurement of the same constant wait through Xwayland fits the
+same fence wait; it was not sampled.
+
+**Remedies, none applied (the user's choice).** Upgrading to wgpu 30 (egui-wgpu 0.36 and 0.37
+are on wgpu 30) removes the fence wait on Linux with the rest of the upgrade's changes, and
+would need the whole gate and the window profiles again; a patched wgpu-hal 29 is what the draft
+measured; setting `__NV_DISABLE_EXPLICIT_SYNC` in the client is specific to one driver and
+gives up the synchronization NVIDIA added for Wayland; or nothing, since vsync never waits.
 
 ## Structural gates
 

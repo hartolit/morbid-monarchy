@@ -66,9 +66,16 @@ None of these is authorized work; propose them to the user. The first comes from
 findings ([status](../../product/status.md#known-gaps) lists the gaps).
 
 1. **The 10.09 ms swapchain acquisition waits** without vsync (up to 22% of presented frames in
-   07, at most 4.2% since `2c63b64`) set the worst p99 near 10.7 ms. Measured on KWin Wayland
-   (mailbox) and Xwayland (immediate), absent with FIFO, unchanged by one more swapchain image;
-   blaming the NVIDIA driver is an inference. Next evidence would be another compositor or driver.
+   07, at most 4.2% since `2c63b64`, 3–5% at radius 6 on `6e3f2d9`) set the worst p99 near 10.7 ms.
+   Cause found on 2026-10-22 by sampling the client's main thread
+   ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)): wgpu-hal
+   29.0.4 waits on a fence after each `vkAcquireNextImageKHR`, and when the image is not yet free
+   the NVIDIA driver sleeps 10 ms in `poll` with no file descriptor. A draft wgpu-hal without the
+   wait, and `__NV_DISABLE_EXPLICIT_SYNC=1`, each removed every wait (p99 1.0 and 1.4 ms against
+   10.6). Open, the user's choice: upgrade to wgpu 30 (its fence is Windows-only; egui-wgpu 0.36+
+   is on wgpu 30), patch wgpu-hal 29, set the driver variable, or leave it (vsync never waits).
+   Drafts, the sampler and the draft client under `target/drafts/acquire/`, runs under
+   `target/evidence/acquire/`.
 2. **Capacity limits, the frame and tick costs done:** dry foliage sleeps (`10cf62f`, physics
    revision 2), the landscape's lighting is cached per chunk vertex (`63f8ce6`, `d4d2d6c`) and a
    window move happens in place without waking the window (`67edbc2`, the user's choice). 07's
@@ -77,7 +84,8 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
    frame medians 0.64–0.80 ms at radius 6, 1.64–1.89 ms at radius 16 and 4.99–11.72 ms at radius 32,
    the dense radius-32 runs at 60 ticks/s with no tick discarded and the longest capacity frame 23.8
    ms. The body pass at 4,096 dense bodies then fell from 5.0–5.1 to 2.3 ms with the same results
-   (`7f9d267`, headless; the window has not measured it). What remains of it is the solver's 64
+   (`7f9d267`), and the dense window cases' frame medians from 10.6–11.7 to 7.0–7.3 ms (on
+   `920d097`, `target/evidence/dense-bench-capacity/`). What remains of it is the solver's 64
    passes (about 0.93 ms; fewer would be a physics change, see the [dense-pile
    discussion](whiteboard/discussions/dense-pile-convergence.md)) and the terrain contact (about
    1.2 ms, mostly the bodies that reach the ground); 3–5% of radius-6 frames still wait 10.09 ms
