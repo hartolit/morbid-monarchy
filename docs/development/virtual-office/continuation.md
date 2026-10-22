@@ -78,9 +78,13 @@ findings ([status](../../product/status.md#known-gaps) lists the gaps).
 1. **The 10.09 ms swapchain acquisition waits — done.** They were a 10 ms sleep in the NVIDIA
    driver under the fence wgpu-hal 29.0.4 waited on after each `vkAcquireNextImageKHR`; the user
    chose the upgrade to wgpu 30 (`4485dad`), and since then no frame of any profile waits
-   ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)). Open from it:
-   which part of the upgrade costs 0.05–0.15 ms of main-thread CPU and 35 allocations per frame
-   (wgpu-core, the driver, or egui 0.37). Step 6's rebase check, which a sphere crossed once in
+   ([budgets](../../reference/performance-budgets.md#swapchain-acquisition-after-07)). The 0.05–0.15
+   ms of main-thread CPU it costs per frame is the NVIDIA driver taking longer for the same calls
+   (command buffer and render pass begins in the frame's `finish`), not egui and not the newly
+   enabled `VK_EXT_image_drm_format_modifier` (a draft without it cost the same); which wgpu-hal 30
+   change causes it is open and worth little
+   ([budgets](../../reference/performance-budgets.md#the-three-profiles-on-wgpu-30); the profiler,
+   counters and drafts under `target/drafts/wgpu30/`). Step 6's rebase check, which a sphere crossed once in
    three native runs, is fixed in `b145fc9`: the sphere rocked in a three-tick cycle the 30-frame
    stillness test missed; each window move is now judged by the tick that carries it and the
    median still sphere after it (20 of 20 headless runs, `check all` 163 of 163, draft origin and

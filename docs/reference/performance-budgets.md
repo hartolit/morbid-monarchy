@@ -1308,9 +1308,39 @@ client and `4485dad`'s, 18:23–18:27 UTC (`target/evidence/wgpu30-ab/scale-idle
 
 In this session wgpu 29's client waited 10 ms for 4.8% of its images at radius 16, where none of
 `6e3f2d9`'s scale runs did: how often an acquired image is still in use depends on more than the
-radius. Which part of the upgrade costs the CPU (wgpu-core, the driver's threads under it, or
-egui 0.37's interface, whose style also lays the panels out roomier) is not measured; the frames
-at radius 16 and 32 wait for the device, not for that CPU (the loop waits 4–26 times a frame).
+radius. The frames at radius 16 and 32 wait for the device, not for that CPU (the loop waits 4–26
+times a frame).
+
+**Where the CPU goes.** The NVIDIA driver, not egui and not more work: the same calls take it
+longer. Executed evidence, scale idle with both clients alternating, 2026-10-22 20:53–21:15 UTC
+(the user's go): three pairs reading every thread's CPU time from `/proc` over 18 s of the measured
+window, three pairs sampling the main thread's stack with `eu-stack` whenever it ran (161–217
+stacks a run; the client allows any tracer through `PR_SET_PTRACER`), one run each with gdb
+counting calls into wgpu-hal for 3 s, and three pairs of `4485dad`'s client against a draft
+(`target/drafts/wgpu30/`, `profile.py`, `prof/`). Per presented frame:
+
+| | wgpu 29.0.4 (`7f9d267`) | wgpu 30.0.1 (`4485dad`) |
+| --- | ---: | ---: |
+| Main thread | 0.61–0.62 ms | 0.70–0.75 ms |
+| The driver's `[vkrt] Analysis` thread | 0 | 0.01–0.20 ms |
+| All threads | 0.64–0.65 ms | 0.79–0.99 ms |
+| `CommandEncoder::finish` of the frame (main thread, from the stacks) | 0.11–0.13 ms | 0.20–0.25 ms |
+| Surface acquisition | 0.06–0.08 ms | 0.01–0.02 ms |
+| Queue present | 0.07–0.11 ms | 0.04–0.06 ms |
+| egui (interface, tessellation, its encoding) | 0.08–0.09 ms | 0.09–0.13 ms |
+| Calls into wgpu-hal's Vulkan encoder: command buffers begun, render passes, compute passes | 59.1, 20.0, 7.4 | 60.0, 20.0, 7.4 |
+
+wgpu-hal's `begin_encoding` and `begin_render_pass` are the same code in both versions and run
+as often, yet in wgpu 30 the frame's `finish` spends twice the samples in them (34 and 29
+against 14 and 14), much of it in a `memset` inside the driver under `vkBeginCommandBuffer` (19
+samples, none in wgpu 29). Without the fence wait, acquisition and presentation got 0.09 ms
+cheaper, so the main thread pays about 0.115 ms more in `finish` and 0.09 ms less around the
+swapchain. The only device extension wgpu-hal 30 newly enables here is
+`VK_EXT_image_drm_format_modifier`; a draft client without it (`prof/wgpu-hal-30-nodrm.patch`)
+cost the same (main thread 0.74–0.75 against 0.69–0.76 ms, the analysis thread busy in both), so
+that is not the cause. What in wgpu-hal 30's use of the device makes the driver slower per call
+is not found; finding it means bisecting wgpu-hal's other changes, a patched build and a window
+comparison each, for about 0.1 ms a frame that the frames at radius 16 and 32 do not wait on.
 
 **Other changes seen.** The `check all` on `4485dad` (163 of 163 items, 16:41–16:48 UTC,
 `target/evidence/wgpu30-check-all/`) counts about 30% fewer allocations per submitted tick than
